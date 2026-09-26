@@ -14,10 +14,10 @@
 
 ## Setup tasks before Phase 0 (Stephen)
 
-- [ ] Register a **Questrade API personal app "Trader-dev"** in the API Centre and generate a manual refresh token. Don't use FinanceTracker's.
+- [x] Register a **Questrade API personal app "Trader-dev"** in the API Centre and generate a manual refresh token. Done 2026-09-26; the token is in `docker/.env.dev` (git-ignored) and hasn't been used yet. Use it in S1 before it expires.
 - [ ] Create an **Anthropic API key "trader-dev"** in the Anthropic Console. Don't use FinanceTracker's.
 - [ ] Create a **Telegram bot for dev** with @BotFather, and get your chat ID.
-- [ ] Create the **`trader_dev` database** and roles `trader_dev_owner` / `trader_dev_app` on `192.168.68.86`.
+- [x] Create the **`trader_dev` database** and roles `trader_dev_owner` / `trader_dev_app` on `192.168.68.86`. Done 2026-09-26: schema `trader` owned by `trader_dev_owner`; the app role gets read/write on new tables through default privileges and can't create or drop tables. Connection URLs are in `docker/.env.dev` (git-ignored).
 - [ ] Add a **Pi-hole v6 Local DNS record**: `trader-dev.sunspinner.ca` → `192.168.68.73`.
 - [ ] Add an **NPM proxy host** for `trader-dev.sunspinner.ca`, with an Access List allowing only `192.168.68.0/22` (the home LAN is a /22, not a /24).
 - [ ] Confirm the existing Postgres **backup** will include the new `trader_dev` database.

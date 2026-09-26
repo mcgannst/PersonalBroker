@@ -1,0 +1,5 @@
+# Secrets: env files hold database passwords and API keys
+docker/.env.*
+!docker/.env.example
+
+.DS_Store

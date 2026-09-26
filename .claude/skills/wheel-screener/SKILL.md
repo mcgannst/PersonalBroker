@@ -1,11 +1,11 @@
 ---
 name: wheel-screener
-description: Screen the market with FinViz for new wheel-strategy (cash-secured put) candidates that fit Stephen's eight-test wheel framework AND a maximum stock price he provides, then return a short, framework-ranked shortlist ready for the wheel-evaluator. Use this whenever Stephen asks to find, screen for, scan for, or list wheel candidates, stocks to sell puts on, or "stocks under $X for the wheel", or gives a price cap or cash amount and asks what he could wheel with it — even if he doesn't name FinViz. For judging one specific ticker he already has in mind, use wheel-evaluator instead.
+description: Screen the market with FinViz for new wheel-strategy (cash-secured put) candidates that fit the eight-test wheel framework AND a maximum stock price he provides, then return a short, framework-ranked shortlist ready for the wheel-evaluator. Use this whenever you are ask to find, screen for, scan for, or list wheel candidates, stocks to sell puts on, or "stocks under $X for the wheel", or gives a price cap or cash amount and asks what he could wheel with it — even if he doesn't name FinViz. For judging one specific ticker he already has in mind, use wheel-evaluator instead.
 ---
 
 # Wheel Screener (FinViz)
 
-Find stocks that pass the screenable parts of the eight-test wheel framework and trade at or below a price Stephen gives. The output is a shortlist, not a verdict: Tests 1 (ownership), 6 (liquidity) and 8 (premium) cannot be decided by a screener, so qualifiers go on to the **wheel-evaluator** skill for the full report.
+Find stocks that pass the screenable parts of the eight-test wheel framework and trade at or below a price the user gives. The output is a shortlist, not a verdict: Tests 1 (ownership), 6 (liquidity) and 8 (premium) cannot be decided by a screener, so qualifiers go on to the **wheel-evaluator** skill for the full report.
 
 ## Style rules (mandatory, same as wheel-evaluator)
 
@@ -25,12 +25,12 @@ Find stocks that pass the screenable parts of the eight-test wheel framework and
 | Tier | No | `standard` |
 | Sectors to include/exclude | No | all |
 
-If Stephen gives cash in CAD, convert to USD at the current rate (search it if unknown) before dividing by 100, and say which rate you used. If no price or cash is given, ask for it — it is the one input this skill cannot assume.
+If you are given cash in CAD, convert to USD at the current rate (search it if unknown) before dividing by 100, and say which rate you used. If no price or cash is given, ask for it — it is the one input this skill cannot assume.
 
 Tiers:
 - `strict` — only names that should PASS every screenable test (adds SMA50 above SMA200, RSI < 60, volume > 1M).
 - `standard` — the framework's PASS thresholds that FinViz can express.
-- `wide` — also lets in CAUTION-tier size ($2–10B) and drops the Debt/Eq filter so utilities, telecom and pipelines (allowed up to 2) are not excluded. Use when `standard` returns fewer than ~5 names, or when Stephen asks for more.
+- `wide` — also lets in CAUTION-tier size ($2–10B) and drops the Debt/Eq filter so utilities, telecom and pipelines (allowed up to 2) are not excluded. Use when `standard` returns fewer than ~5 names, or when the user asks for more.
 
 ## Step 2 — Build the FinViz URLs
 
@@ -41,7 +41,7 @@ python scripts/build_finviz_url.py --max-price <MAX> [--min-price <MIN>] [--tier
 # or: --cash-usd <CASH>
 ```
 
-It prints the filters and four URLs (Overview, Valuation, Financial, Technical views) that share the same filters, sorted by market cap. FinViz only has preset price buckets, so the script picks the tightest one that contains Stephen's window and tells you when to post-filter the exact price. If Python isn't available, build the URL by hand from `references/finviz-filters.md`.
+It prints the filters and four URLs (Overview, Valuation, Financial, Technical views) that share the same filters, sorted by market cap. FinViz only has preset price buckets, so the script picks the tightest one that contains the requested window and tells you when to post-filter the exact price. If Python isn't available, build the URL by hand from `references/finviz-filters.md`.
 
 What the filters cover:
 
@@ -57,11 +57,11 @@ What the filters cover:
 
 ## Step 3 — Fetch the results
 
-1. Fetch the **Technical** URL and the **Financial** URL (and Valuation if forward P/E is needed). FinViz shows 20 rows per page; add `&r=21`, `&r=41`, … for more pages. Stop at ~60 names — if there are more, tell Stephen the count and suggest `strict` or a lower max price rather than reading hundreds.
-2. **If FinViz can't be fetched** (blocked, 403, empty table): say so in one line, give Stephen the Overview URL to open himself, and continue with the FMP fallback if the FMP connector is available:
+1. Fetch the **Technical** URL and the **Financial** URL (and Valuation if forward P/E is needed). FinViz shows 20 rows per page; add `&r=21`, `&r=41`, … for more pages. Stop at ~60 names — if there are more, tell the user the count and suggest `strict` or a lower max price rather than reading hundreds.
+2. **If FinViz can't be fetched** (blocked, 403, empty table): say so in one line, give the user the Overview URL to open himself, and continue with the FMP fallback if the FMP connector is available:
    - `mcp__FMP__search` with `endpoint: "search-company-screener"`, `priceMoreThan`/`priceLowerThan` = the window, `marketCapMoreThan: 10000000000` (2000000000 for wide), `isEtf: false`, `isFund: false`, `country: "US"`, `volumeMoreThan: 500000`, `isActivelyTrading: true`, `limit: 100`.
    - Then pull ratios (Debt/Eq, book value, EPS) and technicals (SMA 50/200, RSI 14) from the FMP statements and technicalIndicators tools for each name. FMP does not say whether a stock is optionable; mark that "verify in Questrade" and let the wheel-evaluator's chain check settle it.
-   - If Stephen pastes or screenshots the FinViz results instead, use those.
+   - If the user pastes or screenshots the FinViz results instead, use those.
 
 ## Step 4 — Post-filter and score
 
@@ -69,7 +69,7 @@ For every row, apply these checks from the screener columns, fetching the quote 
 
 | Check | Rule | Result |
 |---|---|---|
-| Price | Outside Stephen's window | Drop |
+| Price | Outside the user’s window | Drop |
 | Book value | Book/sh ≤ 0, or Debt/Eq negative | **Drop — automatic disqualifier** |
 | Profitability | EPS growth this year negative | CAUTION (note forward P/E if trailing P/E looks extreme) |
 | Balance sheet | Debt/Eq 1–2 outside utilities/telecom/pipelines; > 2 anywhere | CAUTION / Drop |
@@ -102,7 +102,7 @@ FinViz screener URL: <overview URL>
 Framework screen, not advice.
 ```
 
-Then offer, in one line, to run the **wheel-evaluator** on the top 3 (or the ones Stephen picks). If he agrees, follow that skill for each ticker and use its multi-ticker comparison format.
+Then offer, in one line, to run the **wheel-evaluator** on the top 3 (or the ones the user picks). If he agrees, follow that skill for each ticker and use its multi-ticker comparison format.
 
 ## What this skill must NOT do
 

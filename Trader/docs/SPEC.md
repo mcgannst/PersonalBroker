@@ -132,7 +132,14 @@ Trader/
 | Quotes (bid/ask/last/volume) | `GET /v1/markets/quotes?ids=` (batch) |
 | Candles | `GET /v1/markets/candles/{id}?startTime=&endTime=&interval=OneMinute|FiveMinutes|OneDay` |
 
-**Rate limits.** Questrade returns HTTP 429 with rate-limit headers when a limit is exceeded. The client uses a token-bucket limiter set to the documented per-second and per-hour limits for market-data calls (⚠ VERIFY the numbers), plus exponential backoff on 429 and 5xx responses.
+**Rate limits.** Questrade returns HTTP 429 with rate-limit headers when a limit is exceeded. The client uses a token-bucket limiter set to the documented limits, plus exponential backoff on 429 and 5xx responses. Questrade's rate-limiting page (checked 2026-09-26) gives:
+
+| Category | Calls | Per second | Per hour |
+|---|---|---|---|
+| Account | time, accounts, positions, balances, executions, orders | 30 | 30,000 |
+| Market data | markets, quotes, candles, symbols, options | 20 | 15,000 |
+
+The docs don't say whether these limits apply per app or per login. ⚠ VERIFY in S1/S4 using the `X-RateLimit-Remaining` header: if they're per login, FinanceTracker's calls count against Trader's budget.
 
 **⚠ VERIFY in Phase 0:**
 1. Whether quotes are real-time or delayed for US and TSX stocks on Stephen's account. This decides whether quote-based fills are valid.
@@ -570,5 +577,5 @@ Settled from the FinanceTracker repo: Docker host `192.168.68.73` (context `shar
 2. Your home LAN subnet, for the NPM access list. `192.168.68.0/24` is assumed from the Docker host's IP.
 3. ~~Hostnames~~: `trader-dev.sunspinner.ca` (dev) and `trader.sunspinner.ca` (prod), resolved locally through Pi-hole ✅.
 4. ~~The Claude daily budget cap~~: US$1/day for dev ✅ (estimated normal use US$0.20–0.60 per trading day on Sonnet 5). Trader gets **its own Anthropic key**, separate from FinanceTracker's, so costs are tracked separately ✅.
-5. You'll need to register a **second Questrade API personal app** for Trader (see §4.1).
+5. You'll need to register a **second Questrade API personal app** for Trader (see §4.1). One login can have several apps, each with its own consumer key ✅. S1 still verifies that their token chains are independent.
 6. **Pre-market candidate cap.** §4.2 doesn't limit how many pre-market candidates are sent to Claude, so a heavy news day (150+ movers) could exceed the daily budget. Proposed: classify only the top 50 by gap %. Decide once the Phase 0 spikes show typical candidate counts.

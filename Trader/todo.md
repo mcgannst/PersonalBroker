@@ -9,7 +9,7 @@
 - [x] **Claude API budget:** US$1/day for dev, confirmed 2026-09-26 (estimated normal use US$0.20–0.60 per trading day).
 - [ ] **Pre-market candidate cap:** limit Claude classification to the top 50 by gap %? Decide after the Phase 0 spikes (SPEC §18 item 6).
 - [x] **Anthropic key:** Trader gets its own key, separate from FinanceTracker's, confirmed 2026-09-26.
-- [ ] **Questrade:** confirm that one login can have more than one API personal app (FinanceTracker, Trader-dev, and later Trader).
+- [x] **Questrade:** one login can have more than one API personal app, confirmed by Stephen 2026-09-26. Questrade's getting-started docs list apps under "personal applications", and each app gets its own consumer key (`client_id`) and its own manual authorization token. Checked 2026-09-26. S1 still has to prove that refreshing one app's token doesn't invalidate another's.
 - [ ] **Sign off** on the BRD and SPEC.
 
 ## Setup tasks before Phase 0 (Stephen)

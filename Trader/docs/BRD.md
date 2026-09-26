@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | BRD v0.1 (draft for review) |
 | **Owner / sole user** | Stephen McGann |
-| **Date** | 2026-09-26 |
+| **Date** | 2026-09-26 (v0.2: infrastructure aligned with FinanceTracker) |
 | **Related** | [`SPEC.md`](SPEC.md) · [`../reports/Day trading strategy playbook.md`](../reports/Day%20trading%20strategy%20playbook.md) |
 
 ---
@@ -38,7 +38,7 @@ Build a self-hosted system that **runs the day-trading strategies from the playb
 
 ### 4.1 In scope (version 1)
 - A single Docker container running Python scripts (the engine and API), cron jobs, and a React web app served by the same container.
-- An external PostgreSQL database, which Stephen already has.
+- PostgreSQL: a new `trader` database on the **same instance FinanceTracker uses**.
 - Market data from the **Questrade API** (read-only personal app).
 - Candidate screening by **scraping FinViz web pages**.
 - Catalyst classification using the **Claude API**.
@@ -46,7 +46,7 @@ Build a self-hosted system that **runs the day-trading strategies from the playb
 - A **simulated broker** with a realistic, quote-based fill model and a T+1 settled-cash ledger.
 - An **approval-mode toggle**: approve every order, or run fully automatically.
 - **Telegram bot** alerts, with Approve and Reject buttons.
-- Web access through a **Cloudflare Tunnel**, protected by Cloudflare Access plus the app's own login.
+- Deployment on the **existing Docker host (192.168.68.73)**, exposed through **Nginx Proxy Manager** at `trader.sunspinner.ca`, with **Cloudflare Access** in front and the app's own login as a second layer. This is the same deployment pattern as FinanceTracker.
 - **Replay mode** that runs over past days using candles.
 - Configurable starting capital, currency and enabled markets. Defaults: US$720, US only.
 - Kill switches, a trade journal, performance metrics and a weekly report.
@@ -117,7 +117,7 @@ Priority: **M** = must, **S** = should, **C** = could.
 | BR-53 | Settings: approval mode, capital, markets, strategy settings, slippage and kill-switch thresholds. | M |
 | BR-54 | Replay: start a replay over a date range, view its results and compare them with the live simulation. | M |
 | BR-55 | System health: job runs, API token status, errors and logs. | M |
-| BR-56 | Access through a Cloudflare Tunnel, protected by Cloudflare Access plus the app's own login. | M |
+| BR-56 | Access through Nginx Proxy Manager, protected by Cloudflare Access plus the app's own login. No other network path to the app. | M |
 
 ### 6.7 Reporting
 | ID | Requirement | Pri |
@@ -133,17 +133,17 @@ Priority: **M** = must, **S** = should, **C** = could.
 | Reliability | Jobs can be re-run safely without duplicating work. A failed job is retried and triggers an alert. The engine recovers after a container restart during market hours. |
 | Timing | The ORB ranking and proposal are ready by **9:36:00 ET** (90 seconds after the opening bar completes). |
 | Time zones | Schedules run in **America/New_York** (daylight saving is handled automatically). The UI shows **Mountain Time**. |
-| Security | Secrets are stored outside the image. The Questrade refresh token is encrypted at rest. The web app is never exposed without Cloudflare Access and the app's login. Only Stephen's Telegram chat ID can approve. |
+| Security | Secrets are stored outside the image. The Questrade refresh token is encrypted at rest. The web app is only reachable through NPM, behind Cloudflare Access and the app's login. Only Stephen's Telegram chat ID can approve. |
 | Auditability | Every decision (signal, proposal, approval, order, fill) is saved with timestamps and the data behind it. |
 | Maintainability | Python type hints, automated tests, and replay results that come out the same every time for the same inputs. |
 | Cost | Only the Claude API costs money, and a daily spending cap is configurable. |
 
 ## 8. Assumptions
 
-1. PostgreSQL is already running and reachable from the Docker host, and a dedicated `trader` database and user can be created.
-2. Docker runs on Stephen's Proxmox 9.1.1 infrastructure, in a VM or LXC with Docker.
+1. FinanceTracker's PostgreSQL instance can host a new `trader` database, with owner and app roles following the `ledger_prod` pattern.
+2. Docker runs on the shared Docker server at `192.168.68.73`, the same host as FinanceTracker. Images are built on the Mac and shipped with `docker save | ssh docker load`.
 3. Stephen can register a Questrade API personal app and create a Telegram bot through @BotFather.
-4. `cloudflared` runs either in its own container or on the host. The app container itself doesn't handle TLS.
+4. Nginx Proxy Manager terminates TLS. `sunspinner.ca` DNS is proxied through Cloudflare, so Cloudflare Access can be applied (to be verified).
 5. Scraping FinViz is acceptable for personal, low-frequency use (see risk R3).
 
 ## 9. Constraints
@@ -161,7 +161,8 @@ Priority: **M** = must, **S** = should, **C** = could.
 | R3 | FinViz blocks scraping, changes its page layout, or its terms prohibit scraping | The screener fails | Scrape slowly, keep the page parser in one isolated module, allow a manual watchlist upload, and consider FinViz Elite's export |
 | R4 | The refresh token expires (for example, if the system is unused for about 7 days) | No market data | Refresh daily even on weekends, alert when a refresh fails, and provide a screen to paste a new token |
 | R5 | Simulated results look better than real trading would | False confidence | Quote-based fills, slippage, a settled-cash rule, and measuring how long positions go without a stop |
-| R6 | Web app exposed through the tunnel | Unauthorized approvals | Cloudflare Access, app login, allow-list of your Telegram chat ID, and an audit log |
+| R6 | Web app exposed to the internet | Unauthorized approvals | Cloudflare Access, app login, no published host port, the origin locked to Cloudflare IPs, an allow-list of your Telegram chat ID, and an audit log |
+| R7 | **Trader and FinanceTracker share one Questrade token chain** | Each app's token refresh invalidates the other's, so both lose market data | Trader uses its **own Questrade API personal app**, and reuses FinanceTracker's proven refresh-locking logic |
 
 ## 11. Delivery phases (high level)
 
@@ -171,7 +172,7 @@ Priority: **M** = must, **S** = should, **C** = could.
 | 1 | Data layer: database schema, Questrade client, FinViz scraper, nightly universe and history cache |
 | 2 | Engine: strategy framework, ORB and overlay plug-ins, risk manager, simulated broker |
 | 3 | Approvals and Telegram bot; cron schedule |
-| 4 | Web app (React) and API; authentication; Cloudflare Tunnel |
+| 4 | Web app (React) and API; authentication; NPM proxy host + Cloudflare Access; deploy script |
 | 5 | Replay mode, reports, kill switches, hardening |
 
 ## 12. Sign-off

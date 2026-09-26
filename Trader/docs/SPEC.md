@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | SPEC v0.1 (draft for review) |
 | **Implements** | [`BRD.md`](BRD.md) |
-| **Date** | 2026-09-26 |
+| **Date** | 2026-09-26 (v0.2: infrastructure aligned with the FinanceTracker deployment) |
 
 Items marked **⚠ VERIFY** are assumptions that the Phase 0 spikes must confirm before any code depends on them.
 
@@ -14,9 +14,9 @@ Items marked **⚠ VERIFY** are assumptions that the Phase 0 spikes must confirm
 
 ```
                       ┌──────────────── Docker container: trader ────────────────┐
-  Cloudflare Tunnel   │                                                           │
-  (cloudflared,       │  supervisord                                              │
-   separate) ────────►│   ├─ api        uvicorn  FastAPI  (REST + serves React)   │
+  Cloudflare Access   │                                                           │
+  → Nginx Proxy Mgr   │  supervisord                                              │
+  ('proxy' network) ─►│   ├─ api        uvicorn  FastAPI  (REST + serves React)   │
                       │   ├─ worker     python -m trader.worker  (market-hours     │
                       │   │             loop: fill simulator, Telegram bot,        │
                       │   │             order monitor)                             │
@@ -26,7 +26,8 @@ Items marked **⚠ VERIFY** are assumptions that the Phase 0 spikes must confirm
                       └───────┬───────────────┬──────────────┬──────────────┬─────┘
                               │               │              │              │
                         PostgreSQL      Questrade API    FinViz (HTTP)   Claude API
-                        (external)      (read-only)      scrape          Telegram API
+                        (shared with     (read-only,      scrape          Telegram API
+                        FinanceTracker)  own app)
 ```
 
 **Processes in the container (managed by supervisord):**
@@ -90,7 +91,8 @@ Trader/
     ├── Dockerfile            multi-stage: web build → python runtime
     ├── supervisord.conf
     ├── crontab
-    └── compose.example.yml   trader + cloudflared (Postgres external)
+    ├── docker-compose.prod.yml   trader service; networks: internal + external 'proxy'
+    └── deploy.sh             build amd64 on the Mac → ship → recreate (FinanceTracker pattern)
 ```
 
 ## 3a. Key concepts
@@ -109,9 +111,16 @@ Trader/
 ### 4.1 Questrade API (read-only)
 
 **Authentication.** OAuth refresh-token flow for a personal app.
+- **Trader must use its own Questrade API personal app and token chain, not FinanceTracker's.** FinanceTracker (`backend/app/core/questrade.py`) already keeps a rotating refresh-token chain alive. Because every exchange invalidates the previous refresh token, two apps sharing one chain would break each other's connection. ⚠ VERIFY in S1 that a second personal app has its own independent token chain.
 - `GET https://login.questrade.com/oauth2/token?grant_type=refresh_token&refresh_token=<token>` returns an `access_token`, a new `refresh_token`, `api_server` and `expires_in`.
 - **The refresh token can only be used once.** The new one must be saved (encrypted in `api_credentials`) in the same transaction, before the access token is used.
-- One `QuestradeAuth` service owns the token. It uses a Postgres advisory lock so that two processes never refresh at the same time.
+- One `QuestradeAuth` service owns the token. It **reuses FinanceTracker's proven refresh logic** (`core/questrade.py`), ported to this codebase:
+  - `SELECT … FOR UPDATE` on the credentials row, with `populate_existing()` so a waiting process sees the token the first one just rotated.
+  - Re-check freshness under the lock, and skip the exchange if another process already refreshed.
+  - Refresh 120 s before expiry.
+  - A forced refresh after an HTTP 401 has a 90 s cooldown. A failed refresh has a 60 s cooldown.
+  - The rotated token is committed before it's used; if that commit fails, log it as critical.
+  - This matters more in Trader than in FinanceTracker, because three processes (api, worker, cron) share the token.
 - A daily cron job refreshes the token even on weekends, so it doesn't expire (⚠ VERIFY: expiry after about 7 days without use).
 - Initial setup: paste the refresh token from the Questrade API Centre into Settings → Questrade.
 
@@ -427,12 +436,13 @@ All endpoints need a session cookie, except `/api/auth/login` and `/api/health`.
 
 | Var | Purpose |
 |---|---|
-| `DATABASE_URL` | `postgresql+psycopg://trader:…@host:5432/trader` |
+| `DATABASE_URL` | `postgresql+psycopg://trader_app:…@<pg-host>:5432/trader` (non-owner app role) |
+| `MIGRATION_DATABASE_URL` | Owner role `trader_owner`; used only by `alembic upgrade` at start-up |
 | `APP_ENCRYPTION_KEY` | Fernet key for tokens and TOTP secrets |
 | `SESSION_SECRET` | Cookie signing |
 | `ANTHROPIC_API_KEY` | Claude |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Bot and the one authorized chat |
-| `PUBLIC_BASE_URL` | Tunnel URL used in Telegram links |
+| `PUBLIC_BASE_URL` | `https://trader.sunspinner.ca`, used in Telegram links |
 | `ADMIN_USERNAME`, `ADMIN_PASSWORD_INITIAL` | First-run user creation only |
 | `TZ_DISPLAY` | `America/Edmonton` |
 
@@ -440,7 +450,10 @@ All endpoints need a session cookie, except `/api/auth/login` and `/api/health`.
 
 ## 14. Security
 
-- **Network:** the container listens only on an internal Docker network. `cloudflared` publishes it, **Cloudflare Access** (email one-time code or IdP) guards the hostname, and the app login is a second layer.
+- **Network:** Trader joins the external `proxy` Docker network. **Nginx Proxy Manager** (NPM) terminates TLS for `trader.sunspinner.ca` and forwards to `trader:8000`. **No host port is published**, unlike FinanceTracker's `8001:8000`, so NPM is the only way in.
+- **Cloudflare Access** (email one-time code or IdP) sits in front of the hostname. The app login is a second layer.
+  - ⚠ VERIFY that `sunspinner.ca` DNS is **proxied** (orange cloud) through Cloudflare. Access has no effect on DNS-only records.
+  - Anyone who reaches the origin directly, by the public IP or from the LAN, **bypasses Access**. Mitigation: at the router/firewall, allow inbound 443 only from Cloudflare's IP ranges, **or** make NPM validate the `Cf-Access-Jwt-Assertion` header. On the LAN, the app login still applies.
 - **Cookies:** HttpOnly, Secure, SameSite=Strict; CSRF token on changes; login rate limiting and lockout.
 - **Secrets:** tokens and secrets are encrypted at rest with Fernet, and nothing sensitive is logged.
 - **Telegram:** chat-ID allow-list; the callback data contains a signed proposal ID plus a nonce.
@@ -449,11 +462,27 @@ All endpoints need a session cookie, except `/api/auth/login` and `/api/health`.
 
 ## 15. Deployment
 
+Trader follows the same pattern as FinanceTracker's `scripts/deploy.sh` and `docker-compose.prod.yml`.
+
+| Item | Value |
+|---|---|
+| Docker host | `192.168.68.73`, Docker context `shared-docker-server` (same host as FinanceTracker) |
+| Build | On the Mac, `desktop-linux` context, `DOCKER_DEFAULT_PLATFORM=linux/amd64` |
+| Ship | `docker save trader:latest \| ssh stephen@192.168.68.73 docker load` |
+| Recreate | `docker --context shared-docker-server compose -f docker/docker-compose.prod.yml up -d --no-build --no-deps --force-recreate trader` |
+| Health wait | Poll `https://trader.sunspinner.ca/api/health` until it returns 200 (up to 40 s) |
+| Networks | `trader_internal` (bridge) + `proxy` (external, shared with NPM) |
+| Ports | **None published.** Access is through NPM only |
+| Volumes | Named volume `trader_logs:/app/logs`, not a bind mount (the compose file runs from the Mac against a remote daemon; see the FinanceTracker compose comments) |
+| Env file | `docker/.env.prod`, git-ignored and kept on the Mac next to FinanceTracker's |
+| Container `TZ` | `UTC`. Scheduling uses `CRON_TZ=America/New_York` and the UI shows `America/Edmonton`. Unlike FinanceTracker, no logic depends on the container's local date, because all session dates come from the exchange calendar |
+
 - **Image:** multi-stage Dockerfile. `node:22-alpine` builds `web/` → `python:3.12-slim` runtime with the app, the static build, supercronic and supervisord.
-- **Compose** (`compose.example.yml`): `trader` + `cloudflared`. Postgres is external, reached through `DATABASE_URL`.
-- **Start-up:** `alembic upgrade head` → create the admin user if missing → supervisord.
+- **PostgreSQL:** the **same instance as FinanceTracker**, in a new database `trader`. Following the `ledger_prod` pattern, `trader_owner` owns the schema and runs the migrations, and the app connects as the non-owner `trader_app` role with explicit grants (plus `ALTER DEFAULT PRIVILEGES`, so new tables are covered too).
+- **Start-up:** `alembic upgrade head` (as the owner) → create the admin user if missing → supervisord.
 - **Health check:** `GET /api/health`.
-- **Backups:** handled on the Postgres side (Stephen's existing process).
+- **NPM:** add a proxy host `trader.sunspinner.ca` → `http://trader:8000`, with websockets/SSE allowed and a Let's Encrypt certificate.
+- **Backups:** covered by the existing Postgres backup process. ⚠ VERIFY that it includes the new `trader` database. `pg_dump` output contains encrypted tokens, so keep it outside the repo, as FinanceTracker's `.gitignore` notes.
 
 ## 16. Testing strategy
 
@@ -479,7 +508,10 @@ All endpoints need a session cookie, except `/api/auth/login` and `/api/health`.
 
 ## 18. Open items for Stephen
 
-1. PostgreSQL host and version, and whether a dedicated `trader` database and user is fine.
-2. The Docker host: which Proxmox VM or LXC.
-3. The Cloudflare hostname to use, and your Cloudflare Access identity method (email one-time code, or Google).
-4. The Claude daily budget cap. The suggested default is US$1/day. I'll confirm model pricing before the build.
+Settled from the FinanceTracker repo: Docker host `192.168.68.73` (context `shared-docker-server`), Nginx Proxy Manager on the `proxy` network, the `sunspinner.ca` domain, and the build-and-ship deploy method. **Still open:**
+
+1. The PostgreSQL host, port and version (they're in FinanceTracker's `.env.prod` on your Mac, which isn't in the repo).
+2. Is `sunspinner.ca` DNS proxied through Cloudflare? This is needed for Cloudflare Access. Which Access sign-in method do you want: email one-time code, or Google?
+3. Is `trader.sunspinner.ca` OK as the hostname?
+4. The Claude daily budget cap. The suggested default is US$1/day. Should Trader reuse the Anthropic key FinanceTracker uses, or get its own key so costs are tracked separately?
+5. You'll need to register a **second Questrade API personal app** for Trader (see §4.1).

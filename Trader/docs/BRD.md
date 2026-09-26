@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | BRD v0.1 (draft for review) |
 | **Owner / sole user** | Stephen McGann |
-| **Date** | 2026-09-26 (v0.3: web app on the home network only; Telegram for remote use) |
+| **Date** | 2026-09-26 (v0.4: dev environment first, then prod) |
 | **Related** | [`SPEC.md`](SPEC.md) · [`../reports/Day trading strategy playbook.md`](../reports/Day%20trading%20strategy%20playbook.md) |
 
 ---
@@ -176,6 +176,7 @@ Priority: **M** = must, **S** = should, **C** = could.
 | 3 | Approvals and Telegram bot; cron schedule |
 | 4 | Web app (React) and API; authentication; NPM proxy host with a LAN access list; deploy script |
 | 5 | Replay mode, reports, kill switches, hardening |
+| 6 | **Promote dev → prod.** All phases are built and run in the **dev** environment (`trader-dev` container, `trader_dev` database, on the same Docker and Postgres hosts). Prod is created only after the promotion criteria in SPEC §15.1 are met |
 
 ## 12. Sign-off
 

@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | SPEC v0.1 (draft for review) |
 | **Implements** | [`BRD.md`](BRD.md) |
-| **Date** | 2026-09-26 (v0.3: web app on the home network only; Telegram commands for remote use) |
+| **Date** | 2026-09-26 (v0.4: separate dev and prod environments) |
 
 Items marked **⚠ VERIFY** are assumptions that the Phase 0 spikes must confirm before any code depends on them.
 
@@ -499,7 +499,46 @@ Trader follows the same pattern as FinanceTracker's `scripts/deploy.sh` and `doc
 - **Start-up:** `alembic upgrade head` (as the owner) → create the admin user if missing → supervisord.
 - **Health check:** `GET /api/health`.
 - **NPM:** add a proxy host `trader.sunspinner.ca` → `http://trader:8000`, with websockets/SSE allowed, a Let's Encrypt certificate, and the home-LAN-only **Access List**.
-- **Backups:** covered by the existing Postgres backup process. ⚠ VERIFY that it includes the new `trader` database. `pg_dump` output contains encrypted tokens, so keep it outside the repo, as FinanceTracker's `.gitignore` notes.
+- **Backups:** covered by the existing Postgres backup process. ⚠ VERIFY that it includes the new `trader` databases. `pg_dump` output contains encrypted tokens, so keep it outside the repo, as FinanceTracker's `.gitignore` notes.
+
+### 15.1 Environments: dev first, then prod
+
+Both environments run on the **same Docker host** (`192.168.68.73`) and the **same PostgreSQL server** (`192.168.68.86:5432`), fully separated. The names in §15 above are the prod values.
+
+| Item | **dev** (build and test here first) | **prod** (after promotion) |
+|---|---|---|
+| Compose project / container | `trader-dev` / `trader-dev` | `trader` / `trader` |
+| Env file (git-ignored, on the Mac) | `docker/.env.dev` | `docker/.env.prod` |
+| Database | `trader_dev` | `trader` |
+| DB roles | `trader_dev_owner`, `trader_dev_app` | `trader_owner`, `trader_app` |
+| Hostname (NPM + Pi-hole, LAN-only access list) | `trader-dev.sunspinner.ca` | `trader.sunspinner.ca` |
+| Log volume | `trader_dev_logs` | `trader_logs` |
+| Image tag | `trader:dev` | `trader:<version>` (promoted from a tested dev tag) |
+| **Telegram bot** | **Its own bot** (e.g. `@StephenTraderDevBot`) | Its own bot |
+| **Questrade API personal app** | **Its own app/token chain** ("Trader-dev") | Its own app ("Trader") |
+| `APP_ENCRYPTION_KEY`, `SESSION_SECRET` | Unique | Unique |
+| Anthropic key | May be shared, with a separate `claude.daily_budget_usd` per environment | |
+| Deploy | `bash docker/deploy.sh dev` | `bash docker/deploy.sh prod` |
+
+**Why the bots and Questrade apps must be separate:**
+- **Telegram:** only one process can long-poll a given bot token at a time. A second poller gets HTTP 409 Conflict, so dev and prod would fight over one bot.
+- **Questrade:** a token refresh invalidates the previous token (§4.1), so two environments sharing one chain would break each other, exactly as Trader and FinanceTracker would.
+
+**Running both at once:** allowed, since the resources are fully separate. Keep the same approval mode in both, or pause dev (`/pause`) once prod is live, so you don't get duplicate approval requests on your phone.
+
+**Promotion criteria (dev → prod):**
+1. The Phase 0 spikes (§17) have passed in dev.
+2. There have been **10 consecutive trading days** in dev with no failed scheduled jobs and no missed 9:35 events.
+3. The full test suite and a replay-determinism test pass on the image tag being promoted.
+4. A manual check of one complete simulated day in the web app: a signal, the approval, the fill, the stop, the flatten, and the journal entry.
+
+**Promotion steps:**
+1. Tag the image.
+2. Create the `trader` database and roles.
+3. Create `.env.prod`.
+4. Run `deploy.sh prod`.
+5. Add the NPM proxy host and the Pi-hole record.
+6. Start with a **fresh** `live` run. Dev trades aren't carried over; dev results stay in `trader_dev` for comparison.
 
 ## 16. Testing strategy
 

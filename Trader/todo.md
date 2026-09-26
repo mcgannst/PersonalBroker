@@ -6,7 +6,8 @@
 
 - [x] **PostgreSQL version** on `192.168.68.86`: 14.24 (Ubuntu 22.04), checked 2026-09-26. The design needs version 13 or later.
 - [x] **Hostnames:** `trader-dev.sunspinner.ca` (dev) and `trader.sunspinner.ca` (prod), confirmed 2026-09-26.
-- [ ] **Claude API budget:** confirm US$1/day for dev.
+- [x] **Claude API budget:** US$1/day for dev, confirmed 2026-09-26 (estimated normal use US$0.20–0.60 per trading day).
+- [ ] **Pre-market candidate cap:** limit Claude classification to the top 50 by gap %? Decide after the Phase 0 spikes (SPEC §18 item 6).
 - [ ] **Anthropic key:** reuse FinanceTracker's key, or create a separate key for Trader so costs are tracked separately?
 - [ ] **Questrade:** confirm that one login can have more than one API personal app (FinanceTracker, Trader-dev, and later Trader).
 - [ ] **Sign off** on the BRD and SPEC.

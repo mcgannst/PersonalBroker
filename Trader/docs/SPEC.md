@@ -517,7 +517,7 @@ Both environments run on the **same Docker host** (`192.168.68.73`) and the **sa
 | **Telegram bot** | **Its own bot** (e.g. `@StephenTraderDevBot`) | Its own bot |
 | **Questrade API personal app** | **Its own app/token chain** ("Trader-dev") | Its own app ("Trader") |
 | `APP_ENCRYPTION_KEY`, `SESSION_SECRET` | Unique | Unique |
-| Anthropic key | May be shared, with a separate `claude.daily_budget_usd` per environment | |
+| **Anthropic key** | **Its own key** ("trader-dev"), not FinanceTracker's | Its own key ("trader") |
 | Deploy | `bash docker/deploy.sh dev` | `bash docker/deploy.sh prod` |
 
 **Why the bots and Questrade apps must be separate:**
@@ -569,6 +569,6 @@ Settled from the FinanceTracker repo: Docker host `192.168.68.73` (context `shar
 1. ~~PostgreSQL host/port and version~~: `192.168.68.86:5432`, PostgreSQL 14.24 (Ubuntu 22.04) ✅. The design needs PostgreSQL 13 or later.
 2. Your home LAN subnet, for the NPM access list. `192.168.68.0/24` is assumed from the Docker host's IP.
 3. ~~Hostnames~~: `trader-dev.sunspinner.ca` (dev) and `trader.sunspinner.ca` (prod), resolved locally through Pi-hole ✅.
-4. ~~The Claude daily budget cap~~: US$1/day for dev ✅ (estimated normal use US$0.20–0.60 per trading day on Sonnet 5). Still open: should Trader reuse the Anthropic key FinanceTracker uses, or get its own key so costs are tracked separately?
+4. ~~The Claude daily budget cap~~: US$1/day for dev ✅ (estimated normal use US$0.20–0.60 per trading day on Sonnet 5). Trader gets **its own Anthropic key**, separate from FinanceTracker's, so costs are tracked separately ✅.
 5. You'll need to register a **second Questrade API personal app** for Trader (see §4.1).
 6. **Pre-market candidate cap.** §4.2 doesn't limit how many pre-market candidates are sent to Claude, so a heavy news day (150+ movers) could exceed the daily budget. Proposed: classify only the top 50 by gap %. Decide once the Phase 0 spikes show typical candidate counts.

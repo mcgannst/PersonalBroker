@@ -8,13 +8,14 @@
 - [x] **Hostnames:** `trader-dev.sunspinner.ca` (dev) and `trader.sunspinner.ca` (prod), confirmed 2026-09-26.
 - [x] **Claude API budget:** US$1/day for dev, confirmed 2026-09-26 (estimated normal use US$0.20–0.60 per trading day).
 - [ ] **Pre-market candidate cap:** limit Claude classification to the top 50 by gap %? Decide after the Phase 0 spikes (SPEC §18 item 6).
-- [ ] **Anthropic key:** reuse FinanceTracker's key, or create a separate key for Trader so costs are tracked separately?
+- [x] **Anthropic key:** Trader gets its own key, separate from FinanceTracker's, confirmed 2026-09-26.
 - [ ] **Questrade:** confirm that one login can have more than one API personal app (FinanceTracker, Trader-dev, and later Trader).
 - [ ] **Sign off** on the BRD and SPEC.
 
 ## Setup tasks before Phase 0 (Stephen)
 
 - [ ] Register a **Questrade API personal app "Trader-dev"** in the API Centre and generate a manual refresh token. Don't use FinanceTracker's.
+- [ ] Create an **Anthropic API key "trader-dev"** in the Anthropic Console. Don't use FinanceTracker's.
 - [ ] Create a **Telegram bot for dev** with @BotFather, and get your chat ID.
 - [ ] Create the **`trader_dev` database** and roles `trader_dev_owner` / `trader_dev_app` on `192.168.68.86`.
 - [ ] Add a **Pi-hole v6 Local DNS record**: `trader-dev.sunspinner.ca` → `192.168.68.73`.

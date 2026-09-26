@@ -169,7 +169,8 @@ The docs don't say whether these limits apply per app or per login. ⚠ VERIFY i
 ```
 
 - **Budget:** a daily cap on calls and tokens (`claude.daily_budget_usd`). If it's exceeded, classification is skipped with `catalyst_type=unknown` and the system alerts.
-- **Where it's used:** the pre-market scan (all candidates), and at 9:35 for any top-20 names not already classified.
+- **Where it's used:** the pre-market scan, and at 9:35 for any top-20 names not already classified.
+- **Pre-market cap:** the pre-market scan classifies only the top `claude.premarket_max_candidates` candidates (default 50), ranked by absolute gap %. Candidates beyond the cap get `catalyst_type=unknown` and are listed in the Telegram brief as "not classified (over cap)". This keeps the biggest movers inside the daily budget on heavy news days.
 - **Weekly report:** Claude writes 150–300 words of commentary from the metrics, following strict instructions not to invent numbers.
 
 ### 4.4 Telegram bot
@@ -468,7 +469,7 @@ All endpoints need a session cookie, except `/api/auth/login` and `/api/health`.
 | `ADMIN_USERNAME`, `ADMIN_PASSWORD_INITIAL` | First-run user creation only |
 | `TZ_DISPLAY` | `America/Edmonton` |
 
-**Runtime settings** (the `settings` table, editable in the UI) include `approval_mode` (`manual`|`auto`), `starting_cash`, `account_currency`, `markets_enabled`, `cash_account_mode`, `risk_pct`, `quote_poll_seconds`, `slippage_*`, `stale_quote_seconds`, `proposal_ttl_*`, `auto_flatten_on_expiry`, `killswitch.*`, `claude.model`, and `claude.daily_budget_usd`.
+**Runtime settings** (the `settings` table, editable in the UI) include `approval_mode` (`manual`|`auto`), `starting_cash`, `account_currency`, `markets_enabled`, `cash_account_mode`, `risk_pct`, `quote_poll_seconds`, `slippage_*`, `stale_quote_seconds`, `proposal_ttl_*`, `auto_flatten_on_expiry`, `killswitch.*`, `claude.model`, `claude.daily_budget_usd`, and `claude.premarket_max_candidates` (default 50).
 
 ## 14. Security
 
@@ -578,4 +579,4 @@ Settled from the FinanceTracker repo: Docker host `192.168.68.73` (context `shar
 3. ~~Hostnames~~: `trader-dev.sunspinner.ca` (dev) and `trader.sunspinner.ca` (prod), resolved locally through Pi-hole ✅.
 4. ~~The Claude daily budget cap~~: US$1/day for dev ✅ (estimated normal use US$0.20–0.60 per trading day on Sonnet 5). Trader gets **its own Anthropic key**, separate from FinanceTracker's, so costs are tracked separately ✅.
 5. You'll need to register a **second Questrade API personal app** for Trader (see §4.1). One login can have several apps, each with its own consumer key ✅. S1 still verifies that their token chains are independent.
-6. **Pre-market candidate cap.** §4.2 doesn't limit how many pre-market candidates are sent to Claude, so a heavy news day (150+ movers) could exceed the daily budget. Proposed: classify only the top 50 by gap %. Decide once the Phase 0 spikes show typical candidate counts.
+6. ~~Pre-market candidate cap~~: classify only the top 50 by gap %, adjustable in Settings (§4.3) ✅. Check the default against real candidate counts during Phase 0.

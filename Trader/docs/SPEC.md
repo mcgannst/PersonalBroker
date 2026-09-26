@@ -568,6 +568,6 @@ Settled from the FinanceTracker repo: Docker host `192.168.68.73` (context `shar
 
 1. ~~PostgreSQL host/port and version~~: `192.168.68.86:5432`, PostgreSQL 14.24 (Ubuntu 22.04) ✅. The design needs PostgreSQL 13 or later.
 2. Your home LAN subnet, for the NPM access list. `192.168.68.0/24` is assumed from the Docker host's IP.
-3. Is `trader.sunspinner.ca` OK as the hostname (resolved locally through Pi-hole)?
+3. ~~Hostnames~~: `trader-dev.sunspinner.ca` (dev) and `trader.sunspinner.ca` (prod), resolved locally through Pi-hole ✅.
 4. The Claude daily budget cap. The suggested default is US$1/day. Should Trader reuse the Anthropic key FinanceTracker uses, or get its own key so costs are tracked separately?
 5. You'll need to register a **second Questrade API personal app** for Trader (see §4.1).

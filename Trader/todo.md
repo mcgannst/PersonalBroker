@@ -5,7 +5,7 @@
 ## Open decisions and questions (Stephen)
 
 - [x] **PostgreSQL version** on `192.168.68.86`: 14.24 (Ubuntu 22.04), checked 2026-09-26. The design needs version 13 or later.
-- [ ] **Hostnames:** confirm `trader-dev.sunspinner.ca` (dev) and `trader.sunspinner.ca` (prod).
+- [x] **Hostnames:** `trader-dev.sunspinner.ca` (dev) and `trader.sunspinner.ca` (prod), confirmed 2026-09-26.
 - [ ] **Claude API budget:** confirm US$1/day for dev.
 - [ ] **Anthropic key:** reuse FinanceTracker's key, or create a separate key for Trader so costs are tracked separately?
 - [ ] **Questrade:** confirm that one login can have more than one API personal app (FinanceTracker, Trader-dev, and later Trader).

@@ -10,9 +10,9 @@
 
 | Strategy family | Evidence grade | Verdict for you |
 |---|---|---|
-| **5-min Opening Range Breakout on "Stocks in Play"** | **Moderate** | ✅ **Core strategy.** Paper-trade first |
+| **5-min Opening Range Breakout on "Stocks in Play"** | **Moderate** | ✅ **Core strategy** |
 | Last-half-hour (end-of-day) momentum | Moderate for the index · **Weak for single stocks** | 🟡 **Overlay only.** Decides whether to hold ORB winners into the close |
-| VWAP trend-following | Weak for single stocks (tested on the QQQ ETF only) | 🟡 Probation, paper only |
+| VWAP trend-following | Weak for single stocks (tested on the QQQ ETF only) | 🟡 Secondary: lower evidence, needs automated alerts |
 | Classical chart patterns (H&S, double top/bottom, triangles, flags, wedges, cup & handle) | **Weak.** Some statistical information, no proven trading profit | ❌ Dropped as stand-alone strategies |
 | Candlestick patterns (engulfing, hammer, doji, morning star…) | **None.** Fail after costs and data-snooping correction, both intraday and daily | ❌ Dropped |
 | Support/resistance and channel breakouts | **None** after data-snooping correction | ❌ Dropped |
@@ -98,7 +98,7 @@ shares = min( floor($20 ÷ (0.10 × ATR)),  floor(cash ÷ entry price) )
 
 ### 1.5 US vs TSX
 - **US: yes.** All of the evidence is on US stocks.
-- **TSX: paper trade only for now.** No TSX evidence was found, and few TSX names pass the 1M-volume and $0.50-ATR filters. Also, **Questrade cannot place trailing *stop* orders on Canadian exchanges, only trailing *stop-limit* orders** ([Questrade](https://www.questrade.com/learning/options-active-trading/trailing-stop-orders)). A stop-limit can fail to fill in a fast drop.
+- **TSX: not recommended.** No TSX evidence was found, and few TSX names pass the 1M-volume and $0.50-ATR filters. Also, **Questrade cannot place trailing *stop* orders on Canadian exchanges, only trailing *stop-limit* orders** ([Questrade](https://www.questrade.com/learning/options-active-trading/trailing-stop-orders)). A stop-limit can fail to fill in a fast drop.
 
 ---
 
@@ -141,18 +141,15 @@ Sullivan, Timmermann & White (1999) tested **7,846 technical rules** on the DJIA
 
 ### 3.4 Where patterns can still fit
 - **The ORB is itself a simple chart pattern:** a breakout from a 5-minute range. It works in the research only because of the Stocks-in-Play filter.
-- **If you want to explore other patterns, do it in a "pattern lab" on paper only.**
-  - Write the rules down **before** testing, for example: *bull flag after an ORB fill: 3–6 bars of pullback holding above VWAP on falling volume, then buy on a break of the flag high, with the stop under the flag low.*
-  - Test them **only on Stocks in Play**.
-  - Require **at least 50 paper trades** with positive expectancy.
-- Treat any pattern that looks good in your own backtest as **data-snooped until it's proven in live paper trading**. That's the lesson of the Sullivan/Timmermann/White study.
+- No other chart pattern has after-cost evidence strong enough to include as a strategy.
+- Treat any pattern that looks good in a backtest as **data-snooped until it's proven out-of-sample**. That's the lesson of the Sullivan/Timmermann/White study.
 
 ---
 
-## 4. Probation — VWAP trend-following (grade: WEAK for single stocks)
+## 4. Secondary — VWAP trend-following (grade: WEAK for single stocks)
 
 - **Evidence:** on QQQ (Jan 2018–Sep 2023), $25,000 grew to **$192,656** net of commissions: a 671% total return, 9.4% max drawdown and Sharpe 2.1 ([Concretum](https://concretumgroup.com/volume-weighted-average-price-vwap-the-holy-grail-for-day-trading-systems/)). This figure came from the paper's content but was **not adversarially verified**. It's also an ETF, long and short, and not common stocks.
-- **Your version (paper only):**
+- **Your version:**
   - After 10:00 ET, a Stocks-in-Play name above a rising VWAP pulls back to VWAP, then a 5-minute bar closes back above it → buy.
   - Exit on a 5-minute close below VWAP, or at the time stop.
 - **It needs automated alerts,** because you can't watch for the exit signal on a two-hour check-in schedule.
@@ -194,7 +191,7 @@ Sullivan, Timmermann & White (1999) tested **7,846 technical rules** on the DJIA
 - Rule adherence %
 
 **Kill switches (decide these now):**
-- **50 live trades with expectancy ≤ 0** → stop and return to paper trading.
+- **50 live trades with expectancy ≤ 0** → stop live trading and review the strategy.
 - **−15% drawdown from peak** → stop and review.
 - **Scale capital** only after 2 consecutive positive months with ≥ 90% rule adherence.
 
@@ -246,16 +243,6 @@ Sullivan, Timmermann & White (1999) tested **7,846 technical rules** on the DJIA
 **Risk to know about:** between the entry filling and you approving the stop, **the position is unprotected**. Two ways to handle it:
 - Approve promptly. The buy-stop typically fills within minutes of 7:35 MT.
 - Enter the ORB as a **bracket order yourself in Edge Mobile**, and use the connector only for proposals, cancels and exits.
-
-### 8.3 Rollout
-
-| Phase | Duration | Exit criteria |
-|---|---|---|
-| 0: Paper, manual | 4–6 weeks | ≥ 30 trades, ≥ 90% rule adherence |
-| 1: Backtest check (QuantConnect, long-only, no leverage, 2024–2026) | parallel | Positive expectancy out-of-sample |
-| 2: Semi-automated paper | 4 weeks | Proposals match the rules 100% |
-| 3: Live $1,000, approve every order | ≥ 50 trades | Positive expectancy |
-| 4: Scale, and test the VWAP / pattern-lab ideas on paper | ongoing | 2 positive months per step |
 
 ---
 

@@ -19,7 +19,7 @@
 - [ ] Create a **Telegram bot for dev** with @BotFather, and get your chat ID.
 - [ ] Create the **`trader_dev` database** and roles `trader_dev_owner` / `trader_dev_app` on `192.168.68.86`.
 - [ ] Add a **Pi-hole v6 Local DNS record**: `trader-dev.sunspinner.ca` → `192.168.68.73`.
-- [ ] Add an **NPM proxy host** for `trader-dev.sunspinner.ca`, with an Access List allowing only `192.168.68.0/24`.
+- [ ] Add an **NPM proxy host** for `trader-dev.sunspinner.ca`, with an Access List allowing only `192.168.68.0/22` (the home LAN is a /22, not a /24).
 - [ ] Confirm the existing Postgres **backup** will include the new `trader_dev` database.
 
 ## Separate security note (FinanceTracker, not Trader)

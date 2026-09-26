@@ -473,7 +473,7 @@ All endpoints need a session cookie, except `/api/auth/login` and `/api/health`.
 ## 14. Security
 
 - **Network:** Trader joins the external `proxy` Docker network. **Nginx Proxy Manager** (NPM) terminates TLS for `trader.sunspinner.ca` and forwards to `trader:8000`. **No host port is published**, unlike FinanceTracker's `8001:8000`, so NPM is the only way in.
-- **Home network only.** The NPM proxy host has an **Access List** that allows `192.168.68.0/24` (⚠ VERIFY the subnet) and denies everything else. The app login is a second layer.
+- **Home network only.** The NPM proxy host has an **Access List** that allows `192.168.68.0/22` (the home LAN, `192.168.68.0`–`192.168.71.255`) and denies everything else. The app login is a second layer.
 - **Local name resolution:** a Pi-hole v6 Local DNS record (Settings → Local DNS → DNS Records) points `trader.sunspinner.ca` to `192.168.68.73`, so the name works at home with no public DNS record needed.
 - **TLS certificate:** because the host isn't reachable from the internet, Let's Encrypt's HTTP challenge may fail. If it does, use NPM's **DNS challenge** with your DNS provider's API token.
 - **The only internet-facing part is the Telegram bot.** It makes outbound calls only (long polling), so no port is opened. Remote use goes through the Telegram commands in §4.4.
@@ -574,7 +574,7 @@ Both environments run on the **same Docker host** (`192.168.68.73`) and the **sa
 Settled from the FinanceTracker repo: Docker host `192.168.68.73` (context `shared-docker-server`), Nginx Proxy Manager on the `proxy` network, the `sunspinner.ca` domain, and the build-and-ship deploy method. **Still open:**
 
 1. ~~PostgreSQL host/port and version~~: `192.168.68.86:5432`, PostgreSQL 14.24 (Ubuntu 22.04) ✅. The design needs PostgreSQL 13 or later.
-2. Your home LAN subnet, for the NPM access list. `192.168.68.0/24` is assumed from the Docker host's IP.
+2. ~~Home LAN subnet~~: `192.168.68.0/22` (gateway `192.168.68.1`), read from the routing table on 2026-09-26 ✅. The earlier `/24` assumption would have blocked any device given a `192.168.69–71.x` address.
 3. ~~Hostnames~~: `trader-dev.sunspinner.ca` (dev) and `trader.sunspinner.ca` (prod), resolved locally through Pi-hole ✅.
 4. ~~The Claude daily budget cap~~: US$1/day for dev ✅ (estimated normal use US$0.20–0.60 per trading day on Sonnet 5). Trader gets **its own Anthropic key**, separate from FinanceTracker's, so costs are tracked separately ✅.
 5. You'll need to register a **second Questrade API personal app** for Trader (see §4.1). One login can have several apps, each with its own consumer key ✅. S1 still verifies that their token chains are independent.

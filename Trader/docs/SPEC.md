@@ -451,7 +451,7 @@ All endpoints need a session cookie, except `/api/auth/login` and `/api/health`.
 
 | Var | Purpose |
 |---|---|
-| `DATABASE_URL` | `postgresql+psycopg://trader_app:…@<pg-host>:5432/trader` (non-owner app role) |
+| `DATABASE_URL` | `postgresql+psycopg://trader_app:…@192.168.68.86:5432/trader` (non-owner app role) |
 | `MIGRATION_DATABASE_URL` | Owner role `trader_owner`; used only by `alembic upgrade` at start-up |
 | `APP_ENCRYPTION_KEY` | Fernet key for tokens and TOTP secrets |
 | `SESSION_SECRET` | Cookie signing |
@@ -495,7 +495,7 @@ Trader follows the same pattern as FinanceTracker's `scripts/deploy.sh` and `doc
 | Container `TZ` | `UTC`. Scheduling uses `CRON_TZ=America/New_York` and the UI shows `America/Edmonton`. Unlike FinanceTracker, no logic depends on the container's local date, because all session dates come from the exchange calendar |
 
 - **Image:** multi-stage Dockerfile. `node:22-alpine` builds `web/` → `python:3.12-slim` runtime with the app, the static build, supercronic and supervisord.
-- **PostgreSQL:** the **same instance as FinanceTracker**, in a new database `trader`. Following the `ledger_prod` pattern, `trader_owner` owns the schema and runs the migrations, and the app connects as the non-owner `trader_app` role with explicit grants (plus `ALTER DEFAULT PRIVILEGES`, so new tables are covered too).
+- **PostgreSQL:** the **same instance as FinanceTracker** (`192.168.68.86:5432`), in a new database `trader`. Following the `ledger_prod` pattern, `trader_owner` owns the schema and runs the migrations, and the app connects as the non-owner `trader_app` role with explicit grants (plus `ALTER DEFAULT PRIVILEGES`, so new tables are covered too).
 - **Start-up:** `alembic upgrade head` (as the owner) → create the admin user if missing → supervisord.
 - **Health check:** `GET /api/health`.
 - **NPM:** add a proxy host `trader.sunspinner.ca` → `http://trader:8000`, with websockets/SSE allowed, a Let's Encrypt certificate, and the home-LAN-only **Access List**.
@@ -527,7 +527,7 @@ Trader follows the same pattern as FinanceTracker's `scripts/deploy.sh` and `doc
 
 Settled from the FinanceTracker repo: Docker host `192.168.68.73` (context `shared-docker-server`), Nginx Proxy Manager on the `proxy` network, the `sunspinner.ca` domain, and the build-and-ship deploy method. **Still open:**
 
-1. The PostgreSQL host, port and version (they're in FinanceTracker's `.env.prod` on your Mac, which isn't in the repo).
+1. ~~PostgreSQL host/port~~: `192.168.68.86:5432` ✅. The PostgreSQL **version** is still to confirm (run `SELECT version();`). It only affects minor features; the design needs PostgreSQL 13 or later.
 2. Your home LAN subnet, for the NPM access list. `192.168.68.0/24` is assumed from the Docker host's IP.
 3. Is `trader.sunspinner.ca` OK as the hostname (resolved locally through Pi-hole)?
 4. The Claude daily budget cap. The suggested default is US$1/day. Should Trader reuse the Anthropic key FinanceTracker uses, or get its own key so costs are tracked separately?

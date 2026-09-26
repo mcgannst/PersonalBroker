@@ -4,7 +4,7 @@
 
 ## Open decisions and questions (Stephen)
 
-- [ ] **PostgreSQL version** on `192.168.68.86`. Run `SELECT version();`. The design needs version 13 or later.
+- [x] **PostgreSQL version** on `192.168.68.86`: 14.24 (Ubuntu 22.04), checked 2026-09-26. The design needs version 13 or later.
 - [ ] **Hostnames:** confirm `trader-dev.sunspinner.ca` (dev) and `trader.sunspinner.ca` (prod).
 - [ ] **Claude API budget:** confirm US$1/day for dev.
 - [ ] **Anthropic key:** reuse FinanceTracker's key, or create a separate key for Trader so costs are tracked separately?

@@ -30,7 +30,7 @@ BASE_FILTERS = ["sh_opt_option", "ind_stocksonly", "geo_usa"]
 TIERS = {
     # Every hard test at PASS level, plus a cooler RSI and golden-cross trend.
     "strict": ["cap_largeover", "fa_pe_profitable", "fa_debteq_u1",
-               "ta_sma50_pa", "ta_sma50_sa200", "ta_rsi_nob60",
+               "ta_sma50_pa", "ta_sma200_sb50", "ta_rsi_nob60",
                "sh_avgvol_o1000"],
     # Framework PASS thresholds that FinViz can express directly.
     "standard": ["cap_largeover", "fa_pe_profitable", "fa_debteq_u1",

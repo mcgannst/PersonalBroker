@@ -1,17 +1,17 @@
 ---
 name: wheel-screener
-description: Screen the market with FinViz for new wheel-strategy (cash-secured put) candidates that fit the eight-test wheel framework AND a maximum stock price the user provides, then return a short, framework-ranked shortlist ready for the wheel-evaluator. Use this whenever the user asks to find, screen for, scan for, or list wheel candidates, stocks to sell puts on, or "stocks under $X for the wheel", or gives a price cap or cash amount and asks what they could wheel with it — even if they don't name FinViz. For judging one specific ticker the user already has in mind, use wheel-evaluator instead.
+description: Screen the market with FinViz for new wheel-strategy (cash-secured put) candidates that fit the eight-test wheel framework AND a maximum stock price the user provides, then return the matches as one framework-ranked table that can be fed straight to the wheel-evaluator. Use this whenever the user asks to find, screen for, scan for, or list wheel candidates, stocks to sell puts on, or "stocks under $X for the wheel", or gives a price cap or cash amount and asks what they could wheel with it — even if they don't name FinViz. For judging one specific ticker the user already has in mind, use wheel-evaluator instead.
 ---
 
 # Wheel Screener (FinViz)
 
-Find stocks that pass the screenable parts of the eight-test wheel framework and trade at or below a price the user gives. The output is a shortlist, not a verdict: Tests 1 (ownership), 6 (liquidity) and 8 (premium) cannot be decided by a screener, so qualifiers go on to the **wheel-evaluator** skill for the full report.
+Find stocks that pass the screenable parts of the eight-test wheel framework and trade at or below a price the user gives. The output is a single table of matches, not a verdict: Tests 1 (ownership), 6 (liquidity) and 8 (premium) cannot be decided by a screener, so qualifiers go on to the **wheel-evaluator** skill for the full report.
 
 ## Style rules (mandatory, same as wheel-evaluator)
 
 - Plain language; define a financial term briefly at first use. No analogies or colourful metaphors.
 - Facts and framework verdicts, not advice. Never recommend buying or selling.
-- State affordability once, factually (max collateral per contract in USD, and CAD if the FX rate is known). No budget commentary.
+- State affordability once, factually (max collateral per contract in USD and CAD, using the Questrade rate from Step 1). No budget commentary.
 - Timestamp the data and say where it came from (FinViz screener, FinViz quote page, or FMP fallback).
 - **Never rank by premium, yield or dividend.** Rank by the framework (see Step 5).
 
@@ -25,7 +25,14 @@ Find stocks that pass the screenable parts of the eight-test wheel framework and
 | Tier | No | `standard` |
 | Sectors to include/exclude | No | all |
 
-If you are given cash in CAD, convert to USD at the current rate (search it if unknown) before dividing by 100, and say which rate you used. If no price or cash is given, ask for it — it is the one input this skill cannot assume.
+If you are given cash in CAD, convert to USD before dividing by 100, and say which rate you used.
+
+**Exchange rate (USD/CAD).** Whenever a CAD figure is needed (CAD cash input, or the CAD collateral in the report header), get the rate from the Questrade connector, not a web search:
+
+1. `mcp__QuestTrade__get_quotes` with `symbols: ["DLR.TO", "DLR.U.TO"]`. These are the same US-dollar currency ETF quoted in CAD and in USD, so their price ratio is the exchange rate. Questrade has no direct currency-pair quote (`USDCAD` returns nothing).
+2. CAD per USD = `DLR.TO` last price ÷ `DLR.U.TO` last price (use the bid/ask midpoints if `lastPrice` is missing). USD = CAD ÷ that rate.
+3. Round to 4 decimals and quote it with its `quoteTime`, e.g. "1.4144 CAD/USD (Questrade DLR/DLR.U, 2026-09-25 close)".
+4. Only if the Questrade connector is unavailable or returns nothing, fall back to a web search and say so. If no price or cash is given, ask for it — it is the one input this skill cannot assume.
 
 Tiers:
 - `strict` — only names that should PASS every screenable test (adds SMA50 above SMA200, RSI < 60, volume > 1M).
@@ -58,7 +65,7 @@ What the filters cover:
 ## Step 3 — Fetch the results
 
 1. Fetch the **Technical** URL and the **Financial** URL (and Valuation if forward P/E is needed). FinViz shows 20 rows per page; add `&r=21`, `&r=41`, … for more pages. Stop at ~60 names — if there are more, tell the user the count and suggest `strict` or a lower max price rather than reading hundreds.
-2. **If FinViz can't be fetched** (blocked, 403, empty table): say so in one line, give the user the Overview URL to open himself, and continue with the FMP fallback if the FMP connector is available:
+2. **If FinViz can't be fetched** (blocked, 403, empty table): say so in one line, give the user the Overview URL to open themselves, and continue with the FMP fallback if the FMP connector is available:
    - `mcp__FMP__search` with `endpoint: "search-company-screener"`, `priceMoreThan`/`priceLowerThan` = the window, `marketCapMoreThan: 10000000000` (2000000000 for wide), `isEtf: false`, `isFund: false`, `country: "US"`, `volumeMoreThan: 500000`, `isActivelyTrading: true`, `limit: 100`.
    - Then pull ratios (Debt/Eq, book value, EPS) and technicals (SMA 50/200, RSI 14) from the FMP statements and technicalIndicators tools for each name. FMP does not say whether a stock is optionable; mark that "verify in Questrade" and let the wheel-evaluator's chain check settle it.
    - If the user pastes or screenshots the FinViz results instead, use those.
@@ -82,27 +89,27 @@ For every row, apply these checks from the screener columns, fetching the quote 
 
 Also drop anything that is plainly a leveraged/inverse product or a pre-profit company if one slipped through.
 
-## Step 5 — Rank and report
+## Step 5 — Rank and output the table
 
-Rank survivors by: fewest CAUTIONs → no flags → larger market cap. Never by yield or premium. Show the top 10 (or all if fewer), and the count dropped per reason.
+Rank survivors by: fewest CAUTIONs → no flags → larger market cap. Never by yield or premium. Include every survivor (not just a top 10).
+
+**Output only the block below** — one header line, the table, and a ticker line. No commentary, per-name notes, drop counts, or follow-up offers. Put anything a reader would otherwise need to know (estimated earnings date, SMA50 below SMA200, forward P/E vs trailing) into the `Flags` or `Notes` cell of that row. Use `—` for empty cells and `n/a` for data FinViz does not show.
 
 ```
-WHEEL SCREEN — stocks $<min>–$<max> — tier <tier> — <timestamp>, source <FinViz|FMP>
-Max collateral per contract: $<max×100> USD (~$<CAD> CAD)
-Screener: <N> matched → <M> after post-filter (dropped: <k> price, <k> book value, <k> downtrend, ...)
+WHEEL SCREEN — $<min>–$<max> — tier <tier> — <N> matched → <M> kept — <timestamp> — source <FinViz|FMP> — max collateral $<max×100> USD (~$<CAD> CAD @ <rate>)
 
-#  Ticker  Company         Price   MktCap  EPS gr  D/E   RSI  vs SMA50  Status            Flags
-1  XXX     ...             $xx.xx  $xxB    +x%     0.xx  xx   +x%       PASS (screenable) —
-2  YYY     ...             $xx.xx  $xB     -x%     1.xx  xx   +x%       2 CAUTION         earnings 10/28
-...
+| # | Ticker | Company | Sector | Price | Mkt cap | P/E | Fwd P/E | EPS gr (this Y) | Book/sh | Debt/Eq | RSI | vs SMA50 | vs SMA200 | Above 52W low | Short float | Payout | Next earnings | Screen status | Flags | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | XXX | ... | ... | $xx.xx | $xxB | xx.x | xx.x | +x% | xx.xx | 0.xx | xx | +x% | +x% | +x% | x% | x% | Nov 05 (est.) | PASS (screenable) | — | — |
 
-Not tested here: 1 Ownership (your call), 6 Liquidity and 8 Premium (need the option chain).
-Next step: run wheel-evaluator on any of these for strikes, liquidity and premium.
-FinViz screener URL: <overview URL>
-Framework screen, not advice.
+Tickers for wheel-evaluator: XXX, YYY, ZZZ
 ```
 
-Then offer, in one line, to run the **wheel-evaluator** on the top 3 (or the ones the user picks). If the user agrees, follow that skill for each ticker and use its multi-ticker comparison format.
+Column rules:
+- `Screen status`: `PASS (screenable)` or `<n> CAUTION` — never "Qualified".
+- `Next earnings`: the confirmed date if FinViz or Questrade shows one; otherwise estimate from the last report + ~13 weeks and mark `(est.)`.
+- `Tickers for wheel-evaluator`: all kept tickers, in rank order, comma-separated.
+- If the tier returns 0 names, output the header line with `0 kept` and one line naming the next tier to try; run it only if the user asks.
 
 ## What this skill must NOT do
 

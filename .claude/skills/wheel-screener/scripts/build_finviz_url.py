@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build FinViz screener URLs that pre-filter for Stephen's wheel framework.
+"""Build FinViz screener URLs that pre-filter for the eight-test wheel framework.
 
 FinViz only offers preset price buckets, so the script picks the tightest
 preset that fully contains the requested price range and reports the exact

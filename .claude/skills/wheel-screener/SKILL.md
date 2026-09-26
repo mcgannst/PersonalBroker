@@ -1,6 +1,6 @@
 ---
 name: wheel-screener
-description: Screen the market with FinViz for new wheel-strategy (cash-secured put) candidates that fit the eight-test wheel framework AND a maximum stock price he provides, then return a short, framework-ranked shortlist ready for the wheel-evaluator. Use this whenever you are ask to find, screen for, scan for, or list wheel candidates, stocks to sell puts on, or "stocks under $X for the wheel", or gives a price cap or cash amount and asks what he could wheel with it — even if he doesn't name FinViz. For judging one specific ticker he already has in mind, use wheel-evaluator instead.
+description: Screen the market with FinViz for new wheel-strategy (cash-secured put) candidates that fit the eight-test wheel framework AND a maximum stock price the user provides, then return a short, framework-ranked shortlist ready for the wheel-evaluator. Use this whenever the user asks to find, screen for, scan for, or list wheel candidates, stocks to sell puts on, or "stocks under $X for the wheel", or gives a price cap or cash amount and asks what they could wheel with it — even if they don't name FinViz. For judging one specific ticker the user already has in mind, use wheel-evaluator instead.
 ---
 
 # Wheel Screener (FinViz)
@@ -102,7 +102,7 @@ FinViz screener URL: <overview URL>
 Framework screen, not advice.
 ```
 
-Then offer, in one line, to run the **wheel-evaluator** on the top 3 (or the ones the user picks). If he agrees, follow that skill for each ticker and use its multi-ticker comparison format.
+Then offer, in one line, to run the **wheel-evaluator** on the top 3 (or the ones the user picks). If the user agrees, follow that skill for each ticker and use its multi-ticker comparison format.
 
 ## What this skill must NOT do
 

@@ -1,6 +1,6 @@
 # Trader — To-Do
 
-*Last updated: 2026-09-26. The design docs are in [`docs/BRD.md`](docs/BRD.md) and [`docs/SPEC.md`](docs/SPEC.md) (v0.4).*
+*Last updated: 2026-09-26. The design docs are in [`docs/BRD.md`](docs/BRD.md) and [`docs/SPEC.md`](docs/SPEC.md) (v1.0, approved 2026-09-26).*
 
 ## Open decisions and questions (Stephen)
 
@@ -10,7 +10,7 @@
 - [x] **Pre-market candidate cap:** classify only the top 50 by gap %, adjustable in Settings. Decided 2026-09-26 (SPEC §4.3).
 - [x] **Anthropic key:** Trader gets its own key, separate from FinanceTracker's, confirmed 2026-09-26.
 - [x] **Questrade:** one login can have more than one API personal app, confirmed by Stephen 2026-09-26. Questrade's getting-started docs list apps under "personal applications", and each app gets its own consumer key (`client_id`) and its own manual authorization token. Checked 2026-09-26. S1 still has to prove that refreshing one app's token doesn't invalidate another's.
-- [ ] **Sign off** on the BRD and SPEC.
+- [x] **Sign off** on the BRD and SPEC: approved as v1.0 on 2026-09-26.
 
 ## Setup tasks before Phase 0 (Stephen)
 

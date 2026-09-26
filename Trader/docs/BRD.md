@@ -2,9 +2,10 @@
 
 | | |
 |---|---|
-| **Document** | BRD v0.1 (draft for review) |
+| **Document** | BRD v1.0 (approved) |
 | **Owner / sole user** | Stephen McGann |
 | **Date** | 2026-09-26 (v0.4: dev environment first, then prod) |
+| **Approved** | Stephen McGann, 2026-09-26 |
 | **Related** | [`SPEC.md`](SPEC.md) · [`../reports/Day trading strategy playbook.md`](../reports/Day%20trading%20strategy%20playbook.md) |
 
 ---

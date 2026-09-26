@@ -2,9 +2,10 @@
 
 | | |
 |---|---|
-| **Document** | SPEC v0.1 (draft for review) |
+| **Document** | SPEC v1.0 (approved) |
 | **Implements** | [`BRD.md`](BRD.md) |
 | **Date** | 2026-09-26 (v0.4: separate dev and prod environments) |
+| **Approved** | Stephen McGann, 2026-09-26 |
 
 Items marked **⚠ VERIFY** are assumptions that the Phase 0 spikes must confirm before any code depends on them.
 

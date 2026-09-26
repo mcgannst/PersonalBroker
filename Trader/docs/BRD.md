@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | BRD v0.1 (draft for review) |
 | **Owner / sole user** | Stephen McGann |
-| **Date** | 2026-09-26 (v0.2: infrastructure aligned with FinanceTracker) |
+| **Date** | 2026-09-26 (v0.3: web app on the home network only; Telegram for remote use) |
 | **Related** | [`SPEC.md`](SPEC.md) · [`../reports/Day trading strategy playbook.md`](../reports/Day%20trading%20strategy%20playbook.md) |
 
 ---
@@ -46,7 +46,7 @@ Build a self-hosted system that **runs the day-trading strategies from the playb
 - A **simulated broker** with a realistic, quote-based fill model and a T+1 settled-cash ledger.
 - An **approval-mode toggle**: approve every order, or run fully automatically.
 - **Telegram bot** alerts, with Approve and Reject buttons.
-- Deployment on the **existing Docker host (192.168.68.73)**, exposed through **Nginx Proxy Manager** at `trader.sunspinner.ca`, with **Cloudflare Access** in front and the app's own login as a second layer. This is the same deployment pattern as FinanceTracker.
+- Deployment on the **existing Docker host (192.168.68.73)**, served through **Nginx Proxy Manager** at `trader.sunspinner.ca`, **reachable only from the home network**, with the app's own login as a second layer. Away from home, Stephen uses **Telegram** for approvals, status and pausing. This is the same deployment pattern as FinanceTracker.
 - **Replay mode** that runs over past days using candles.
 - Configurable starting capital, currency and enabled markets. Defaults: US$720, US only.
 - Kill switches, a trade journal, performance metrics and a weekly report.
@@ -98,7 +98,8 @@ Priority: **M** = must, **S** = should, **C** = could.
 |---|---|---|
 | BR-30 | An **approval-mode toggle** shall switch between (a) every order requires approval and (b) fully automatic. | M |
 | BR-31 | In approval mode, proposals shall be approvable from **Telegram** (inline buttons) and from the **web app**, and shall expire after a configurable time. | M |
-| BR-32 | Telegram shall send alerts for new proposals, fills, stop-outs, kill-switch trips, job failures and the daily summary. | M |
+| BR-32 | Telegram shall send alerts for new proposals, fills, stop-outs, kill-switch trips, job failures and the daily summary. Each message shall contain the key details, so the web app isn't needed away from home. | M |
+| BR-34 | Telegram commands shall give remote status (`/status`, `/positions`, `/pnl`, `/pending`) and an emergency **`/pause`**, which blocks new entries while still allowing exits, plus `/resume`. Resetting an automatic kill switch shall remain web-app only. | M |
 | BR-33 | The system shall record the time to each decision and how long each position went without a stop. | S |
 
 ### 6.5 Risk controls
@@ -117,7 +118,7 @@ Priority: **M** = must, **S** = should, **C** = could.
 | BR-53 | Settings: approval mode, capital, markets, strategy settings, slippage and kill-switch thresholds. | M |
 | BR-54 | Replay: start a replay over a date range, view its results and compare them with the live simulation. | M |
 | BR-55 | System health: job runs, API token status, errors and logs. | M |
-| BR-56 | Access through Nginx Proxy Manager, protected by Cloudflare Access plus the app's own login. No other network path to the app. | M |
+| BR-56 | The web app shall be reachable only from the home network, through Nginx Proxy Manager with an access list, plus the app's own login. It is not exposed to the internet. | M |
 
 ### 6.7 Reporting
 | ID | Requirement | Pri |
@@ -133,7 +134,7 @@ Priority: **M** = must, **S** = should, **C** = could.
 | Reliability | Jobs can be re-run safely without duplicating work. A failed job is retried and triggers an alert. The engine recovers after a container restart during market hours. |
 | Timing | The ORB ranking and proposal are ready by **9:36:00 ET** (90 seconds after the opening bar completes). |
 | Time zones | Schedules run in **America/New_York** (daylight saving is handled automatically). The UI shows **Mountain Time**. |
-| Security | Secrets are stored outside the image. The Questrade refresh token is encrypted at rest. The web app is only reachable through NPM, behind Cloudflare Access and the app's login. Only Stephen's Telegram chat ID can approve. |
+| Security | Secrets are stored outside the image. The Questrade refresh token is encrypted at rest. The web app is only reachable from the home network (an NPM access list) and requires the app's login. The only internet-facing part is the outbound-only Telegram bot. Only Stephen's Telegram chat ID can approve. |
 | Auditability | Every decision (signal, proposal, approval, order, fill) is saved with timestamps and the data behind it. |
 | Maintainability | Python type hints, automated tests, and replay results that come out the same every time for the same inputs. |
 | Cost | Only the Claude API costs money, and a daily spending cap is configurable. |
@@ -143,7 +144,7 @@ Priority: **M** = must, **S** = should, **C** = could.
 1. FinanceTracker's PostgreSQL instance can host a new `trader` database, with owner and app roles following the `ledger_prod` pattern.
 2. Docker runs on the shared Docker server at `192.168.68.73`, the same host as FinanceTracker. Images are built on the Mac and shipped with `docker save | ssh docker load`.
 3. Stephen can register a Questrade API personal app and create a Telegram bot through @BotFather.
-4. Nginx Proxy Manager terminates TLS. `sunspinner.ca` DNS is proxied through Cloudflare, so Cloudflare Access can be applied (to be verified).
+4. Nginx Proxy Manager terminates TLS. Pi-hole v6 provides the local DNS record for `trader.sunspinner.ca`.
 5. Scraping FinViz is acceptable for personal, low-frequency use (see risk R3).
 
 ## 9. Constraints
@@ -161,7 +162,8 @@ Priority: **M** = must, **S** = should, **C** = could.
 | R3 | FinViz blocks scraping, changes its page layout, or its terms prohibit scraping | The screener fails | Scrape slowly, keep the page parser in one isolated module, allow a manual watchlist upload, and consider FinViz Elite's export |
 | R4 | The refresh token expires (for example, if the system is unused for about 7 days) | No market data | Refresh daily even on weekends, alert when a refresh fails, and provide a screen to paste a new token |
 | R5 | Simulated results look better than real trading would | False confidence | Quote-based fills, slippage, a settled-cash rule, and measuring how long positions go without a stop |
-| R6 | Web app exposed to the internet | Unauthorized approvals | Cloudflare Access, app login, no published host port, the origin locked to Cloudflare IPs, an allow-list of your Telegram chat ID, and an audit log |
+| R6 | Unauthorized approvals | Trades Stephen didn't intend | The web app is home-network only, with an app login and no published host port. Telegram accepts only Stephen's chat ID and uses signed button data. Everything is audit-logged |
+| R8 | A problem while away from home that needs the web app (a kill-switch reset, a broken Questrade token) | The simulation pauses until Stephen is home | Accepted. Use `/pause` for emergencies. The daily token keep-alive makes a broken token rare. A VPN can be added later |
 | R7 | **Trader and FinanceTracker share one Questrade token chain** | Each app's token refresh invalidates the other's, so both lose market data | Trader uses its **own Questrade API personal app**, and reuses FinanceTracker's proven refresh-locking logic |
 
 ## 11. Delivery phases (high level)
@@ -172,7 +174,7 @@ Priority: **M** = must, **S** = should, **C** = could.
 | 1 | Data layer: database schema, Questrade client, FinViz scraper, nightly universe and history cache |
 | 2 | Engine: strategy framework, ORB and overlay plug-ins, risk manager, simulated broker |
 | 3 | Approvals and Telegram bot; cron schedule |
-| 4 | Web app (React) and API; authentication; NPM proxy host + Cloudflare Access; deploy script |
+| 4 | Web app (React) and API; authentication; NPM proxy host with a LAN access list; deploy script |
 | 5 | Replay mode, reports, kill switches, hardening |
 
 ## 12. Sign-off

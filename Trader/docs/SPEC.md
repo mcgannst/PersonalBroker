@@ -4,7 +4,7 @@
 |---|---|
 | **Document** | SPEC v0.1 (draft for review) |
 | **Implements** | [`BRD.md`](BRD.md) |
-| **Date** | 2026-09-26 (v0.2: infrastructure aligned with the FinanceTracker deployment) |
+| **Date** | 2026-09-26 (v0.3: web app on the home network only; Telegram commands for remote use) |
 
 Items marked **⚠ VERIFY** are assumptions that the Phase 0 spikes must confirm before any code depends on them.
 
@@ -14,9 +14,9 @@ Items marked **⚠ VERIFY** are assumptions that the Phase 0 spikes must confirm
 
 ```
                       ┌──────────────── Docker container: trader ────────────────┐
-  Cloudflare Access   │                                                           │
+  Home LAN only       │                                                           │
   → Nginx Proxy Mgr   │  supervisord                                              │
-  ('proxy' network) ─►│   ├─ api        uvicorn  FastAPI  (REST + serves React)   │
+  (access list) ─────►│   ├─ api        uvicorn  FastAPI  (REST + serves React)   │
                       │   ├─ worker     python -m trader.worker  (market-hours     │
                       │   │             loop: fill simulator, Telegram bot,        │
                       │   │             order monitor)                             │
@@ -55,7 +55,7 @@ Scheduled jobs and the worker talk to each other **only through PostgreSQL** (ta
 | AI | `anthropic` Python SDK; model is configurable (default `claude-sonnet-5`, with `claude-haiku-4-5-20251001` as a cheaper option) |
 | Telegram | `python-telegram-bot` v21 (long polling, inline keyboards) |
 | Web | React 18 + TypeScript + Vite; TanStack Query; Recharts for charts; built in a multi-stage Docker build and served by FastAPI |
-| Auth | Argon2 password hash; signed HTTP-only session cookie; optional TOTP; plus Cloudflare Access in front |
+| Auth | Argon2 password hash; signed HTTP-only session cookie; optional TOTP. Network access limited to the home LAN by an NPM access list |
 | Tests | pytest, pytest-asyncio, respx (HTTP mocks), testcontainers-postgres; Vitest for the UI |
 | Logging | structlog, JSON to stdout, and mirrored to the `event_log` table for the UI |
 
@@ -170,7 +170,20 @@ Trader/
 - Long polling runs inside `worker`. **Only messages from the configured `telegram.chat_id` are accepted.**
 - **Messages:** new proposal (with **✅ Approve / ❌ Reject** buttons), fill, stop hit, overlay decision, flatten, kill-switch trip, job failure, token failure, daily summary (with a **Rules followed? Yes / No** button), weekly report link.
 - A button press calls the same `ProposalService.decide()` that the web app calls. Both routes do exactly the same thing. The first decision wins, and any later decision gets an "already decided" reply.
-- Messages link to the web app URL for details.
+- **Messages are self-contained.** Each includes the key details (ticker, quantity, prices, stop, P&L, reason), because the web app is only reachable at home. A web link is added for use at home.
+- **Commands** (for use away from home; all read-only except `/pause` and `/resume`):
+
+| Command | Returns / does |
+|---|---|
+| `/status` | Session phase, next scheduled event, approval mode, kill-switch state, Questrade token health |
+| `/positions` | Open positions: ticker, qty, entry, last price, stop, unrealized P&L, unprotected time |
+| `/pnl` | Today's realized and unrealized P&L; week-to-date; equity and drawdown from the peak |
+| `/pending` | Pending proposals, re-sent with their Approve/Reject buttons |
+| `/pause` | **Blocks new entry proposals** (a manual kill switch). Exits, stops and flattening still work. Asks for confirmation. Audit-logged |
+| `/resume` | Lifts a `/pause` only. It **does not** reset a tripped automatic kill switch; that is done only in the web app, on purpose |
+| `/help` | Lists the commands |
+
+- Commands from any chat other than `telegram.chat_id` are ignored and logged.
 
 ## 5. Strategy plug-in framework
 
@@ -294,6 +307,8 @@ Checked before every entry proposal and after every fill.
 | `expectancy_min_trades` / `expectancy_threshold_R` | 50 / 0.0 | After N closed trades, block entries if expectancy ≤ threshold; manual re-enable |
 
 When a switch trips, the system sends a Telegram alert and writes to `kill_switch_events`. Re-enabling is done in the web app, requires typing a reason, and is audit-logged.
+
+A fourth switch, **`manual_pause`**, is set by Telegram `/pause` or the web app. It blocks entries until `/resume` or the web app clears it.
 
 ## 7. Simulated broker and fill model
 
@@ -442,7 +457,7 @@ All endpoints need a session cookie, except `/api/auth/login` and `/api/health`.
 | `SESSION_SECRET` | Cookie signing |
 | `ANTHROPIC_API_KEY` | Claude |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Bot and the one authorized chat |
-| `PUBLIC_BASE_URL` | `https://trader.sunspinner.ca`, used in Telegram links |
+| `PUBLIC_BASE_URL` | `https://trader.sunspinner.ca` (resolves on the home LAN only), used in Telegram links |
 | `ADMIN_USERNAME`, `ADMIN_PASSWORD_INITIAL` | First-run user creation only |
 | `TZ_DISPLAY` | `America/Edmonton` |
 
@@ -451,9 +466,11 @@ All endpoints need a session cookie, except `/api/auth/login` and `/api/health`.
 ## 14. Security
 
 - **Network:** Trader joins the external `proxy` Docker network. **Nginx Proxy Manager** (NPM) terminates TLS for `trader.sunspinner.ca` and forwards to `trader:8000`. **No host port is published**, unlike FinanceTracker's `8001:8000`, so NPM is the only way in.
-- **Cloudflare Access** (email one-time code or IdP) sits in front of the hostname. The app login is a second layer.
-  - ⚠ VERIFY that `sunspinner.ca` DNS is **proxied** (orange cloud) through Cloudflare. Access has no effect on DNS-only records.
-  - Anyone who reaches the origin directly, by the public IP or from the LAN, **bypasses Access**. Mitigation: at the router/firewall, allow inbound 443 only from Cloudflare's IP ranges, **or** make NPM validate the `Cf-Access-Jwt-Assertion` header. On the LAN, the app login still applies.
+- **Home network only.** The NPM proxy host has an **Access List** that allows `192.168.68.0/24` (⚠ VERIFY the subnet) and denies everything else. The app login is a second layer.
+- **Local name resolution:** a Pi-hole v6 Local DNS record (Settings → Local DNS → DNS Records) points `trader.sunspinner.ca` to `192.168.68.73`, so the name works at home with no public DNS record needed.
+- **TLS certificate:** because the host isn't reachable from the internet, Let's Encrypt's HTTP challenge may fail. If it does, use NPM's **DNS challenge** with your DNS provider's API token.
+- **The only internet-facing part is the Telegram bot.** It makes outbound calls only (long polling), so no port is opened. Remote use goes through the Telegram commands in §4.4.
+- **Future remote access,** if ever needed: a VPN (WireGuard or Tailscale), with no app changes.
 - **Cookies:** HttpOnly, Secure, SameSite=Strict; CSRF token on changes; login rate limiting and lockout.
 - **Secrets:** tokens and secrets are encrypted at rest with Fernet, and nothing sensitive is logged.
 - **Telegram:** chat-ID allow-list; the callback data contains a signed proposal ID plus a nonce.
@@ -470,7 +487,7 @@ Trader follows the same pattern as FinanceTracker's `scripts/deploy.sh` and `doc
 | Build | On the Mac, `desktop-linux` context, `DOCKER_DEFAULT_PLATFORM=linux/amd64` |
 | Ship | `docker save trader:latest \| ssh stephen@192.168.68.73 docker load` |
 | Recreate | `docker --context shared-docker-server compose -f docker/docker-compose.prod.yml up -d --no-build --no-deps --force-recreate trader` |
-| Health wait | Poll `https://trader.sunspinner.ca/api/health` until it returns 200 (up to 40 s) |
+| Health wait | Poll `https://trader.sunspinner.ca/api/health` from the Mac on the home LAN until it returns 200 (up to 40 s) |
 | Networks | `trader_internal` (bridge) + `proxy` (external, shared with NPM) |
 | Ports | **None published.** Access is through NPM only |
 | Volumes | Named volume `trader_logs:/app/logs`, not a bind mount (the compose file runs from the Mac against a remote daemon; see the FinanceTracker compose comments) |
@@ -481,7 +498,7 @@ Trader follows the same pattern as FinanceTracker's `scripts/deploy.sh` and `doc
 - **PostgreSQL:** the **same instance as FinanceTracker**, in a new database `trader`. Following the `ledger_prod` pattern, `trader_owner` owns the schema and runs the migrations, and the app connects as the non-owner `trader_app` role with explicit grants (plus `ALTER DEFAULT PRIVILEGES`, so new tables are covered too).
 - **Start-up:** `alembic upgrade head` (as the owner) → create the admin user if missing → supervisord.
 - **Health check:** `GET /api/health`.
-- **NPM:** add a proxy host `trader.sunspinner.ca` → `http://trader:8000`, with websockets/SSE allowed and a Let's Encrypt certificate.
+- **NPM:** add a proxy host `trader.sunspinner.ca` → `http://trader:8000`, with websockets/SSE allowed, a Let's Encrypt certificate, and the home-LAN-only **Access List**.
 - **Backups:** covered by the existing Postgres backup process. ⚠ VERIFY that it includes the new `trader` database. `pg_dump` output contains encrypted tokens, so keep it outside the repo, as FinanceTracker's `.gitignore` notes.
 
 ## 16. Testing strategy
@@ -511,7 +528,7 @@ Trader follows the same pattern as FinanceTracker's `scripts/deploy.sh` and `doc
 Settled from the FinanceTracker repo: Docker host `192.168.68.73` (context `shared-docker-server`), Nginx Proxy Manager on the `proxy` network, the `sunspinner.ca` domain, and the build-and-ship deploy method. **Still open:**
 
 1. The PostgreSQL host, port and version (they're in FinanceTracker's `.env.prod` on your Mac, which isn't in the repo).
-2. Is `sunspinner.ca` DNS proxied through Cloudflare? This is needed for Cloudflare Access. Which Access sign-in method do you want: email one-time code, or Google?
-3. Is `trader.sunspinner.ca` OK as the hostname?
+2. Your home LAN subnet, for the NPM access list. `192.168.68.0/24` is assumed from the Docker host's IP.
+3. Is `trader.sunspinner.ca` OK as the hostname (resolved locally through Pi-hole)?
 4. The Claude daily budget cap. The suggested default is US$1/day. Should Trader reuse the Anthropic key FinanceTracker uses, or get its own key so costs are tracked separately?
 5. You'll need to register a **second Questrade API personal app** for Trader (see §4.1).

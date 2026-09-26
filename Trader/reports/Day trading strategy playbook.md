@@ -1,282 +1,299 @@
-# Day Trading Strategy Playbook
+# Day Trading Strategy Playbook (v2)
 
-*Prepared for Stephen · September 26, 2026 · US + TSX common stocks · Questrade non-registered account · no leverage · $1,000 CAD starting capital*
+*Prepared for Stephen · September 26, 2026 · US + TSX common stocks · Questrade non-registered account · no leverage · long-only · $1,000 CAD starting capital*
+
+*v2 replaces the v1 report. The claims in v2 were checked against the full text of the primary sources. 24 of the 25 central claims were confirmed by a 3-vote adversarial check, and 1 was refuted and removed. Chart-pattern and candlestick strategies are now covered.*
 
 ---
 
 ## Bottom line up front
 
-After screening the standard day-trading strategies against published evidence, **only one strategy has credible, recent, stock-specific evidence of an edge after costs: the 5-minute Opening Range Breakout (ORB) restricted to "Stocks in Play"** ([Zarattini, Barbon & Aziz, 2024](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4729284)). It also happens to be the best fit for your constraints: one decision at the open, a pre-set stop, and an exit at the close — so it works with brief check-ins and is highly automatable.
-
-One secondary strategy (**VWAP trend-hold**) is kept on **probation** — paper-trade only until your own results prove it. Everything else (gap fade, VWAP mean reversion, small-cap gap-and-go, last-half-hour momentum, news scalping) is **dropped** for weak, decayed, or practitioner-only evidence, or because it needs constant screen time.
-
-Three honest cautions before anything else:
-
-1. **Most day traders lose money.** In the most complete dataset ever studied (all Taiwan Stock Exchange trades, 1992–2006), **more than 80% of day traders lost money in a typical six-month period and fewer than 1% were predictably profitable after fees** ([Barber, Lee, Liu & Odean](https://faculty.haas.berkeley.edu/odean/papers/Day%20Traders/Day%20Trade%20040330.pdf)). In Brazil, **97% of people who persisted more than 300 days lost money** ([Chague, De-Losso & Giovannetti](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3423101)).
-2. **The strongest backtest is still a backtest** — co-authored by a practitioner who sells trading education, run with leverage, US-only, and at least one independent replication found weaker results outside 2016 ([QuantConnect replication](https://www.quantconnect.com/research/18444/opening-range-breakout-for-stocks-in-play/)).
-3. **With $1,000 and no leverage, your 2% risk target usually cannot be reached** — cash, not the stop, caps your position size (worked examples below). That is not a bad thing while learning.
-
-> **Research note:** the environment's network policy blocked direct fetching of source documents during this research, so findings rely on search-engine summaries of the sources cited. The key numbers (Barber et al., Zarattini et al., Questrade fees and order rules) were each found in more than one summary, but please treat exact figures as "verify before relying on".
-
----
-
-## 1. Strategy selection: what was kept and what was dropped
-
-| Strategy | Evidence | Verdict | Why |
-|---|---|---|---|
-| **ORB on Stocks in Play** | SSRN paper, 7,000+ US stocks 2016–2023, **Sharpe 2.81, 41.6% annualized, near-zero beta, after costs** ([Zarattini et al.](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4729284)); earlier ORB paper on QQQ ([Aziz & Zarattini](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4416622)) | ✅ **Core** | Best evidence; simple rules; bracket-order friendly |
-| **VWAP trend-hold** | QQQ backtest: long above VWAP / short below, 2018–2023, Sharpe 2.1, max DD 9.4% ([Zarattini & Aziz, 2023](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4631351)) | 🟡 **Probation** | Tested on an ETF not single stocks; short side unavailable to you; needs alerts to manage |
-| Last-half-hour momentum | Peer-reviewed (JFE 2018) on SPY 1993–2013 ([Gao, Han, Li & Zhou](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2440866)) | ❌ Dropped | A 2022–2026 retest on 1,085 sessions found the effect **flat in every year** ([FirmTape retest](https://dev.to/firmtape/intraday-momentum-is-dead-in-the-0dte-era-we-measured-it-on-1085-spx-sessions-43g0) — a blog, not peer-reviewed); index-level, not single stocks |
-| Gap fade / gap fill | Firm-level overnight/intraday reversal literature ([Baltussen, Da & Soebhag](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5039009)) | ❌ Dropped | Direct evidence for single-stock gap fills is mixed; often requires shorting |
-| VWAP mean reversion (RSI extremes) | Practitioner articles only ([Tradezella](https://www.tradezella.com/blog/vwap-trading-strategy), [LuxAlgo](https://www.luxalgo.com/blog/vwap-entry-strategies-for-day-traders/)) | ❌ Dropped | No rigorous study found; fails in trending markets; needs constant monitoring |
-| Small-cap gap-and-go ($2–$20, float <20M) | Practitioner guides; ~52% win rates reported without cost detail ([ORB Setups](https://orbsetups.com/research/gap-and-go-trading-strategy-how-to-combine-pre-market-gaps-with-opening-range-breakouts/), [Warrior Trading](https://www.warriortrading.com/gap-go/)) | ❌ Dropped (as a standalone) | Halts, wide spreads and stop slippage make it unsafe for brief check-ins. Its **useful idea — pre-market catalyst scanning — is folded into the ORB pipeline** |
-| News scalping | None credible | ❌ Dropped | Requires speed and screen time you don't have |
-
----
-
-## 2. Core strategy — Opening Range Breakout on Stocks in Play (ORB-SIP)
-
-### 2.1 Why it works (the theory)
-
-Stocks with news (earnings, upgrades, FDA decisions, guidance) attract unusual volume at the open. When the first 5 minutes show a clear direction on heavy volume, the move tends to continue through the day. The paper found that **restricting ORB to the top 20 "Stocks in Play" ranked by opening relative volume was what made it profitable** — plain ORB on ordinary stocks or the S&P 500 has been weak in other tests ([QuantifiedStrategies](https://www.quantifiedstrategies.com/opening-range-breakout-strategy/)).
-
-### 2.2 Screening and candidate selection
-
-**Stage A — Pre-market watchlist (US: 8:00–9:25 ET = 6:00–7:25 MT)**
-
-| Filter | Paper's rule | Your adaptation for $1,000 |
+| Strategy family | Evidence grade | Verdict for you |
 |---|---|---|
-| Price | > $5 | **$5–$50** (so a $1,000 position is several shares; the replication found results deteriorated above $50 ([summary](https://github.com/jsboige/CoursIA/issues/16355))) |
-| 14-day average volume | ≥ 1,000,000 shares | same |
-| 14-day ATR | > $0.50 | same |
-| Catalyst | "mostly news-driven" | Earnings, guidance, analyst action, M&A, FDA, major contract — **required** in your version |
-| Pre-market gap | not required | Flag gaps ≥ 3% with pre-market volume well above normal as priority candidates |
+| **5-min Opening Range Breakout on "Stocks in Play"** | **Moderate** | ✅ **Core strategy.** Paper-trade first |
+| Last-half-hour (end-of-day) momentum | Moderate for the index · **Weak for single stocks** | 🟡 **Overlay only.** Decides whether to hold ORB winners into the close |
+| VWAP trend-following | Weak for single stocks (tested on the QQQ ETF only) | 🟡 Probation, paper only |
+| Classical chart patterns (H&S, double top/bottom, triangles, flags, wedges, cup & handle) | **Weak.** Some statistical information, no proven trading profit | ❌ Dropped as stand-alone strategies |
+| Candlestick patterns (engulfing, hammer, doji, morning star…) | **None.** Fail after costs and data-snooping correction, both intraday and daily | ❌ Dropped |
+| Support/resistance and channel breakouts | **None** after data-snooping correction | ❌ Dropped |
+| Gap fade, VWAP mean reversion, small-cap gap-and-go, news scalping | **No rigorous evidence found** | ❌ Dropped |
 
-FinViz example (pre-market): *Price $5–$50 · Average Volume over 1M · ATR over 0.5 · Gap Up 3%+ (or Change 3%+) · Earnings Today / News today*. TradingView and Questrade's scanner can replicate the price/volume/ATR filters.
+**What the research found:**
+1. **Only one stock strategy has a documented edge after costs:** the ORB, restricted to the day's top stocks by opening relative volume.
+2. **The edge comes almost entirely from the stock selection, not the breakout.** The same ORB run on all liquid stocks earned only **3.2% a year** and lagged the S&P 500 ([Zarattini, Barbon & Aziz 2024, Tables 1–2](https://alexandria.unisg.ch/bitstreams/3c2989c4-688d-4d78-8a71-f02690990d51/download)).
+3. **Chart patterns do not survive rigorous testing** as trading signals (Section 3).
 
-**Stage B — The ranking at 9:35 ET (7:35 MT)**
+**Reality check:** in full Taiwan market data, **more than 8 out of 10 day traders lost money in a typical six-month period**, and **fewer than 1% earned reliable profits after fees** ([Barber, Lee, Liu & Odean](http://www.econ.yale.edu/~shiller/behfin/2004-04-10/barber-lee-liu-odean.pdf); [Cross-Section of Speculator Skill](https://faculty.haas.berkeley.edu/odean/papers/day%20traders/The%20Cross-Section%20of%20Speculator%20Skill.pdf)). Even the 500 most active traders earned **+14.4 bps/day before costs but −7.4 bps/day after**. Taiwan's costs were high: about 10 bps commission plus a 0.3% tax on sales. Your commission is $0, so that specific cost drag is smaller for you, but the skill finding still applies.
 
-Compute **opening relative volume (RVOL)** = volume in the first 5-minute bar ÷ average first-5-minute-bar volume over the last 14 days. Keep only stocks with **RVOL ≥ 100%** (opening volume at least equal to its 14-day average for that interval), and rank from highest to lowest; the paper traded only the **top 20** ([CXO Advisory summary](https://www.cxoadvisory.com/technical-trading/day-trading-with-an-opening-range-breakout-strategy/)). **Trade only the top of the list** — with $1,000, that means **your single best-ranked long setup**.
+---
 
-### 2.3 Entry (buy) criteria — long only
+## 1. Core strategy — ORB on Stocks in Play (grade: MODERATE)
 
-The paper trades both directions; you trade **long only** (shorting needs a margin account and borrowed shares, which conflicts with "no leverage").
+### 1.1 Evidence
 
-1. The first 5-minute candle (9:30–9:35 ET) **closed higher than it opened** (bullish).
-2. Stock is in the top-ranked Stocks in Play with a catalyst.
-3. At 9:35 ET, place a **buy stop order at the high of the first 5-minute candle** (1 cent above), day order.
-4. If not filled by **11:30 ET (9:30 MT)**, cancel it. *(The paper left orders working all day; the 11:30 cut-off is my adaptation so you are not surprised by a late fill while at work — test both in paper trading.)*
+| Version | Total return 2016–2023 | Annual | Sharpe | Hit rate | Max DD |
+|---|---|---|---|---|---|
+| **ORB + relative-volume filter (top 20)** | **1,637%** | 41.6% IRR | **2.81** | 48.4% | 12% |
+| Same ORB, all eligible stocks | 29% | 3.2% | 0.48 | — | — |
+| S&P 500 | 198% | — | 0.78 | — | — |
 
-### 2.4 Exit (sell) criteria
+All figures are net of $0.0035/share commission, from Zarattini, Barbon & Aziz (2024), verified 3-0 from the paper's full text ([paper](https://alexandria.unisg.ch/bitstreams/3c2989c4-688d-4d78-8a71-f02690990d51/download)).
 
-| Exit | Rule |
+**Why the grade is only "moderate":**
+- It's a single unpublished working paper, and the backtest is in-sample.
+- The authors run a commercial trading and education business (Concretum and Bear Bull Traders).
+- Slippage on stop-order fills is **not modelled**.
+- It traded **long and short** with **up to 4× leverage**.
+- The QuantConnect re-implementation uses a smaller universe and gives weaker results in some years ([QuantConnect](https://www.quantconnect.com/research/18444/opening-range-breakout-for-stocks-in-play/)).
+
+**Supporting data:** in Bulkowski's sample of 55 US stocks on 1-minute data, **the day's high was set in the first hour 49% of the time, and the day's low 46% of the time** ([ThePatternSite](https://thepatternsite.com/IntradayHighLow.html)). That's consistent with the open being where the day's direction gets decided. It comes from a practitioner, so it wasn't graded as evidence.
+
+### 1.2 Exact rules from the paper, and your version
+
+| Rule | Paper (verified) | **Your version** |
+|---|---|---|
+| Price | Open > $5 | $5–$50 (so a $1,000 position is a reasonable number of shares) |
+| Liquidity | 14-day avg volume ≥ 1,000,000 shares | same |
+| Volatility | 14-day ATR > $0.50 | same |
+| Stocks in Play | Opening-range relative volume ≥ 100%; **top 20** by relative volume | same ranking; you take **the #1 qualifying long** |
+| Direction | Follows the first 5-min candle; **no trade on a doji** | **Long only.** Skip bearish candles and dojis |
+| Entry | Stop order at the opening-range high (long) / low (short) | Buy stop at first-candle high + $0.01 |
+| Stop-loss | **10% of 14-day ATR** from the entry fill | same |
+| Target | None | None (optional far target) |
+| Exit | At the 4:00 pm ET close | Sell at ~15:50–15:55 ET (13:50–13:55 MT), or hold to the close on strong-market days (Section 2) |
+| Risk | 1% of capital per trade, ≤ 4× leverage | 2% cap, **no leverage** → cash-limited (see 1.4) |
+
+**Relative volume** = volume in the 9:30–9:35 bar ÷ the average 9:30–9:35 volume over the previous 14 days.
+
+### 1.3 Screening
+
+**Pre-market (6:00–7:25 MT), to build a watchlist:**
+
+| FinViz / TradingView filter | Setting |
 |---|---|
-| **Stop-loss** | Entry − **10% of the 14-day ATR** (paper's rule). Example: ATR $2.00 → stop $0.20 below entry |
-| **Profit target** | **None in the paper** — winners ride to the close. For a bracket order, set a far target (e.g., +8× the stop distance) mainly so the bracket exists |
-| **Time stop** | Close the position at **15:50–15:55 ET (13:50–13:55 MT)**. Never hold overnight |
-| Daily loss limit | Stop trading for the day at −5% of account ($50) |
+| Price | $5 to $50 |
+| Average volume | Over 1M |
+| ATR | Over 0.5 |
+| Gap / pre-market change | Up 3%+ (priority, not required) |
+| Catalyst | Earnings today, guidance, analyst action, M&A, FDA/regulatory, major contract |
 
-The tight stop means **many small losses and fewer, larger wins** — expect a win rate well under 50%. The edge comes from the size of the winners.
+**At 7:35 MT (9:35 ET), to pick the trade:**
+1. Compute opening relative volume for each watchlist name, plus any name the scanner shows with unusual opening volume.
+2. Keep the ones at or above 100%, and rank them.
+3. Take the highest-ranked name whose first candle is bullish (close above open, not a doji).
 
-### 2.5 Position sizing at $1,000 (no leverage)
+### 1.4 Position sizing at $1,000 without leverage
 
 ```
-risk_shares  = floor( $20 risk ÷ stop distance )
-cash_shares  = floor( available cash ÷ entry price )
-shares       = min( risk_shares, cash_shares )
+shares = min( floor($20 ÷ (0.10 × ATR)),  floor(cash ÷ entry price) )
 ```
 
-| Stock price | 14-day ATR | Stop (10% ATR) | Risk-based shares | Cash-limited shares | **Shares traded** | **Actual $ at risk** |
+| Price | ATR | Stop distance | Risk-based shares | Cash-limited shares | **Traded** | **Real risk** |
 |---|---|---|---|---|---|---|
 | $10 | $0.60 | $0.06 | 333 | 100 | **100** | **$6 (0.6%)** |
 | $25 | $1.50 | $0.15 | 133 | 40 | **40** | **$6 (0.6%)** |
 | $45 | $2.50 | $0.25 | 80 | 22 | **22** | **$5.50 (0.55%)** |
 
-**Takeaway:** without leverage, the 10%-of-ATR stop is so tight that cash is always the limit. You will actually risk ~0.5–0.7% per trade, not 2%. Your aggressive setting becomes relevant only if you widen stops (which changes the tested strategy) or once the account is much larger. The paper's headline returns relied on leverage (up to 4×), so **do not expect paper-sized returns in an unlevered cash account.**
+**Cash always binds before risk does.** Your real risk will be about **0.5–0.7% per trade**, and returns will be far smaller than the backtest's leveraged numbers. This will change as the account grows.
 
-### 2.6 US vs TSX
-
-- **US: yes.** All the evidence is US-listed stocks.
-- **TSX: not recommended for now.** No TSX-specific evidence was found; few TSX names meet the volume/ATR filters; and on the TSX **the only stop order allowed is a stop-limit with the same stop and limit price**, which can fail to fill on a fast drop ([Questrade](https://www.questrade.com/learning/options-active-trading/trailing-stop-orders)). Trailing stops at Questrade are **US securities only**.
-
----
-
-## 3. Probation strategy — VWAP trend-hold
-
-**Paper-trade only** until at least 40 trades show positive expectancy in your journal.
-
-- **Evidence:** VWAP trend-following on QQQ grew $25k to about $193k (2018–2023) net of commissions ([Zarattini & Aziz](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4631351)). Not tested on single stocks; your long-only version drops half the strategy.
-- **Screen:** same Stocks-in-Play list as ORB (it re-uses the pipeline).
-- **Entry:** after 10:00 ET, a top-ranked stock that is **above a rising VWAP** pulls back to VWAP and the next 5-minute bar closes back above it → buy.
-- **Exit:** a **5-minute close below VWAP**, or 15:55 ET time stop. Protective hard stop 1× the 14-day ATR ÷ 4 below entry *(my adaptation, untested)*.
-- **Sizing:** same formula as ORB.
-- **Why probation:** managing it means reacting to a 5-minute close below VWAP — impossible with manual 2-hour check-ins. It only becomes practical once alerts are automated (Section 7).
-- **Market:** US.
+### 1.5 US vs TSX
+- **US: yes.** All of the evidence is on US stocks.
+- **TSX: paper trade only for now.** No TSX evidence was found, and few TSX names pass the 1M-volume and $0.50-ATR filters. Also, **Questrade cannot place trailing *stop* orders on Canadian exchanges, only trailing *stop-limit* orders** ([Questrade](https://www.questrade.com/learning/options-active-trading/trailing-stop-orders)). A stop-limit can fail to fill in a fast drop.
 
 ---
 
-## 4. Daily operating schedule
+## 2. Overlay — Last-half-hour momentum (grade: MODERATE for the index, WEAK for single stocks)
 
-Alberta and New York change clocks on the same dates, so **Mountain Time is always ET − 2 hours**.
+**Evidence:**
+- On SPY (1993–2013), the market's return from the prior close through the first half hour predicts the **last half hour's return**. The out-of-sample R² was only **1.4%**, so the signal is weak on any single day. After bid-ask costs, the timing strategy still earned **4.46%/yr (2001–2013)** ([Gao, Han, Li & Zhou, JFE 2018](https://assets.super.so/e46b77e7-ee08-445e-b43f-4ffd88ae0a0e/files/ee7dac49-530b-4950-b5d0-e0b5eee08f2e.pdf)).
+- Holding long over the last half hour **without** the signal lost money, so the whole edge is in the signal.
+- The effect replicates across **60+ futures markets from 1974 to 2020**. A better predictor is the "rest-of-day" return, from the prior close to 3:30 pm. However, the authors warn it **may not be exploitable after costs** except in S&P 500 futures ([Baltussen, Da, Lammers & Martens, JFE 2021](https://www3.nd.edu/~zda/intramom.pdf)).
+- One specific claim, a 6.67%/yr long-short SPY result with a Sharpe of 1.08, was **refuted** in verification and has been removed.
 
-| Time (MT) | Time (ET) | Activity | Automatable? |
+**How you'll use it.** This rule is my inference from the research; it isn't directly tested.
+- At **13:30 MT (15:30 ET)**, if you hold an ORB winner:
+  - **If SPY is up from yesterday's close:** hold the position to the close.
+  - **If SPY is down:** sell at 13:30 MT.
+- It is **not** a stand-alone single-stock strategy. The evidence is at the index level.
+
+---
+
+## 3. Chart-pattern and candlestick strategies
+
+You asked for these specifically, so here is what the rigorous research shows.
+
+### 3.1 Classical chart patterns — grade WEAK → dropped as stand-alone
+- **Lo, Mamaysky & Wang (2000)** detected head-and-shoulders, double tops and bottoms, triangles, rectangles and broadening formations algorithmically on daily data from 1962–1996.
+- Some patterns **do carry statistical information**, especially on Nasdaq stocks. But the authors state explicitly that this **does not imply trading profits**, and they ran no after-cost trading test ([NBER w7613](https://www.nber.org/system/files/working_papers/w7613/w7613.pdf)).
+- **Flags, pennants, wedges and cup-and-handle have no rigorous after-cost evidence at all**, intraday or daily.
+- **Bulkowski's pattern statistics** are the most widely quoted success rates. By his own description, they come from **daily charts in bull markets**, measure the share of pattern *types* that improved, and are **not cost-adjusted or corrected for data snooping** ([ThePatternSite](https://thepatternsite.com/studystudy.html)). They don't carry over to day trading.
+
+### 3.2 Candlestick patterns — grade NONE → dropped
+| Study | Data | Finding |
+|---|---|---|
+| **Duvinage, Mazza & Petitjean (2013)**, *Quantitative Finance* | **5-minute bars**, 30 DJIA stocks, 83 rules | About ⅓ beat buy-and-hold **before** costs. After costs and data-snooping correction, **no single rule beats buy-and-hold**. Fully automated combinations of the best rules also fail ([SSRN](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2125889)) |
+| **Marshall, Young & Rose (2006)**, *J. Banking & Finance* | Daily, 35 DJIA stocks, 28 rules (hammer, doji, engulfing, harami, star patterns…) | **22 of 28 rules had no significant profit on any stock.** The best rule worked on only 3 stocks ([paper](https://papers.ssrn.com/sol3/Delivery.cfm/SSRN_ID1083064_code114671.pdf?abstractid=980583&mirid=1)) |
+| Tharavanij et al. (2017), *SAGE Open* | Daily, Thai SET50 | Reversal patterns cannot reliably predict direction ([paper](https://journals.sagepub.com/doi/10.1177/2158244017736799)) |
+| Lu & Shiu (2016), *Applied Economics* | Daily, DJIA 1974–2009 | The lone dissent: some 1-day patterns "may" be profitable, with no net-of-cost result ([abstract](https://www.tandfonline.com/doi/abs/10.1080/00036846.2015.1137553)) |
+
+### 3.3 Support/resistance and channel breakouts — grade NONE → dropped
+Sullivan, Timmermann & White (1999) tested **7,846 technical rules** on the DJIA, including support/resistance, channel breakouts and moving averages. After correcting for data snooping, the best rule's edge from 1987–1996 had a p-value of about **0.12**, which the authors called "scant evidence". There was also no significant outperformance on S&P 500 futures ([J. Finance](https://onlinelibrary.wiley.com/doi/10.1111/0022-1082.00163)).
+
+### 3.4 Where patterns can still fit
+- **The ORB is itself a simple chart pattern:** a breakout from a 5-minute range. It works in the research only because of the Stocks-in-Play filter.
+- **If you want to explore other patterns, do it in a "pattern lab" on paper only.**
+  - Write the rules down **before** testing, for example: *bull flag after an ORB fill: 3–6 bars of pullback holding above VWAP on falling volume, then buy on a break of the flag high, with the stop under the flag low.*
+  - Test them **only on Stocks in Play**.
+  - Require **at least 50 paper trades** with positive expectancy.
+- Treat any pattern that looks good in your own backtest as **data-snooped until it's proven in live paper trading**. That's the lesson of the Sullivan/Timmermann/White study.
+
+---
+
+## 4. Probation — VWAP trend-following (grade: WEAK for single stocks)
+
+- **Evidence:** on QQQ (Jan 2018–Sep 2023), $25,000 grew to **$192,656** net of commissions: a 671% total return, 9.4% max drawdown and Sharpe 2.1 ([Concretum](https://concretumgroup.com/volume-weighted-average-price-vwap-the-holy-grail-for-day-trading-systems/)). This figure came from the paper's content but was **not adversarially verified**. It's also an ETF, long and short, and not common stocks.
+- **Your version (paper only):**
+  - After 10:00 ET, a Stocks-in-Play name above a rising VWAP pulls back to VWAP, then a 5-minute bar closes back above it → buy.
+  - Exit on a 5-minute close below VWAP, or at the time stop.
+- **It needs automated alerts,** because you can't watch for the exit signal on a two-hour check-in schedule.
+
+---
+
+## 5. Daily operating schedule (Mountain Time = ET − 2 h, all year)
+
+| MT | ET | Activity | Automatable |
 |---|---|---|---|
-| **6:00–7:15** | 8:00–9:15 | **Pre-market.** Check market context (futures, major economic releases, Fed days — consider sitting out on FOMC/CPI mornings). Run Stage A screen. For each candidate, AI-summarise the catalyst (earnings beat/miss, guidance, analyst action). Build watchlist of ≤10 names. Confirm settled cash available | ✅ Fully (screen + news summary) |
-| **7:15–7:25** | 9:15–9:25 | Pre-compute 14-day ATR and 14-day average first-5-min volume for the watchlist; pre-calculate stop distances and share counts | ✅ Fully |
-| **7:30–7:35** | 9:30–9:35 | **Open.** Do nothing — let the first 5-minute candle form | — |
-| **7:35–7:40** | 9:35–9:40 | **ORB decision.** Rank by RVOL; take the top bullish candle with a catalyst; place **buy-stop + bracket (stop-loss / far target)**. This is the one check-in you must not miss | ✅ Proposal automated; **you approve** |
-| **9:30** | 11:30 | **Check-in 1.** Cancel unfilled ORB entry. If in a trade: confirm stop is live; do **not** move the stop against the plan. (Probation strategy: log whether a VWAP setup occurred) | ✅ Cancel can be proposed automatically |
-| **11:30** | 13:30 | **Check-in 2.** Confirm position/stop status; check for news on the holding. Daily loss limit reached? → done for the day | ✅ Status push notification |
-| **13:45–13:55** | 15:45–15:55 | **Pre-close.** Sell any open position (market or marketable limit) before 15:55 ET. Cancel all open orders. Verify account is flat | ✅ Proposal automated; **you approve** |
-| **14:15–14:45** | 16:15–16:45 | **Post-close review** (Section 5) | ✅ Mostly |
+| **6:00–7:15** | 8:00–9:15 | Market context (economic calendar; consider sitting out FOMC and CPI mornings). Pre-market screen. AI summary of each candidate's catalyst. Watchlist of up to 10 names. Confirm settled USD cash | ✅ Fully |
+| **7:15–7:25** | 9:15–9:25 | Pre-compute the 14-day ATR, 14-day average opening-bar volume, stop distance and share count for each name | ✅ Fully |
+| **7:30–7:35** | 9:30–9:35 | Hands off while the first 5-minute candle forms | — |
+| **7:35–7:40** | 9:35–9:40 | **Key check-in.** Rank by relative volume, pick the top bullish name, send a **BUY STOP** order → you approve on your phone | ✅ Proposal automated · **you approve** |
+| On fill | — | Send a **SELL STOP** at entry − 0.10 × ATR → you approve | ✅ · **you approve** |
+| **9:30** | 11:30 | Check-in 1: cancel an unfilled entry *(my adaptation; the paper left orders working all day)*. Confirm the stop is live | ✅ |
+| **11:30** | 13:30 | Check-in 2: position status and any new news; check the daily loss limit (−5% = $50) | ✅ Status push |
+| **13:30** | 15:30 | **Overlay decision:** SPY down on the day → sell now; SPY up → hold into the close | ✅ Proposal · **you approve** |
+| **13:50–13:55** | 15:50–15:55 | Sell any remaining position; cancel all orders; confirm the account is flat | ✅ Proposal · **you approve** |
+| **14:15–14:45** | 16:15–16:45 | Post-close review (Section 6) | ✅ Mostly |
 
 ---
 
-## 5. Post-close review and journaling
+## 6. Post-close review, metrics and kill switches
 
-**Every day (15 minutes):**
+**Daily journal:**
+- Ticker, catalyst, relative-volume rank, gap %
+- Planned vs actual entry, stop and shares (this measures **slippage**, which the paper didn't model)
+- Exit reason
+- P&L in dollars and in **R** (multiples of the risk taken)
+- Rules followed (yes/no)
+- Chart screenshot
 
-| Log field | Why |
-|---|---|
-| Ticker, catalyst, RVOL rank, gap % | Learn which catalysts work |
-| Planned entry / stop / shares vs actual fills | Measures **slippage** — critical on a small account |
-| Exit reason (stop, time, target) | Checks rule adherence |
-| P&L in $ and in **R** (multiples of risk) | Makes trades comparable across sizes |
-| Rules followed? (Y/N + note) | The single most predictive metric for improvement |
-| Screenshot of the 5-minute chart | For weekly review |
+**Weekly:**
+- Win rate. The paper's hit rate was 48%, so expect **more losers than winners**.
+- Average win R vs average loss R
+- **Expectancy** = (win% × avg win R) − (loss% × avg loss R)
+- Profit factor, max drawdown, average slippage
+- Rule adherence %
 
-**Weekly (Saturday, 30 minutes):** win rate, average win R vs average loss R, **expectancy** = (win% × avg win R) − (loss% × avg loss R), profit factor, max drawdown, slippage per trade, % of days rules were followed.
-
-**Kill / scale criteria (set them now, not in the moment):**
-
-- After **50 live trades**: expectancy ≤ 0 → stop live trading, return to paper, review.
-- Account drawdown of **−15%** from peak → stop and review.
-- Scale up capital only after **two consecutive months** of positive expectancy **and** ≥ 90% rule adherence.
-
-**Tax records:** keep the journal — it doubles as your T2125 business-income records (Section 6).
+**Kill switches (decide these now):**
+- **50 live trades with expectancy ≤ 0** → stop and return to paper trading.
+- **−15% drawdown from peak** → stop and review.
+- **Scale capital** only after 2 consecutive positive months with ≥ 90% rule adherence.
 
 ---
 
-## 6. Practical constraints in Canada
+## 7. Canadian practical constraints
 
-### 6.1 The Pattern Day Trader rule — not an issue
-The SEC approved eliminating FINRA's $25,000 PDT minimum on April 14, 2026, effective **June 4, 2026**, with brokers allowed until October 20, 2027 to implement ([Schwab](https://www.schwab.com/learn/story/sec-approves-scrapping-25000-day-trader-minimum), [FINRA Notice 26-10](https://www.finra.org/rules-guidance/notices/26-10)). Canada has no equivalent rule ([Lifetimes Canada](https://lifetimescanada.com/blog/stock-trading/pattern-day-trader-pdt-rule-does-it-apply-in-canada-in-2026)).
-
-### 6.2 Settlement (T+1) — the real limit in a cash account
-Stocks settle one business day after the trade ([Questrade](https://www.questrade.com/learning/options-active-trading/day-trading-canada-rules-accounts)). In a cash account, **buying with settled cash and selling the same day is fine**. The violation ("freeriding") is buying with *unsettled* sale proceeds and then selling that new position before the funds settle ([Wikipedia](https://en.wikipedia.org/wiki/Freeriding_(stocks))).
-
-**Practical rule for you: one ORB trade per day using settled cash.** Proceeds settle next business day, ready for the next trade. This matches the strategy (one top-ranked name) anyway.
-
-> ⚠️ One search summary suggested Questrade makes cash available before settlement; others describe cash-account violations. **Ask Questrade support to confirm their exact cash-account policy** before trading more than once a day.
-
-### 6.3 Costs
-| Cost | Amount | Impact on $1,000 |
+| Topic | What's verified | Source |
 |---|---|---|
-| Commissions | **$0** on US and Canadian listed stocks/ETFs since June 2025 ([Questrade](https://www.questrade.com/pricing/self-directed-commissions-plans-fees/transaction)) | None |
-| ECN fees | ~$0.0035/share, only on some **direct-routed** US orders; none on Canadian orders ([Questrade FAQ](https://www.questrade.com/learning/questrade-basics/0-commissions-faq/frequently-asked-questions-about-commissions)) | Avoid by using default routing |
-| **Currency conversion** | ~**1.5%** built into the rate each way ([BrokerChooser](https://brokerchooser.com/broker-reviews/questrade-review/questrade-fees)) | **~3% per round trip — would wipe out any edge if done per trade** |
-| Norbert's Gambit (DLR → DLR.U) | ~$9.95 journaling fee, flat ([WealthSavvy](https://wealthsavvy.ca/norberts-gambit-questrade/)) | ~1% on $1,000, one time |
+| **Commissions** | **$0** on US and Canadian listed stocks and ETFs | [Questrade fees page](https://www.questrade.com/pricing/self-directed-commissions-plans-fees/transaction) (read directly) |
+| **ECN fees** | None on normal routing. Only **direct-routed** US orders pay $0.003–$0.004/share | same |
+| **SEC fee** | 0.0000206 × sale value on US sells (≈ $0.02 on a $1,000 sale) | same |
+| **Currency conversion** | **1.5%** each way | same |
+| **Norbert's Gambit** | Flat journaling fee (reported as $9.95); cheaper than 1.5% once you convert more than roughly $700–$1,000 | [WealthSavvy](https://wealthsavvy.ca/norberts-gambit-questrade/) (secondary) |
+| **Settlement** | **T+1** for Canadian and US equities | [Questrade](https://www.questrade.com/learning/options-active-trading/day-trading-canada-rules-accounts) (read directly) |
+| **Cash-account reuse of unsettled funds** | ⚠️ **Not confirmed.** Questrade's page doesn't state its freeriding policy. Plan on **one trade a day with settled cash** until support confirms | — |
+| **PDT rule** | The $25k rule was eliminated effective June 4, 2026. Canada has no equivalent. The FINRA page blocked automated reading, so this is confirmed through secondary sources | [Schwab](https://www.schwab.com/learn/story/sec-approves-scrapping-25000-day-trader-minimum), [FINRA 26-10](https://www.finra.org/rules-guidance/notices/26-10) |
+| **Bracket orders** | Available in Edge Web, Edge Desktop and Edge Mobile. Gaps can skip your stop | [Questrade](https://www.questrade.com/learning/investment-concepts/adv-order-types-durations/bracket-orders) (read directly) |
+| **Tax** | Frequent short-term trading can be treated as **business income, which is 100% taxable** (vs 50% for capital gains). **Don't day trade in a TFSA** | [Questrade](https://www.questrade.com/learning/options-active-trading/day-trading-canada-rules-accounts), CRA IT-479R (the CRA page couldn't be fetched) |
 
-**Recommendation:** convert your trading capital to USD **once** (Norbert's Gambit, or a one-time 1.5% conversion — similar cost at $1,000; Norbert's wins above ~$700–$1,000) and **keep it in USD**. Set the account to settle in "currency of transaction".
-
-### 6.4 Tax (CRA)
-Frequent trading, short holding periods, time spent and market knowledge are the factors CRA uses to classify gains as **business income** ([CRA IT-479R, para. 11](https://www.canada.ca/en/revenue-agency/services/forms-publications/publications/it479r/archived-transactions-securities.html); [CRA T.I. 2019-0826051E5](https://taxinterpretations.com/cra/severed-letters/2019-0826051e5)). Scheduled day trading will very likely qualify — even alongside a full-time job ([Lucas CPA](https://www.lucas.cpa/blog/what-does-the-cra-consider-as-day-trading-how-to-know-if-youre-day-trading-or-not-canada)).
-
-- Profits are **100% taxable** at your marginal rate (vs 50% inclusion for capital gains) ([TaxTips.ca](https://www.taxtips.ca/personaltax/investing/taxtreatment/are-your-investment-gains-and-losses-capital-or-income.htm)).
-- Report on **T2125**; losses are deductible against other income; data feeds, platform fees, and similar costs can be deductible ([Humbled Trader](https://www.humbledtrader.com/blog/how-to-navigate-day-trading-tax-in-canada/)).
-- **Never day trade in a TFSA** — CRA can tax the whole TFSA's trading income.
-- Worth a one-time conversation with an accountant once you go live.
+**Currency recommendation:** convert once and keep the account's trading money in USD. Converting on every trade would cost about 3% per round trip, which is more than the strategy's expected edge.
 
 ---
 
-## 7. Automation roadmap — toward "AI proposes, Stephen approves"
+## 8. Automation — "Claude proposes, Stephen approves"
 
-### 7.1 What the tools can and can't do
+### 8.1 What's verified
 
-| Component | Capability | Limit |
+| Tool | Can do | Can't do |
 |---|---|---|
-| **Questrade public API** | Quotes, candles, balances, positions ([docs](https://www.questrade.com/api/documentation/getting-started)) | **Order placement is for approved partners only**; rate limits return HTTP 429 ([docs](https://www.questrade.com/api/documentation/rate-limiting)) |
-| **Questrade connector in Claude** (already connected to your account) | Quotes, candles, positions, and **`create_order_instruction`, which sends a push-to-approve request to your Questrade mobile app** — nothing executes until you tap approve | **This is exactly the "fully automated with my confirmation" model you asked for.** Not yet tested: whether it supports buy-stop entries and bracket orders — must be verified with its preview tool first |
-| **TradingView alerts + webhooks** | Price/indicator alerts POSTed to a URL; paid plan + 2FA required; 3-second timeout ([TradingView](https://www.tradingview.com/support/solutions/43000529348-how-to-configure-webhook-alerts/)) | Alerts only — execution still goes through Questrade |
-| Webhook → phone bot | Open-source relays to Telegram/Discord/email ([TradingView-Webhook-Bot](https://github.com/fabston/TradingView-Webhook-Bot)) | You still place/approve the order |
-| FinViz (Elite for pre-market/real-time exports) | Stage A screening | Free version is delayed |
-| Backtesting | [QuantConnect](https://www.quantconnect.com/research/18444/opening-range-breakout-for-stocks-in-play/) has a public ORB-Stocks-in-Play implementation | Use it to re-test on 2024–2026 data before going live |
-| Paper trading | Questrade practice account; TradingView paper trading | — |
+| **Questrade API (personal app)** | Account data and market data (quotes, candles, balances) | **Place trades.** That's only for approved **partner** developers ([Questrade API](https://www.questrade.com/api/documentation/getting-started), read directly) |
+| **Questrade connector in Claude** (already linked to your account) | Create, modify and cancel **market, limit, stop and stop-limit** orders, **day or GTC**. **Every order goes to your Questrade app for approval** before it reaches the market. Fractional shares are allowed on market day orders for eligible tickers | **No bracket orders.** The protective stop has to be a second order after the fill, so each trade needs 2–3 approvals: entry, stop, then exit |
+| TradingView webhooks | Send an alert to your phone or a bot | Execute trades at Questrade |
+| QuantConnect | Backtest ORB on Stocks in Play; a public implementation exists | — |
 
-### 7.2 Target pipeline (US ORB-SIP)
+### 8.2 Pipeline
 
 ```
-06:00 MT  Scheduler starts ─► Screen (FinViz / Questrade candles) ─► AI catalyst summaries
-                                                                    │
-07:25 MT  Pre-compute ATR, 14-day first-5-min volume, share counts ◄┘
-07:35 MT  Pull first 5-min bar ─► rank RVOL ─► pick top bullish candidate
-          ─► build order: BUY STOP @ high+0.01, STOP @ entry−0.1×ATR, qty = min(risk, cash)
-          ─► Questrade create_order_instruction ─► 📱 push to your phone ─► YOU APPROVE / DENY
-09:30 MT  Unfilled? ─► propose cancel ─► 📱 approve
-11:30 MT  Status push (position, P&L, stop live?)
-13:50 MT  Open position? ─► propose SELL ─► 📱 approve
-14:15 MT  Pull fills ─► write journal row ─► daily metrics ─► weekly report on Saturday
+06:00 MT  Screen + catalyst summaries ─► watchlist
+07:25 MT  ATR, 14-day opening-bar volume, share counts pre-computed
+07:35 MT  Rank by relative volume ─► BUY STOP proposal ─► 📱 approve
+  fill    SELL STOP (entry − 0.10×ATR) proposal ─► 📱 approve
+09:30 MT  Unfilled? ─► cancel proposal ─► 📱 approve
+13:30 MT  SPY overlay ─► sell or hold proposal ─► 📱 approve
+13:50 MT  Flatten proposal ─► 📱 approve
+14:15 MT  Pull fills ─► journal ─► metrics (weekly report on Saturday)
 ```
 
-A buy-stop placed at 7:35 MT doesn't need an instant tap — it waits for the price to trigger — so a phone approval within a few minutes works.
+**Risk to know about:** between the entry filling and you approving the stop, **the position is unprotected**. Two ways to handle it:
+- Approve promptly. The buy-stop typically fills within minutes of 7:35 MT.
+- Enter the ORB as a **bracket order yourself in Edge Mobile**, and use the connector only for proposals, cancels and exits.
 
-### 7.3 Phased plan
+### 8.3 Rollout
 
-| Phase | Duration | Goal | Exit criteria |
-|---|---|---|---|
-| **0 — Paper, manual** | 4–6 weeks | Run the schedule by hand on paper; learn the rules | ≥ 30 trades logged, ≥ 90% rule adherence |
-| **1 — Backtest check** | parallel | Re-run ORB-SIP (long-only, no leverage, 11:30 cancel) on 2024–2026 data in QuantConnect | Positive expectancy after costs out-of-sample |
-| **2 — Semi-automated paper** | 4 weeks | Claude screens, ranks, sizes and proposes; you enter on paper | Proposals match rules 100% |
-| **3 — Live, $1,000, approve-each-trade** | ≥ 50 trades | Questrade push-to-approve orders | Positive expectancy after 50 trades |
-| **4 — Scale** | ongoing | Add capital in steps; revisit VWAP probation strategy with automated alerts | Two positive months per step |
-
----
-
-## 8. Conclusion
-
-The evidence supports **one** strategy for you: **long-only 5-minute ORB on catalyst-driven Stocks in Play, US-listed, $5–$50, one trade a day, 10%-of-ATR stop, out by the close.** It fits your check-in schedule and can be automated end-to-end with a push-to-approve step on every order. VWAP trend-hold is a candidate for later, once alerts are automated and your paper results justify it.
-
-The honest framing: this is a **learning system with a strict kill switch**, not an income plan. With $1,000 and no leverage your real risk per trade is ~0.5–0.7%, which is the right size for proving (or disproving) the edge with your own data before scaling.
+| Phase | Duration | Exit criteria |
+|---|---|---|
+| 0: Paper, manual | 4–6 weeks | ≥ 30 trades, ≥ 90% rule adherence |
+| 1: Backtest check (QuantConnect, long-only, no leverage, 2024–2026) | parallel | Positive expectancy out-of-sample |
+| 2: Semi-automated paper | 4 weeks | Proposals match the rules 100% |
+| 3: Live $1,000, approve every order | ≥ 50 trades | Positive expectancy |
+| 4: Scale, and test the VWAP / pattern-lab ideas on paper | ongoing | 2 positive months per step |
 
 ---
 
-### Sources
+## 9. Evidence gaps
 
-- [Barber, Lee, Liu & Odean — Do Individual Day Traders Make Money? (Taiwan)](https://faculty.haas.berkeley.edu/odean/papers/Day%20Traders/Day%20Trade%20040330.pdf)
-- [Barber et al. — Learning, Fatalism, and Day Trading (summary)](https://www.tradicted.com/research/barber-learning-2020/)
-- [Chague, De-Losso & Giovannetti — Day Trading for a Living?](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3423101)
-- [QuantPedia — Retail Day Trading is an Uphill Battle](https://quantpedia.com/retail-day-trading-is-an-uphill-battle/)
-- [Zarattini, Barbon & Aziz — A Profitable Day Trading Strategy for the U.S. Equity Market](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4729284)
-- [Aziz & Zarattini — Can Day Trading Really Be Profitable?](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4416622)
-- [Zarattini & Aziz — VWAP: The Holy Grail for Day Trading Systems](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4631351)
-- [QuantConnect — ORB for Stocks in Play replication](https://www.quantconnect.com/research/18444/opening-range-breakout-for-stocks-in-play/)
-- [CoursIA replication notes](https://github.com/jsboige/CoursIA/issues/16355)
-- [QuantifiedStrategies — ORB backtest](https://www.quantifiedstrategies.com/opening-range-breakout-strategy/)
-- [Gao, Han, Li & Zhou — Market Intraday Momentum](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2440866)
-- [FirmTape — intraday momentum retest 2022–2026](https://dev.to/firmtape/intraday-momentum-is-dead-in-the-0dte-era-we-measured-it-on-1085-spx-sessions-43g0)
-- [Baltussen, Da & Soebhag — End-of-Day Reversal](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5039009)
-- [ORB Setups — Gap and Go + ORB](https://orbsetups.com/research/gap-and-go-trading-strategy-how-to-combine-pre-market-gaps-with-opening-range-breakouts/)
-- [Warrior Trading — Gap and Go](https://www.warriortrading.com/gap-go/)
-- [Tradezella — VWAP strategy](https://www.tradezella.com/blog/vwap-trading-strategy)
-- [LuxAlgo — VWAP entry strategies](https://www.luxalgo.com/blog/vwap-entry-strategies-for-day-traders/)
-- [Schwab — SEC approves scrapping $25,000 minimum](https://www.schwab.com/learn/story/sec-approves-scrapping-25000-day-trader-minimum)
-- [FINRA Regulatory Notice 26-10](https://www.finra.org/rules-guidance/notices/26-10)
-- [Lifetimes Canada — PDT in Canada 2026](https://lifetimescanada.com/blog/stock-trading/pattern-day-trader-pdt-rule-does-it-apply-in-canada-in-2026)
-- [Questrade — Day trading in Canada: rules and accounts](https://www.questrade.com/learning/options-active-trading/day-trading-canada-rules-accounts)
-- [Questrade — Transaction fees](https://www.questrade.com/pricing/self-directed-commissions-plans-fees/transaction)
-- [Questrade — Commissions FAQ](https://www.questrade.com/learning/questrade-basics/0-commissions-faq/frequently-asked-questions-about-commissions)
-- [Questrade — Trailing stop orders](https://www.questrade.com/learning/options-active-trading/trailing-stop-orders)
-- [Questrade — Bracket orders](https://www.questrade.com/learning/investment-concepts/adv-order-types-durations/bracket-orders)
-- [Questrade API — Getting started](https://www.questrade.com/api/documentation/getting-started)
-- [Questrade API — Rate limiting](https://www.questrade.com/api/documentation/rate-limiting)
-- [BrokerChooser — Questrade fees 2026](https://brokerchooser.com/broker-reviews/questrade-review/questrade-fees)
-- [WealthSavvy — Norbert's Gambit with Questrade](https://wealthsavvy.ca/norberts-gambit-questrade/)
-- [Wikipedia — Freeriding](https://en.wikipedia.org/wiki/Freeriding_(stocks))
-- [CRA IT-479R — Transactions in securities](https://www.canada.ca/en/revenue-agency/services/forms-publications/publications/it479r/archived-transactions-securities.html)
-- [CRA T.I. 2019-0826051E5](https://taxinterpretations.com/cra/severed-letters/2019-0826051e5)
-- [TaxTips.ca — Capital or income?](https://www.taxtips.ca/personaltax/investing/taxtreatment/are-your-investment-gains-and-losses-capital-or-income.htm)
-- [Lucas CPA — What CRA considers day trading](https://www.lucas.cpa/blog/what-does-the-cra-consider-as-day-trading-how-to-know-if-youre-day-trading-or-not-canada)
-- [Humbled Trader — Day trading tax in Canada 2026](https://www.humbledtrader.com/blog/how-to-navigate-day-trading-tax-in-canada/)
-- [TradingView — Webhook alerts](https://www.tradingview.com/support/solutions/43000529348-how-to-configure-webhook-alerts/)
-- [TradingView-Webhook-Bot (GitHub)](https://github.com/fabston/TradingView-Webhook-Bot)
-- [GrandAlgo — Automating TradingView indicators](https://grandalgo.com/blog/how-to-automate-tradingview-indicators)
+The research could **not** verify these:
+- Any rigorous evidence for gap-and-go, gap fade, VWAP mean reversion or news plays.
+- TSX-specific day-trading evidence.
+- Questrade's cash-account policy on reusing unsettled funds.
+- The CRA IT-479R text itself (the page couldn't be fetched).
+- The Brazil day-trader study (Chague et al.). Its PDF couldn't be read, so it isn't used in this version.
+
+---
+
+## Sources
+
+**Verified primary (full text read):**
+- [Zarattini, Barbon & Aziz (2024), *A Profitable Day Trading Strategy for the U.S. Equity Market*](https://alexandria.unisg.ch/bitstreams/3c2989c4-688d-4d78-8a71-f02690990d51/download)
+- [Gao, Han, Li & Zhou (2018), *Market Intraday Momentum*, JFE](https://assets.super.so/e46b77e7-ee08-445e-b43f-4ffd88ae0a0e/files/ee7dac49-530b-4950-b5d0-e0b5eee08f2e.pdf)
+- [Baltussen, Da, Lammers & Martens (2021), *Hedging Demand and Market Intraday Momentum*, JFE](https://www3.nd.edu/~zda/intramom.pdf)
+- [Concretum: *Beat the Market*, SPY intraday momentum](https://concretumgroup.com/beat-the-market-an-effective-intraday-momentum-strategy-for-sp500-etf-spy/)
+- [Lo, Mamaysky & Wang (2000), *Foundations of Technical Analysis*, NBER w7613](https://www.nber.org/system/files/working_papers/w7613/w7613.pdf)
+- [Duvinage, Mazza & Petitjean (2013), intraday candlesticks](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2125889)
+- [Marshall, Young & Rose (2006), candlesticks on DJIA stocks](https://papers.ssrn.com/sol3/Delivery.cfm/SSRN_ID1083064_code114671.pdf?abstractid=980583&mirid=1)
+- [Tharavanij et al. (2017), SAGE Open](https://journals.sagepub.com/doi/10.1177/2158244017736799)
+- [Lu & Shiu (2016), Applied Economics](https://www.tandfonline.com/doi/abs/10.1080/00036846.2015.1137553)
+- [Sullivan, Timmermann & White (1999), J. Finance](https://onlinelibrary.wiley.com/doi/10.1111/0022-1082.00163) · [PDF](https://www.kevinsheppard.com/files/teaching/mfe/advanced-econometrics/Sullivan_Timmermann_White.pdf)
+- [Barber, Lee, Liu & Odean, *Do Individual Day Traders Make Money?*](http://www.econ.yale.edu/~shiller/behfin/2004-04-10/barber-lee-liu-odean.pdf)
+- [Barber, Lee, Liu & Odean, *The Cross-Section of Speculator Skill*](https://faculty.haas.berkeley.edu/odean/papers/day%20traders/The%20Cross-Section%20of%20Speculator%20Skill.pdf)
+- [Questrade: transaction fees](https://www.questrade.com/pricing/self-directed-commissions-plans-fees/transaction)
+- [Questrade: trailing stop orders](https://www.questrade.com/learning/options-active-trading/trailing-stop-orders)
+- [Questrade: bracket orders](https://www.questrade.com/learning/investment-concepts/adv-order-types-durations/bracket-orders)
+- [Questrade: day trading in Canada](https://www.questrade.com/learning/options-active-trading/day-trading-canada-rules-accounts)
+- [Questrade API: getting started](https://www.questrade.com/api/documentation/getting-started)
+
+**Secondary / practitioner:**
+- [Concretum: VWAP trend trading](https://concretumgroup.com/volume-weighted-average-price-vwap-the-holy-grail-for-day-trading-systems/)
+- [QuantConnect: ORB for Stocks in Play](https://www.quantconnect.com/research/18444/opening-range-breakout-for-stocks-in-play/)
+- [Bulkowski: intraday highs and lows](https://thepatternsite.com/IntradayHighLow.html) · [Bulkowski: study of studies](https://thepatternsite.com/studystudy.html)
+- [Schwab: SEC approves scrapping the $25,000 minimum](https://www.schwab.com/learn/story/sec-approves-scrapping-25000-day-trader-minimum) · [FINRA Regulatory Notice 26-10](https://www.finra.org/rules-guidance/notices/26-10)
+- [WealthSavvy: Norbert's Gambit at Questrade](https://wealthsavvy.ca/norberts-gambit-questrade/)

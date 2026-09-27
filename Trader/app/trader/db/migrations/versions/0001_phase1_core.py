@@ -103,12 +103,16 @@ def upgrade() -> None:
             PRIMARY KEY (symbol_id, interval, ts)
         ) PARTITION BY RANGE (ts)
     """)
+    # Bounds are explicit UTC instants. A bare date would be read in the session TimeZone and shift the
+    # months on a non-UTC server. This file was first applied to trader_dev with bare dates, but that
+    # server's TimeZone is Etc/UTC, so its bounds are already '2026-09-01 00:00:00+00' etc. and match
+    # what this version writes: no corrective migration is needed.
     months = _months(FIRST_PARTITION, LAST_PARTITION)
     for start in months:
         end = date(start.year + (start.month == 12), start.month % 12 + 1, 1)
         op.execute(
             f"CREATE TABLE {S}.intraday_candles_{start:%Y%m} PARTITION OF {S}.intraday_candles "
-            f"FOR VALUES FROM ('{start:%Y-%m-%d}') TO ('{end:%Y-%m-%d}')"
+            f"FOR VALUES FROM ('{start:%Y-%m-%d} 00:00:00+00') TO ('{end:%Y-%m-%d} 00:00:00+00')"
         )
     op.execute(f"CREATE TABLE {S}.intraday_candles_default PARTITION OF {S}.intraday_candles DEFAULT")
     op.create_table(
@@ -167,6 +171,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     for table in ("audit_log", "event_log", "job_runs", "open_bar_stats", "candle_archive"):
         op.drop_table(table, schema=S)
-    op.execute(f"DROP TABLE {S}.intraday_candles CASCADE")
+    op.drop_table("intraday_candles", schema=S)  # its partitions are dropped with it
     for table in ("daily_candles", "universe_snapshots", "symbols", "api_credentials", "settings"):
         op.drop_table(table, schema=S)

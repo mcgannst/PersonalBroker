@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Identity,
+    Index,
     MetaData,
     Numeric,
     String,
@@ -119,8 +120,9 @@ class OpenBarStat(Base):
 
 class JobRun(Base):
     __tablename__ = "job_runs"
+    __table_args__ = (Index("ix_job_runs_job_session", "job", "session_date"),)
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
-    job: Mapped[str] = mapped_column(String(50), index=True)
+    job: Mapped[str] = mapped_column(String(50))
     session_date: Mapped[date] = mapped_column(Date)
     started_at: Mapped[datetime] = mapped_column(TS)
     finished_at: Mapped[datetime | None] = mapped_column(TS)
@@ -131,6 +133,7 @@ class JobRun(Base):
 
 class EventLog(Base):
     __tablename__ = "event_log"
+    __table_args__ = (Index("ix_event_log_ts", "ts"),)
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     ts: Mapped[datetime] = mapped_column(TS)
     level: Mapped[str] = mapped_column(String(10))

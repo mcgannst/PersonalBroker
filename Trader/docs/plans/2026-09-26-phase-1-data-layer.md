@@ -408,6 +408,8 @@ git pull --rebase && git push
 
 Notes: `api_credentials` has two columns the SPEC table omits, `last_error` and `updated_at`, because the ported refresh logic needs them (SPEC §4.1 cooldowns). `intraday_candles` is partitioned by month (SPEC §10); the app role can't create tables, so the migration creates monthly partitions from 2026-06 to 2028-12 plus a default partition.
 
+Fix round (attempt 2, gauntlet findings): every connection is pinned to `TimeZone=UTC` (`make_engine` and env.py pass `connect_args={"options": "-c timezone=UTC"}`, env.py also pins `search_path=public` because the trader_dev owner's search_path starts with `trader`, which makes reflection drop the schema and autogenerate report phantom diffs), partition bounds are explicit UTC instants (`'2026-10-01 00:00:00+00'`), the models declare the migration's indexes (`ix_job_runs_job_session`, `ix_event_log_ts`) so autogenerate sees no difference, and env.py filters autogenerate to schema `trader` and ignores the `intraday_candles_YYYYMM` / `_default` partitions. `tests/db/test_migration.py` gained regression tests for these (`test_models_match_migrated_schema`, `test_alembic_check_through_env_sees_no_changes`, `test_alembic_check_when_trader_is_the_default_schema`, `test_app_sessions_are_utc`, `test_partition_bounds_are_utc_midnight`, `test_env_requires_a_database_url`). trader_dev already has UTC bounds (server TimeZone Etc/UTC), so 0001 was not re-run there.
+
 - [x] **Step 1: Write the failing migration test**
 
 `Trader/app/tests/db/__init__.py`: empty file.
@@ -490,7 +492,7 @@ import pytest
 from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
-from testcontainers.postgres import PostgresContainer
+from testcontainers.community.postgres import PostgresContainer
 
 from trader.db.models import Base
 from trader.db.session import make_engine, make_session_factory
@@ -524,7 +526,7 @@ def migrated_engine(pg_url: str) -> Iterator[Engine]:
 @pytest.fixture
 def db_factory(migrated_engine: Engine) -> Iterator[sessionmaker[Session]]:
     yield make_session_factory(migrated_engine)
-    names = ", ".join(f"trader.{t.name}" for t in Base.metadata.sorted_tables)
+    names = ", ".join(t.fullname for t in Base.metadata.sorted_tables)
     with migrated_engine.begin() as conn:
         conn.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
 ```
@@ -546,9 +548,13 @@ from contextlib import contextmanager
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+UTC_SESSION = {"options": "-c timezone=UTC"}
+
 
 def make_engine(url: str) -> Engine:
-    return create_engine(url, pool_pre_ping=True)
+    """Every session runs with TimeZone=UTC, whatever the server's default, so timestamptz values
+    come back in UTC and bare timestamp literals are read as UTC."""
+    return create_engine(url, pool_pre_ping=True, connect_args=UTC_SESSION)
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:
@@ -584,6 +590,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Identity,
+    Index,
     MetaData,
     Numeric,
     String,
@@ -693,8 +700,9 @@ class OpenBarStat(Base):
 
 class JobRun(Base):
     __tablename__ = "job_runs"
+    __table_args__ = (Index("ix_job_runs_job_session", "job", "session_date"),)
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
-    job: Mapped[str] = mapped_column(String(50), index=True)
+    job: Mapped[str] = mapped_column(String(50))
     session_date: Mapped[date] = mapped_column(Date)
     started_at: Mapped[datetime] = mapped_column(TS)
     finished_at: Mapped[datetime | None] = mapped_column(TS)
@@ -705,6 +713,7 @@ class JobRun(Base):
 
 class EventLog(Base):
     __tablename__ = "event_log"
+    __table_args__ = (Index("ix_event_log_ts", "ts"),)
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     ts: Mapped[datetime] = mapped_column(TS)
     level: Mapped[str] = mapped_column(String(10))
@@ -759,28 +768,65 @@ format = %(levelname)s %(name)s %(message)s
 """Alembic environment. Runs as the owner role (MIGRATION_DATABASE_URL), or the URL tests set."""
 
 import os
+import re
+from typing import Any
 
 from alembic import context
 from sqlalchemy import create_engine, text
 
 from trader.db.models import SCHEMA, Base
 
-config = context.config
-url = config.get_main_option("sqlalchemy.url") or os.environ["MIGRATION_DATABASE_URL"]
+# Like make_engine, the session is pinned to UTC. search_path is pinned to `public` as well: the owner
+# role on trader_dev has `trader, public`, and with `trader` on the search_path PostgreSQL reflects
+# trader's tables and foreign keys without their schema, so autogenerate would see phantom differences.
+# Every migration names the schema explicitly, so nothing relies on the search_path.
+CONNECT_ARGS = {"options": "-c timezone=UTC -c search_path=public"}
 
-engine = create_engine(url)
-with engine.connect() as connection:
-    connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}"))
-    connection.commit()
-    context.configure(
-        connection=connection,
-        target_metadata=Base.metadata,
-        version_table_schema=SCHEMA,
-        include_schemas=True,
+# Monthly and default partitions of intraday_candles are created by migrations with raw DDL and have no
+# model. Autogenerate must never see them, or it would propose dropping them.
+PARTITION = re.compile(r"^intraday_candles_(\d{6}|default)$")
+
+
+def include_name(name: str | None, type_: str, parent_names: Any) -> bool:
+    """Autogenerate compares only schema `trader`, without the intraday partitions."""
+    if type_ == "schema":
+        return name == SCHEMA
+    if type_ == "table":
+        return not PARTITION.match(name or "")
+    return True
+
+
+def include_object(obj: Any, name: str | None, type_: str, reflected: bool, compare_to: Any) -> bool:
+    if type_ == "table":
+        return obj.schema == SCHEMA and not PARTITION.match(name or "")
+    return True
+
+
+config = context.config
+url = config.get_main_option("sqlalchemy.url") or os.environ.get("MIGRATION_DATABASE_URL")
+if not url:
+    raise RuntimeError(
+        "No database URL for migrations: set MIGRATION_DATABASE_URL (the owner role's URL) "
+        "or sqlalchemy.url in the Alembic config"
     )
-    with context.begin_transaction():
-        context.run_migrations()
-engine.dispose()
+
+engine = create_engine(url, connect_args=CONNECT_ARGS)
+try:
+    with engine.connect() as connection:
+        connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}"))
+        connection.commit()
+        context.configure(
+            connection=connection,
+            target_metadata=Base.metadata,
+            version_table_schema=SCHEMA,
+            include_schemas=True,
+            include_name=include_name,
+            include_object=include_object,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+finally:
+    engine.dispose()
 ```
 
 `Trader/app/trader/db/migrations/script.py.mako`:
@@ -917,12 +963,16 @@ def upgrade() -> None:
             PRIMARY KEY (symbol_id, interval, ts)
         ) PARTITION BY RANGE (ts)
     """)
+    # Bounds are explicit UTC instants. A bare date would be read in the session TimeZone and shift the
+    # months on a non-UTC server. This file was first applied to trader_dev with bare dates, but that
+    # server's TimeZone is Etc/UTC, so its bounds are already '2026-09-01 00:00:00+00' etc. and match
+    # what this version writes: no corrective migration is needed.
     months = _months(FIRST_PARTITION, LAST_PARTITION)
     for start in months:
         end = date(start.year + (start.month == 12), start.month % 12 + 1, 1)
         op.execute(
             f"CREATE TABLE {S}.intraday_candles_{start:%Y%m} PARTITION OF {S}.intraday_candles "
-            f"FOR VALUES FROM ('{start:%Y-%m-%d}') TO ('{end:%Y-%m-%d}')"
+            f"FOR VALUES FROM ('{start:%Y-%m-%d} 00:00:00+00') TO ('{end:%Y-%m-%d} 00:00:00+00')"
         )
     op.execute(f"CREATE TABLE {S}.intraday_candles_default PARTITION OF {S}.intraday_candles DEFAULT")
     op.create_table(
@@ -981,7 +1031,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     for table in ("audit_log", "event_log", "job_runs", "open_bar_stats", "candle_archive"):
         op.drop_table(table, schema=S)
-    op.execute(f"DROP TABLE {S}.intraday_candles CASCADE")
+    op.drop_table("intraday_candles", schema=S)  # its partitions are dropped with it
     for table in ("daily_candles", "universe_snapshots", "symbols", "api_credentials", "settings"):
         op.drop_table(table, schema=S)
 ```

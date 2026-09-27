@@ -7,7 +7,7 @@ import pytest
 from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
-from testcontainers.postgres import PostgresContainer
+from testcontainers.community.postgres import PostgresContainer
 
 from trader.db.models import Base
 from trader.db.session import make_engine, make_session_factory
@@ -41,6 +41,6 @@ def migrated_engine(pg_url: str) -> Iterator[Engine]:
 @pytest.fixture
 def db_factory(migrated_engine: Engine) -> Iterator[sessionmaker[Session]]:
     yield make_session_factory(migrated_engine)
-    names = ", ".join(f"trader.{t.name}" for t in Base.metadata.sorted_tables)
+    names = ", ".join(t.fullname for t in Base.metadata.sorted_tables)
     with migrated_engine.begin() as conn:
         conn.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))

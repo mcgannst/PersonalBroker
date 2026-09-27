@@ -418,18 +418,18 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 - `--once` runs a single `step()` (used by the LIVE smoke check) and exits 0. It never starts the bot task, so it never calls `getUpdates` (no update is consumed and no 409 is caused for a worker that is polling).
 
 **Acceptance tests (FixedClock, fake sleep that advances the clock, fake engine and callables, real DB for heartbeat and lock):**
-- [ ] 1. Stepping from 09:35:00 to 09:35:10 ET in 2 s steps fires `orb_open` exactly once, at the first step at or after 09:35:05.
-- [ ] 2. During the session each step calls `poll_quotes` and `tick` once and the relay once, then sleeps `quote_poll_seconds`; on Saturday it only relays and sleeps `idle_poll_seconds`.
-- [ ] 3. The engine is built once per session and rebuilt for the next session.
-- [ ] 4. After the close, `end_session` is called once for the day, even across many steps.
-- [ ] 5. An exception from `poll_quotes`, from `relay` and from `fire` each leaves the step completing its other parts, with one `error` event each.
-- [ ] 6. The heartbeat row is written at start, updated at least every `worker.heartbeat_seconds` of fake time, and marked `stopped` after `stop` is set.
-- [ ] 7. Restart: a worker started at 10:00 with `fired` returning `{"orb_open"}` does not fire it again, and polls and ticks normally (Review Focus 4).
-- [ ] 8. A second `acquire_single_instance` while the first connection holds the lock returns None, and `run` exits with code 2 without polling.
-- [ ] 9. A bot callable that raises is restarted after 30 s of fake time and the quote loop keeps its 2 s cadence meanwhile.
-- [ ] 10. On an early-close day (2026-11-27) the session phase ends at 13:00 ET and `end_session` runs then.
-- [ ] 11. `main(["--once"])` calls `run_worker(once=True)` (monkeypatched) and returns its code; a `Worker` run in once mode performs one step and never calls the `bot` callable.
-- [ ] 12. Gate and commit `P3-T9: ...`.
+- [x] 1. Stepping from 09:35:00 to 09:35:10 ET in 2 s steps fires `orb_open` exactly once, at the first step at or after 09:35:05.
+- [x] 2. During the session each step calls `poll_quotes` and `tick` once and the relay once, then sleeps `quote_poll_seconds`; on Saturday it only relays and sleeps `idle_poll_seconds`.
+- [x] 3. The engine is built once per session and rebuilt for the next session.
+- [x] 4. After the close, `end_session` is called once for the day, even across many steps.
+- [x] 5. An exception from `poll_quotes`, from `relay` and from `fire` each leaves the step completing its other parts, with one `error` event each.
+- [x] 6. The heartbeat row is written at start, updated at least every `worker.heartbeat_seconds` of fake time, and marked `stopped` after `stop` is set.
+- [x] 7. Restart: a worker started at 10:00 with `fired` returning `{"orb_open"}` does not fire it again, and polls and ticks normally (Review Focus 4).
+- [x] 8. A second `acquire_single_instance` while the first connection holds the lock returns None, and `run` exits with code 2 without polling.
+- [x] 9. A bot callable that raises is restarted after 30 s of fake time and the quote loop keeps its 2 s cadence meanwhile.
+- [x] 10. On an early-close day (2026-11-27) the session phase ends at 13:00 ET and `end_session` runs then.
+- [x] 11. `main(["--once"])` calls `run_worker(once=True)` (monkeypatched) and returns its code; a `Worker` run in once mode performs one step and never calls the `bot` callable.
+- [x] 12. Gate and commit `P3-T9: ...`.
 
 ---
 

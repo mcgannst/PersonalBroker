@@ -3277,7 +3277,7 @@ git pull --rebase && git push
 
 **Nightly semantics:** it runs at 20:00 ET and prepares the **next** session. `session_date` is that next session. The universe snapshot, `open_bar_stats` and `job_runs` rows are keyed by it. The opening-bar average uses the `open_bar.lookback_sessions` sessions strictly before it.
 
-- [ ] **Step 1: Write the failing runner tests**
+- [x] **Step 1: Write the failing runner tests**
 
 `Trader/app/tests/jobs/__init__.py`: empty file.
 
@@ -3333,12 +3333,12 @@ def test_failure_is_recorded_and_logged(db_factory: sessionmaker[Session]) -> No
     assert run_job(db_factory, CLOCK, "nightly", D, lambda: {}).status == "succeeded"
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `uv run pytest tests/jobs/test_runner.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.jobs'`.
 
-- [ ] **Step 3: Implement `trader/events.py` and `trader/jobs/runner.py`**
+- [x] **Step 3: Implement `trader/events.py` and `trader/jobs/runner.py`**
 
 `Trader/app/trader/events.py`:
 ```python
@@ -3425,7 +3425,7 @@ def run_job(
     return JobOutcome("succeeded", detail)
 ```
 
-- [ ] **Step 4: Run the runner tests and commit**
+- [x] **Step 4: Run the runner tests and commit**
 
 Run: `uv run pytest tests/jobs/test_runner.py -q` → `3 passed`.
 ```bash

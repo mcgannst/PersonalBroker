@@ -1,6 +1,8 @@
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+
 from trader.market.calendar import SessionCalendar
 from trader.market.indicators import (
     atr,
@@ -85,3 +87,45 @@ def test_doji_and_bearish() -> None:
     assert is_doji(bar(t, "10", "10", "10", "10"))  # zero range
     assert is_bearish(bar(t, "10", "11", "9", "9.5"))
     assert not is_bearish(bar(t, "10", "11", "9", "10"))
+
+
+def test_atr_rejects_non_positive_period() -> None:
+    for period in (0, -1):
+        with pytest.raises(ValueError, match="period must be >= 1"):
+            atr(WILDER, period=period)
+
+
+def test_atr_rejects_newest_first_and_duplicate_starts() -> None:
+    with pytest.raises(ValueError):
+        atr(list(reversed(WILDER)), period=3)
+    with pytest.raises(ValueError):
+        atr([WILDER[0], WILDER[1], WILDER[1], WILDER[2]], period=3)
+
+
+def test_malformed_bar_high_below_low_raises() -> None:
+    t = datetime(2026, 9, 25, 13, 30, tzinfo=UTC)
+    broken = bar(t, "10", "9", "11", "10")  # high 9 < low 11
+    with pytest.raises(ValueError):
+        is_doji(broken)
+    with pytest.raises(ValueError):
+        is_bearish(broken)
+
+
+def test_rounding_is_round_half_up_not_half_even() -> None:
+    # 1/32 = 0.03125 -> 0.0313 (HALF_EVEN would give 0.0312).
+    assert rvol(1, D("32")) == D("0.0313")
+    # TRs 0.0001 and 0 -> mean 0.00005 -> 0.0001 (HALF_EVEN would give 0.0000).
+    tiny = [day(0, "10", "10", "10"), day(1, "10.0001", "10", "10"), day(2, "10", "10", "10")]
+    assert atr(tiny, period=2) == D("0.0001")
+    # 5/8 = 0.625 -> 0.63 (HALF_EVEN would give 0.62).
+    t = datetime(2026, 9, 25, 13, 30, tzinfo=UTC)
+    vols = [5, 0, 0, 0, 0, 0, 0, 0]
+    assert average_volume([bar(t, "1", "1", "1", "1", v=v) for v in vols]) == D("0.63")
+
+
+def test_session_helpers_raise_for_non_session_dates() -> None:
+    saturday = date(2026, 9, 26)
+    with pytest.raises(ValueError):
+        regular_hours([], CAL, saturday)
+    with pytest.raises(ValueError):
+        opening_bar([], CAL, saturday)

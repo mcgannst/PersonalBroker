@@ -3020,13 +3020,13 @@ Expected: three lines (server time, an SPY quote with `delay=0`, and remaining l
 **Interfaces:**
 - Consumes: `Candle` (T4), `SessionCalendar` (T4).
 - Produces (`trader.market.indicators`), all pure:
-  - `regular_hours(candles: Sequence[Candle], cal: SessionCalendar, session: date) -> list[Candle]` (bars starting at or after the open and before the close).
-  - `opening_bar(candles: Sequence[Candle], cal: SessionCalendar, session: date) -> Candle | None` (the bar whose start equals the session open).
-  - `atr(daily: Sequence[Candle], period: int = 14) -> Decimal | None` (Wilder; needs `period + 1` candles; rounded to 4 dp).
-  - `average_volume(bars: Sequence[Candle]) -> Decimal | None` (2 dp).
-  - `rvol(volume: int, average: Decimal | None) -> Decimal | None` (4 dp; `None` when average is `None` or 0).
-  - `is_doji(c: Candle, max_body_pct: Decimal = Decimal("0.10")) -> bool` (a zero-range bar counts as a doji).
-  - `is_bearish(c: Candle) -> bool` (close < open).
+  - `regular_hours(candles: Sequence[Candle], cal: SessionCalendar, session: date) -> list[Candle]` (bars starting at or after the open and before the close, early closes honoured; raises `ValueError` if `session` is not a trading session).
+  - `opening_bar(candles: Sequence[Candle], cal: SessionCalendar, session: date) -> Candle | None` (the bar whose start equals the session open; `None` if there is no such bar, with no fallback; raises `ValueError` if `session` is not a trading session).
+  - `atr(daily: Sequence[Candle], period: int = 14) -> Decimal | None` (Wilder; `daily` must be oldest first with strictly ascending `start`, else `ValueError` (duplicates included); needs `period + 1` candles, else `None`; `period < 1` raises `ValueError("period must be >= 1")`; rounded `ROUND_HALF_UP` to 4 dp).
+  - `average_volume(bars: Sequence[Candle]) -> Decimal | None` (`ROUND_HALF_UP` to 2 dp; `None` for no bars).
+  - `rvol(volume: int, average: Decimal | None) -> Decimal | None` (`ROUND_HALF_UP` to 4 dp; `None` when average is `None` or 0).
+  - `is_doji(c: Candle, max_body_pct: Decimal = Decimal("0.10")) -> bool` (body/range <= max_body_pct; a zero-range bar counts as a doji; raises `ValueError` if `high < low`).
+  - `is_bearish(c: Candle) -> bool` (close < open; raises `ValueError` if `high < low`).
 
 - [x] **Step 1: Write the failing tests**
 

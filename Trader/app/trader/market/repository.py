@@ -150,9 +150,17 @@ def upsert_candle_archive(
 ) -> int:
     """Keep candles beyond Questrade's ~3-month intraday limit, for replay (SPEC §8). A re-run replaces the
     bar in place (primary key symbol_id, interval, start_ts), so it never duplicates a row."""
+    return upsert_candle_archive_bars(session, interval_code, ((symbol_id, c) for c in candles))
+
+
+def upsert_candle_archive_bars(
+    session: Session, interval_code: Literal["1m", "5m"], bars: Iterable[tuple[int, Candle]]
+) -> int:
+    """`upsert_candle_archive` for many symbols in ONE statement: (symbol_id, candle) pairs, e.g. the opening
+    5-minute bar of every universe symbol. Returns the number of distinct rows written."""
     rows = {
-        c.start: {"symbol_id": symbol_id, "interval": interval_code, "start_ts": c.start, **_ohlcv(c)}
-        for c in candles
+        (sid, c.start): {"symbol_id": sid, "interval": interval_code, "start_ts": c.start, **_ohlcv(c)}
+        for sid, c in bars
     }  # ON CONFLICT can't touch one row twice
     if not rows:
         return 0

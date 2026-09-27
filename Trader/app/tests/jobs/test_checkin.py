@@ -1,5 +1,6 @@
 """P3-T10: the 11:30 and 13:30 ET check-ins: a status push, then a backup firing of every due event."""
 
+import dataclasses
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -335,3 +336,72 @@ async def test_a_status_failure_still_backup_fires(harness: Harness) -> None:
     with harness.factory() as s:
         events = s.query(m.EventLog).filter(m.EventLog.source == "job.checkin").all()
     assert len(events) == 1 and events[0].level == "error"
+
+
+def _checkin_errors(factory: sessionmaker[Session]) -> list[m.EventLog]:
+    with factory() as s:
+        return (
+            s.query(m.EventLog)
+            .filter(m.EventLog.source == "job.checkin", m.EventLog.level == "error")
+            .order_by(m.EventLog.id)
+            .all()
+        )
+
+
+async def test_a_raising_fire_is_failed_and_the_flatten_still_fires(harness: Harness) -> None:
+    """Fix round 1: at 15:51 ET entry_cancel raising must not cost overlay_decision and the flatten. The
+    failure is in the detail (exception type only) and is an error event."""
+    harness.clock.set(datetime(2026, 10, 6, 19, 51, tzinfo=UTC))
+    real_fire = harness.fire
+
+    async def fire(key: str, session_date: date) -> FireResult:
+        if key == "entry_cancel":
+            harness.fire_calls.append((key, session_date))
+            raise ConnectionError("do not report this text")
+        return await real_fire(key, session_date)
+
+    harness.fire = fire  # type: ignore[method-assign]
+    detail = await run_checkin(harness.deps(), DAY, "13:30")
+    assert [k for k, _ in harness.fire_calls] == ["entry_cancel", "overlay_decision", "flatten"]
+    assert detail["fired"] == [
+        {"key": "entry_cancel", "status": "failed", "error": "ConnectionError"},
+        {"key": "overlay_decision", "status": "fired"},
+        {"key": "flatten", "status": "fired"},
+    ]
+    assert detail["sent"] is True
+    (event,) = _checkin_errors(harness.factory)
+    assert "entry_cancel" in event.message and "do not report" not in event.message
+    assert event.data["key"] == "entry_cancel" and event.data["error"] == "ConnectionError"
+
+
+async def test_a_failing_plan_still_sends_the_status_and_records_it(harness: Harness) -> None:
+    """Fix round 1: the day plan raising is recorded; the status still goes out (no next event) and
+    nothing can be fired."""
+
+    def broken_plan(d: date) -> DayPlan:
+        raise RuntimeError("plan bug")
+
+    deps = dataclasses.replace(harness.deps(), plan=broken_plan)
+    detail = await run_checkin(deps, DAY, "11:30")
+    assert detail["plan_error"] == "RuntimeError" and detail["sent"] is True and detail["fired"] == []
+    assert len(harness.notifier.sent) == 1 and harness.fire_calls == []
+    [(view, _)] = harness.views()
+    assert view.next_event_key is None
+    (event,) = _checkin_errors(harness.factory)
+    assert "plan" in event.message
+
+
+async def test_a_failing_fired_read_still_sends_and_passes_due_events_to_fire(harness: Harness) -> None:
+    """Fix round 1: the settled keys can't be read. The status goes out and every due event goes to the
+    idempotent fire (which skips a settled one itself)."""
+
+    def broken_fired(d: date) -> set[str]:
+        raise ConnectionError("db down")
+
+    deps = dataclasses.replace(harness.deps(), fired=broken_fired)
+    detail = await run_checkin(deps, DAY, "11:30")
+    assert detail["fired_error"] == "ConnectionError" and detail["sent"] is True
+    assert harness.fire_calls == [("orb_open", DAY), ("entry_cancel", DAY)]
+    assert len(harness.notifier.sent) == 1
+    (event,) = _checkin_errors(harness.factory)
+    assert "fired events" in event.message

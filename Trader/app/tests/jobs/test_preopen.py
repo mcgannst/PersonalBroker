@@ -184,6 +184,20 @@ async def test_missing_heartbeat_is_an_error(harness: Harness) -> None:
     assert "worker not running" in worker["detail"]
 
 
+@pytest.mark.parametrize("phase", ["stopping", "stopped"])
+async def test_a_fresh_heartbeat_of_a_stopping_or_stopped_worker_is_an_error(
+    harness: Harness, phase: str
+) -> None:
+    """Fix round 1: a worker shutting down (phase `stopping`) is treated like a stopped one."""
+    with harness.factory() as s:
+        _seed_healthy(s)
+        s.query(m.WorkerHeartbeat).update({m.WorkerHeartbeat.phase: phase})
+        s.commit()
+    worker = _checks(await run_preopen(harness.deps(), DAY))["worker"]
+    assert not worker["ok"] and worker["level"] == "error"
+    assert "worker not running" in worker["detail"] and phase in worker["detail"]
+
+
 async def test_manual_pause_is_a_warning(harness: Harness) -> None:
     with harness.factory() as s:
         _seed_healthy(s)

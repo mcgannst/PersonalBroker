@@ -29,6 +29,7 @@ log = structlog.get_logger("jobs.preopen")
 
 NOT_A_SESSION = {"skipped": "not a session"}
 WORKER_PROCESS = "worker"
+STOPPED_PHASES = frozenset({"stopping", "stopped"})  # heartbeat phases of a worker that is going away
 MANUAL_PAUSE = "manual_pause"
 MAX_DETAIL_CHARS = 300
 
@@ -147,8 +148,8 @@ async def _worker(deps: PreopenDeps, session_date: date, settings: RuntimeSettin
     age = (deps.clock.now() - row.beat_at).total_seconds()
     if age > settings.worker_heartbeat_stale_seconds:
         return _error("worker", f"{down} (last heartbeat {int(age)}s ago)")
-    if row.phase == "stopped":
-        return _error("worker", f"{down} (it stopped {int(age)}s ago)")
+    if row.phase in STOPPED_PHASES:  # a fresh beat from a worker that is shutting down is no comfort
+        return _error("worker", f"{down} (heartbeat phase {row.phase}, {int(age)}s ago)")
     return _ok("worker", f"heartbeat {int(age)}s ago")
 
 

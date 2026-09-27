@@ -5,6 +5,12 @@ The status is rebuilt here from the database (the same reads as `/status`, witho
 commands). A failure to build or send it is logged as an `error` event (source `job.checkin`, which the
 relay alerts) and never stops the backup firing, which is the check-in's safety half. After the session
 close (13:30 on an early-close day) the check-in does nothing.
+
+Every step is isolated. A failing `plan` read is recorded (the status still goes out, with no next event,
+and nothing is fired). A failing `fired` read is recorded and the backup passes every due event to the
+idempotent `fire`, which skips the settled ones. A `fire` that raises is logged (exception type only),
+recorded as `{"key", "status": "failed", "error": <type>}` and as an `error` event, and the loop goes on,
+so one bad event never costs the flatten.
 """
 
 import dataclasses
@@ -174,17 +180,52 @@ async def _status(
 
 
 # --- the job ----------------------------------------------------------------------------------------------
+def _record_error(
+    deps: CheckinDeps, session_date: date, at_label: str, what: str, data: dict[str, Any]
+) -> None:
+    """An `error` event (source job.checkin, which the relay alerts). A database failure here is only logged:
+    the database may be the reason, and the caller's log line remains."""
+    try:
+        with session_scope(deps.factory) as s:
+            log_event(
+                s,
+                deps.clock,
+                "error",
+                SOURCE,
+                f"check-in {at_label}: {what}",
+                {"session_date": session_date.isoformat(), "at": at_label, **data},
+                deps.run_id,
+            )
+    except Exception as db_exc:
+        log.error("checkin.event_log_failed", error=type(db_exc).__name__)
+
+
 async def run_checkin(deps: CheckinDeps, session_date: date, at_label: str) -> dict[str, Any]:
     if not deps.calendar.is_session(session_date):
         return dict(NOT_A_SESSION)
     now = deps.clock.now()
     if now >= deps.calendar.session_close(session_date):
         return dict(AFTER_CLOSE)
-    plan = deps.plan(session_date)
-    fired = deps.fired(session_date)
     detail: dict[str, Any] = {"session_date": session_date.isoformat(), "at": at_label}
+    plan: DayPlan | None = None
     try:
-        view = await _status(deps, session_date, now, plan, fired)
+        plan = deps.plan(session_date)
+    except Exception as exc:  # no plan: nothing can be backed up, but the status still goes out
+        error = type(exc).__name__
+        log.error("checkin.plan_failed", error=error)
+        detail["plan_error"] = error
+        _record_error(deps, session_date, at_label, f"day plan not built ({error})", {"error": error})
+    fired: set[str] = set()
+    try:
+        fired = deps.fired(session_date)
+    except Exception as exc:  # settled keys unknown: the idempotent `fire` skips the settled ones itself
+        error = type(exc).__name__
+        log.error("checkin.fired_failed", error=error)
+        detail["fired_error"] = error
+        _record_error(deps, session_date, at_label, f"fired events not read ({error})", {"error": error})
+    try:
+        view_plan = plan if plan is not None else DayPlan(session_date, True, None, None, ())
+        view = await _status(deps, session_date, now, view_plan, fired)
         msg = deps.render.checkin(view, at_label)
         dedupe = f"checkin:{session_date.isoformat()}:{at_label}"
         await deps.notifier.send(dataclasses.replace(msg, dedupe_key=dedupe))
@@ -194,22 +235,25 @@ async def run_checkin(deps: CheckinDeps, session_date: date, at_label: str) -> d
         log.error("checkin.status_failed", error=error)
         detail["sent"] = False
         detail["error"] = error
-        try:
-            with session_scope(deps.factory) as s:
-                log_event(
-                    s,
-                    deps.clock,
-                    "error",
-                    SOURCE,
-                    f"check-in {at_label}: status not sent ({error})",
-                    {"session_date": session_date.isoformat(), "at": at_label, "error": error},
-                    deps.run_id,
-                )
-        except Exception as db_exc:  # the database may be the reason; the log line above remains
-            log.error("checkin.event_log_failed", error=type(db_exc).__name__)
+        _record_error(deps, session_date, at_label, f"status not sent ({error})", {"error": error})
     results: list[dict[str, Any]] = []
-    for event in due_events(plan, now, fired):
-        result = await deps.fire(event.key, session_date)
-        results.append({"key": result.key, "status": result.status})
+    if plan is not None:
+        for event in due_events(plan, now, fired):
+            results.append(await _backup_fire(deps, session_date, at_label, event.key))
     detail["fired"] = results
     return detail
+
+
+async def _backup_fire(deps: CheckinDeps, session_date: date, at_label: str, key: str) -> dict[str, Any]:
+    """One backup firing. An exception becomes a `failed` result and an error event, never an abort, so one
+    bad event does not cost the later ones (the flatten)."""
+    try:
+        result = await deps.fire(key, session_date)
+    except Exception as exc:
+        error = type(exc).__name__
+        log.error("checkin.fire_failed", key=key, error=error)
+        _record_error(
+            deps, session_date, at_label, f"backup of {key} failed ({error})", {"key": key, "error": error}
+        )
+        return {"key": key, "status": "failed", "error": error}
+    return {"key": result.key, "status": result.status}

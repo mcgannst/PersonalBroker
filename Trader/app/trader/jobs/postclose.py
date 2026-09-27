@@ -13,6 +13,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any, Literal, Protocol
 
+import structlog
 from sqlalchemy import column, func, select, table
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
@@ -27,9 +28,19 @@ from trader.market.calendar import SessionCalendar
 from trader.market.clock import ET, Clock, FixedClock
 from trader.market.indicators import regular_hours
 from trader.market.types import Candle, Interval, OpeningBars, UniverseMember
-from trader.notify.types import Button, DailySummaryView, Notifier, PositionLine, Renderer, TradeLine
+from trader.notify.types import (
+    Button,
+    Buttons,
+    DailySummaryView,
+    Notifier,
+    PositionLine,
+    Renderer,
+    TradeLine,
+)
 from trader.settings_store import OVERLAY_SYMBOL, RuntimeSettings
 from trader.worker import WorkerEngine
+
+log = structlog.get_logger("jobs.postclose")
 
 SOURCE = "job.postclose"
 OPENING_BAR_CODE: Literal["5m"] = "5m"  # INTERVAL_CODES["FiveMinutes"]
@@ -91,32 +102,105 @@ def _et_day(d: date) -> tuple[datetime, datetime]:
 
 
 async def run_postclose(deps: PostcloseDeps, session_date: date) -> dict[str, Any]:
-    """Returns {"open_positions", "cancelled", "archive", "summary_sent"}."""
+    """Returns {"open_positions", "cancelled", "archive", "summary_sent", "summary"}.
+
+    `cancelled` is a safety-net count (BR-42): the orders this run's `end_of_session` cancelled. It is
+    usually 0, because the worker already ended the session at 16:00 and cancelled them then.
+
+    `archive` is the `archive_candles` result, or `{"error": <exception type>}` when the archive raised (an
+    `error` event is written and the summary still goes out, BR-60).
+
+    `summary` says what happened to the daily summary, as far as the `notifications` table shows it
+    (`Notifier.send` returns nothing): `sent` (the row is `sent`), `handed_off` (sent to a notifier that keeps
+    no `notifications` row, such as a test fake), `duplicate` (a `summary:<date>` row already existed before
+    this run, so nothing was issued or sent), `failed` (the row is `failed` or still `sending`), or `error`
+    (building or sending raised). `summary_sent` is True only for `sent` and `handed_off`."""
     if not deps.calendar.is_session(session_date):
         return {"skipped": "not a session"}
     started = deps.clock.now()
     still_open = await deps.engine.end_of_session(session_date)
     cancelled = _count_cancelled(deps, since=started)
     _ensure_journal(deps, session_date)
-    archive = await archive_candles(deps, session_date)
-    counts = {
-        OPENING_BAR_CODE: int(archive[OPENING_BAR_CODE]),
-        MINUTE_CODE: int(archive[MINUTE_CODE]),
-        "missing": len(archive["missing"]),
-    }
-    view = daily_summary_view(deps.factory, deps.run_id, session_date, deps.clock.now(), counts)
-    _nonce, data = deps.issuer.issue(
-        "journal", session_date.strftime("%Y%m%d"), JOURNAL_ACTIONS, deps.chat_id, None
-    )
-    buttons = ((Button("Yes", data["y"]), Button("No", data["n"])),)
-    msg = deps.render.daily_summary(view, buttons)
-    await deps.notifier.send(dataclasses.replace(msg, dedupe_key=f"summary:{session_date.isoformat()}"))
+    archive: dict[str, Any]
+    counts: dict[str, int]
+    try:
+        archive = await archive_candles(deps, session_date)
+    except Exception as exc:  # the archive is for replay; the summary and journal (BR-60) must still happen
+        error = type(exc).__name__
+        log.error("postclose.archive_failed", error=error)
+        archive, counts = {"error": error}, {}
+        _log_error(deps, f"candle archive for {session_date} failed ({error})", session_date, error)
+    else:
+        counts = {
+            OPENING_BAR_CODE: int(archive[OPENING_BAR_CODE]),
+            MINUTE_CODE: int(archive[MINUTE_CODE]),
+            "missing": len(archive["missing"]),
+        }
+    summary = await _send_summary(deps, session_date, counts)
     return {
         "open_positions": [int(p.id) for p in still_open],
         "cancelled": cancelled,
         "archive": archive,
-        "summary_sent": True,
+        "summary_sent": summary in ("sent", "handed_off"),
+        "summary": summary,
     }
+
+
+def _log_error(deps: PostcloseDeps, message: str, session_date: date, error: str) -> None:
+    """An `error` event (source job.postclose, which the relay alerts). A database failure is only logged."""
+    try:
+        with session_scope(deps.factory) as s:
+            log_event(
+                s,
+                deps.clock,
+                "error",
+                SOURCE,
+                message,
+                {"session_date": session_date.isoformat(), "error": error},
+                deps.run_id,
+            )
+    except Exception as db_exc:
+        log.error("postclose.event_log_failed", error=type(db_exc).__name__)
+
+
+def _summary_status(deps: PostcloseDeps, dedupe_key: str) -> str | None:
+    """The `notifications` status of the summary's dedupe key, or None when there is no row."""
+    with deps.factory() as s:
+        return s.execute(
+            select(m.Notification.status).where(m.Notification.dedupe_key == dedupe_key)
+        ).scalar_one_or_none()
+
+
+async def _send_summary(deps: PostcloseDeps, session_date: date, counts: Mapping[str, int]) -> str:
+    """Send the daily summary once per session (see `run_postclose` for the returned status)."""
+    dedupe_key = f"summary:{session_date.isoformat()}"
+    try:
+        if _summary_status(deps, dedupe_key) is not None:
+            # A forced re-run: the notifier would drop the message, so issue no journal nonce for it.
+            log.info("postclose.summary_already_recorded", dedupe_key=dedupe_key)
+            return "duplicate"
+        view = daily_summary_view(deps.factory, deps.run_id, session_date, deps.clock.now(), counts)
+        buttons: Buttons = ()
+        try:
+            _nonce, data = deps.issuer.issue(
+                "journal", session_date.strftime("%Y%m%d"), JOURNAL_ACTIONS, deps.chat_id, None
+            )
+            buttons = ((Button("Yes", data["y"]), Button("No", data["n"])),)
+        except (
+            Exception
+        ) as exc:  # the summary goes out without buttons; the journal page still takes the answer
+            log.error("postclose.journal_buttons_failed", error=type(exc).__name__)
+        msg = deps.render.daily_summary(view, buttons)
+        await deps.notifier.send(dataclasses.replace(msg, dedupe_key=dedupe_key))
+        status = _summary_status(deps, dedupe_key)
+    except Exception as exc:
+        error = type(exc).__name__
+        log.error("postclose.summary_failed", error=error)
+        _log_error(deps, f"daily summary for {session_date} not sent ({error})", session_date, error)
+        return "error"
+    if status is None:
+        return "handed_off"
+    return "sent" if status == "sent" else "failed"
 
 
 def _count_cancelled(deps: PostcloseDeps, since: datetime) -> int:
@@ -191,7 +275,7 @@ async def archive_candles(deps: PostcloseDeps, session_date: date) -> dict[str, 
                     reasons[sid] = fetched.missing.get(sid, "no_bar_at_open")
         missing += [_missing(sid, tickers[sid], OPENING_BAR_CODE, why) for sid, why in reasons.items()]
     with session_scope(deps.factory) as s:
-        n5 = sum(repo.upsert_candle_archive(s, sid, OPENING_BAR_CODE, [b]) for sid, b in bars.items())
+        n5 = repo.upsert_candle_archive_bars(s, OPENING_BAR_CODE, bars.items())  # one statement
     missing_open = len(missing)
 
     # (b) 1-minute candles for the top candidates and SPY.

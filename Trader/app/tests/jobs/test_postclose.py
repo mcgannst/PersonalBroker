@@ -1,5 +1,6 @@
 """P3-T11: the post-close job and the candle archive (BR-33, BR-42, BR-60; SPEC §8, §9, §10)."""
 
+import dataclasses
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
@@ -7,11 +8,12 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.factories import add_run, add_strategy_config, add_symbol
-from tests.fakes_telegram import FakeIssuer, FakeRenderer, RecordingNotifier
+from tests.fakes_telegram import FakeIssuer, FakeRenderer, FakeTelegramApi, RecordingNotifier
+from trader.adapters.telegram.types import TelegramApiError
 from trader.broker.types import PositionView
 from trader.db import models as m
 from trader.jobs.postclose import PostcloseDeps, daily_summary_view, run_postclose
@@ -19,6 +21,7 @@ from trader.market import repository as repo
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import ET, FixedClock
 from trader.market.types import Candle, Interval, OpeningBars, UniverseMember
+from trader.notify.notifier import TelegramNotifier
 from trader.notify.types import DailySummaryView
 from trader.settings_store import RuntimeSettings
 
@@ -552,4 +555,101 @@ def test_upsert_candle_archive_inserts_then_updates(world: World, db_factory: se
         (et(DAY, 9, 30), Decimal("21.4000")),
         (et(DAY, 9, 31), Decimal("22.0000")),
         (et(DAY, 9, 32), Decimal("21.4000")),
+    ]
+
+
+# --- fix round 1 ------------------------------------------------------------------------------------------
+
+
+async def no_sleep(_seconds: float) -> None:
+    return None
+
+
+def telegram_world(world: World, now: datetime) -> tuple[PostcloseDeps, FakeTelegramApi]:
+    """The world's deps with a real TelegramNotifier (dedupe and status through `notifications`)."""
+    api = FakeTelegramApi()
+    notifier = TelegramNotifier(api, CHAT, world.factory, FixedClock(now), sleep=no_sleep)
+    return dataclasses.replace(world.deps(now), notifier=notifier), api
+
+
+async def test_a_failing_archive_is_an_error_event_and_the_summary_still_goes_out(world: World) -> None:
+    """BR-60: the archive raising (the universe read, here) must not cost the summary and the journal."""
+
+    async def broken_universe(session_date: date) -> list[UniverseMember]:
+        raise ConnectionError("do not report this text")
+
+    world.data.universe = broken_universe  # type: ignore[method-assign]
+    out = await run_postclose(world.deps(post_close(DAY)), DAY)
+    assert out["archive"] == {"error": "ConnectionError"}
+    assert out["summary_sent"] is True and [msg.kind for msg in world.notifier.sent] == ["daily_summary"]
+    (view,) = world.summaries()
+    assert view.archive == {}
+    (event,) = error_events(world.factory)
+    assert "archive" in event.message and "do not report" not in event.message
+    assert event.data["error"] == "ConnectionError"
+    with world.factory() as s:
+        assert s.execute(select(func.count()).select_from(m.Journal)).scalar_one() == 1
+
+
+async def test_failing_journal_buttons_send_the_summary_without_buttons(world: World) -> None:
+    def broken_issue(*args: object) -> tuple[str, dict[str, str]]:
+        raise RuntimeError("issuer bug")
+
+    world.issuer.issue = broken_issue  # type: ignore[method-assign,assignment]
+    out = await run_postclose(world.deps(post_close(DAY)), DAY)
+    (msg,) = world.notifier.sent
+    assert msg.kind == "daily_summary" and msg.buttons == ()
+    assert out["summary_sent"] is True
+
+
+async def test_summary_status_sent_then_duplicate_without_a_new_nonce(world: World) -> None:
+    """A forced re-run finds the `summary:<date>` row: no second send and no orphan journal nonce."""
+    deps1, api1 = telegram_world(world, post_close(DAY))
+    first = await run_postclose(deps1, DAY)
+    assert (first["summary"], first["summary_sent"]) == ("sent", True)
+    assert len(api1.calls_of("send_message")) == 1 and len(world.issuer.issued) == 1
+
+    deps2, api2 = telegram_world(world, post_close(DAY) + timedelta(minutes=30))
+    second = await run_postclose(deps2, DAY)
+    assert (second["summary"], second["summary_sent"]) == ("duplicate", False)
+    assert api2.calls_of("send_message") == [] and len(world.issuer.issued) == 1
+
+
+async def test_summary_status_failed_when_telegram_rejects_it(world: World) -> None:
+    deps, api = telegram_world(world, post_close(DAY))
+    api.fail("send_message", TelegramApiError(400, "Bad Request: chat not found"))
+    out = await run_postclose(deps, DAY)
+    assert (out["summary"], out["summary_sent"]) == ("failed", False)
+
+
+async def test_opening_bars_are_upserted_in_one_statement(world: World) -> None:
+    """Three universe symbols: one 5m statement (and one 1m statement for SPY), not one per symbol."""
+    engine = world.factory.kw["bind"]
+    statements: list[str] = []
+
+    def record(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+        if statement.lstrip().upper().startswith("INSERT INTO") and "candle_archive" in statement:
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        out = await run_postclose(world.deps(post_close(DAY)), DAY)
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    assert out["archive"]["5m"] == 3 and len(archive_rows(world.factory, "5m")) == 3
+    assert len(statements) == 2
+
+
+def test_upsert_candle_archive_bars_many_symbols(world: World, db_factory: sessionmaker[Session]) -> None:
+    open_ = CAL.session_open(DAY)
+    five = timedelta(minutes=5)
+    a, b = world.ids["AAA"], world.ids["BBB"]
+    pairs = [(a, bar(open_, five)), (b, bar(open_, five)), (a, bar(open_, five, close="22.00"))]
+    with db_factory() as s:
+        assert repo.upsert_candle_archive_bars(s, "5m", pairs) == 2  # (a, open) once, the last one wins
+        assert repo.upsert_candle_archive_bars(s, "5m", []) == 0
+        s.commit()
+    assert [(r.symbol_id, r.close) for r in archive_rows(db_factory, "5m")] == [
+        (a, Decimal("22.0000")),
+        (b, Decimal("21.4000")),
     ]

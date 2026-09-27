@@ -122,6 +122,7 @@ Path: `Trader/docs/build/BUILD_STATE.md`. It is the single source of truth for w
 - [ ] **Gauntlet.** When the Builder finishes, set `gauntlet` and run the stages in §5.
 - [ ] **Accept.** When every stage passes, set `accepted`, record the last commit, commit and push the state file, and append an orchestrator log entry.
 - [ ] **Phase end.** When every task in a phase is `accepted`, spawn a **phase reviewer** (a Code reviewer with the whole phase diff: `git diff <phase-start-commit>..HEAD`). Treat its findings like gauntlet findings on a synthetic task `Pn-REVIEW`. Then write the next phase's plan (task `P<n+1>-T0`).
+- [ ] **Phase start estimate.** When a phase starts (its `Pn-T0` or first task), tell Stephen the estimated duration and expected finish time (UTC), with the reasoning: the critical path of dependent tasks × about 30–45 min per task (build + gauntlet), plus ~30% for fix rounds, plus ~45 min for the phase review and next plan. Record the estimate in the header. Revise it in progress reports when the actual pace differs.
 - [ ] **Notify.** At each phase end, and on every escalation, send Stephen a Telegram message through the dev bot: `bash Trader/app/scripts/trader-dev.sh notify "<text>"` once P1-T9 is accepted, otherwise `python3 Trader/build/notify.py "<text>"` (created in P1-T1).
 
 ## 5. The gauntlet

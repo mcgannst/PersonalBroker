@@ -14,6 +14,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Questrade token owner | `docker/.env.dev` (moves to `trader_dev.trader.api_credentials` in P1-T6) |
 | Token last refreshed (UTC) | 2026-09-27T03:36:53Z (spike S1) |
 | Phase 1 start commit | d64518b |
+| Phase 1 estimate | 4–5 h from 04:13Z → finish ~08:30–09:30Z (critical path T1→T2→T3→T6→T7→T9) |
 
 ## Task board
 
@@ -47,3 +48,6 @@ None open.
 ### 2026-09-27T04:13:00Z · P1-T1 · Orchestrator · attempt 1 · started
 - Result: build started by Stephen ("gauntlet it"; run all phases without stopping, report progress)
 - Notes: Docker Desktop running; token refreshed 03:36Z (fresh)
+
+### 2026-09-27T04:13:28Z · P1-T1 · Builder · attempt 1 · started
+- Result: starting plan steps 1-10

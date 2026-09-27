@@ -196,13 +196,15 @@ def test_registry_refuses_duplicate_broken_and_malformed_entry_points(
             pass
         except Exception as exc:  # noqa: BLE001 - the point is which type escapes
             problems.append(f"{name}: raised {type(exc).__name__} instead of PluginError")
+    # Fix-round ruling (P2-T6/T7 attempt 2): load_all() isolates failures per plug-in. It logs each broken
+    # one and returns the rest, so one bad package can't stop every strategy. (This replaced the Breaker's
+    # original expectation that load_all() raises PluginError.)
     try:
-        reg.load_all()
-        problems.append("load_all() succeeded with a broken plug-in declared")
-    except PluginError:
-        pass
+        loaded = reg.load_all()
+        if loaded != {"demo": DemoStrategy}:
+            problems.append(f"load_all() returned {sorted(loaded)} instead of only the working 'demo'")
     except Exception as exc:  # noqa: BLE001
-        problems.append(f"load_all(): raised {type(exc).__name__} instead of PluginError")
+        problems.append(f"load_all(): raised {type(exc).__name__} instead of skipping the broken plug-ins")
     assert problems == [], problems
 
 
@@ -241,7 +243,9 @@ def test_registry_revision_bumps_on_every_change_and_only_then(db_factory: sessi
         )
         audits = s.execute(select(func.count()).select_from(m.AuditLog)).scalar_one()
     assert revs == [1, 2, 3, 4, 5, 6, 7]
-    assert audits == 5  # update() revisions 2, 3, 4, 6 and 7; failed validations write nothing
+    # update() revisions 2, 3, 4, 6 and 7, plus ensure_defaults()'s version bump to revision 5 (fix-round
+    # ruling: a version bump is audited like update()); failed validations write nothing.
+    assert audits == 6
 
 
 # --- 6. opening_bars: every missing symbol is reported with its reason (Review Focus 4) -------------------

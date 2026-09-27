@@ -3390,14 +3390,14 @@ git push origin HEAD:trunk
 - Produces:
   - `trader.market.types` additions (frozen, slots): `UniverseMember(symbol_id, ticker, name, price, avg_volume, atr14, source)`; `UniverseStatus(source: str | None, fallback_from: date | None, stale: bool, age_sessions: int | None)`; `OpenBarStats(symbol_id, avg_open_vol_14d, atr14)`; `OpeningBars(bars: dict[int, Candle], missing: dict[int, str])`.
   - `trader.strategies.base`:
-    - `SessionOffset(anchor: Literal["open","close"], seconds: int)`: `SessionOffset.parse(text)` accepts `open`, `close`, `open+5m`, `close-30m`, `open+5m5s` (else `ValueError`); `.resolve(cal, session) -> datetime` (UTC; follows early closes; `ValueError` on a non-session); `str()` gives the canonical text.
+    - `SessionOffset(anchor: Literal["open","close"], seconds: int)`: `SessionOffset.parse(text)` accepts exactly `open`, `close`, `open+5m`, `close-30m`, `open+5m5s` (`re.fullmatch`, so a trailing newline is refused; else `ValueError`); `.resolve(cal, session) -> datetime` (UTC; follows early closes; `ValueError` on a non-session); `str()` gives the canonical text.
     - `ScheduledEvent(key: str, at: SessionOffset)`.
-    - Intents (frozen dataclasses, master-plan contract): `EnterLong(symbol_id, order_type, stop, limit, stop_loss, reason, evidence)`, `Exit(position_id, order_type: Literal["market","stop"], stop, reason)`, `Cancel(order_id, reason)`; `Intent = EnterLong | Exit | Cancel`; `intent_to_json(intent) -> dict[str, Any]` (`"type"` is `enter_long`/`exit`/`cancel`, Decimals as strings).
+    - Intents (frozen dataclasses, master-plan contract): `EnterLong(symbol_id, order_type, stop, limit, stop_loss, reason, evidence)`, `Exit(position_id, order_type: Literal["market","stop"], stop, reason)`, `Cancel(order_id, reason)`; `Intent = EnterLong | Exit | Cancel`; every price field must be a `Decimal` (`None` where optional), else `TypeError` in `__post_init__`; `intent_to_json(intent) -> dict[str, Any]` (`"type"` is `enter_long`/`exit`/`cancel`, Decimals as strings; `evidence` is stored separately).
     - `CandidateRecord(symbol_id, rvol, rank, candle, passed=False, reject_reason=None, data={})` (mutable); `DecisionNote(message, level="info", data={})`.
     - Protocols: `MarketDataView` (async `universe`, `universe_status`, `open_bar_stats`, `opening_bars`, `quotes`, `candles`, `prior_close`, `symbol_ids`; P2-T7 implements it); `CatalystInfo` (read-only `catalyst_type`, `direction`, `quality`, `classified`); `CatalystSource` (`async get(symbol_ids, session_date) -> Mapping[int, CatalystInfo]`; P2-T12 implements it).
     - `StrategyContext(clock, calendar, session_date, data, catalysts, params, strategy_config_id, positions, working_orders, account, entries_today=0, candidates=[], notes=[])` with `note(message, level="info", **data)`. For an `entry` strategy `positions`/`working_orders` are its own; for an `overlay` strategy `positions` are every open position of the entry strategies (the engine decides, P2-T13).
     - `Strategy` protocol (SPEC §5.1, refined: `on_event`/`on_fill` are `async`): read-only `key`, `version`, `kind: Literal["entry","overlay"]`, `params_model: type[BaseModel]`, `params: BaseModel`; `schedule(cal) -> list[ScheduledEvent]`; `async on_event(ctx, event) -> list[Intent]`; `async on_fill(ctx, fill: Fill) -> list[Intent]`. Plug-in classes take their validated params in the constructor: `Plugin(params: ParamsModel | None = None)`.
-  - `trader.strategies.registry`: `ENTRY_POINT_GROUP = "trader.strategies"`; `PluginError(Exception)`; `available() -> dict[str, EntryPoint]`; `load_plugin(name) -> type[Any]` (checks the class has the protocol members and `cls.key == name`); `load_all() -> dict[str, type[Any]]`; `StrategyConfigView(id, strategy_key, version, revision, params: dict[str, Any], enabled, created_at)`; `StrategyRegistry(factory, clock, plugins: Mapping[str, type[Any]] | None = None)` (default: `load_all()`) with `keys()`, `plugin_class(key)`, `json_schema(key)`, `ensure_defaults(actor="system")` (revision 1 with the model's defaults, enabled; a new revision when the plug-in version changed), `current(key) -> StrategyConfigView` (`KeyError` before `ensure_defaults`), `update(key, *, params=None, enabled=None, actor) -> StrategyConfigView` (merges, validates with the plug-in's pydantic model, `pydantic.ValidationError` on bad params, writes a new revision plus an `audit_log` row `strategy.update:<key>`; a no-change update returns the current revision), `instance(key) -> tuple[Strategy, StrategyConfigView]`, `enabled() -> list[tuple[Strategy, StrategyConfigView]]`, `config_ids(key) -> set[int]` (every revision), `config_key(config_id) -> str | None`.
+  - `trader.strategies.registry`: `ENTRY_POINT_GROUP = "trader.strategies"`; `PluginError(Exception)`; `available() -> dict[str, EntryPoint]`; `load_plugin(name) -> type[Any]` (checks the class has the protocol members, `cls.key == name` and `kind` in `entry`/`overlay`; `PluginError` for a name declared twice with different targets and for any import failure); `load_all() -> dict[str, type[Any]]` (logs a broken plug-in as a structlog error and skips it); `StrategyConfigView(id, strategy_key, version, revision, params: dict[str, Any], enabled, created_at)`; `StrategyRegistry(factory, clock, plugins: Mapping[str, type[Any]] | None = None)` (default: `load_all()`) with `keys()`, `plugin_class(key)`, `json_schema(key)`, `ensure_defaults(actor="system")` (revision 1 with the model's defaults, enabled; a new revision plus an `audit_log` row `strategy.update:<key>` when the plug-in version changed; a plug-in that fails is logged and skipped), `current(key) -> StrategyConfigView` (`KeyError` before `ensure_defaults`), `update(key, *, params=None, enabled=None, actor) -> StrategyConfigView` (merges, validates with the plug-in's pydantic model, `pydantic.ValidationError` on bad params, writes a new revision plus an `audit_log` row `strategy.update:<key>`; a no-change update returns the current revision), `instance(key) -> tuple[Strategy, StrategyConfigView]` (`PluginError` when the plug-in won't start with its settings), `enabled() -> list[tuple[Strategy, StrategyConfigView]]` (one `current()` read per plug-in; a broken plug-in is logged, as structlog error and `event_log` row, and skipped), `config_ids(key) -> set[int]` (every revision), `config_key(config_id) -> str | None`.
   - `pyproject.toml`: entry points `orb_sip = "trader.strategies.orb_sip:OrbSip"` and `spy_overlay = "trader.strategies.spy_overlay:SpyOverlay"` (the modules arrive in P2-T8/T9; `available()` lists names without importing, and nothing loads them before T13).
   - `tests/strategies/fakes.py`: `CAL`, `SESSION` (Tue 2026-10-06), `NOW` (09:35:05 ET), `bar(...)`, `quote(...)`, `FakeCatalyst`, `FakeCatalysts`, `FakeData`, `make_ctx(...)`, `position(...)`, `working_entry(...)` for P2-T8 and P2-T9.
 
@@ -3440,7 +3440,9 @@ class OpenBarStats:
 @dataclass(frozen=True, slots=True)
 class OpeningBars:
     bars: dict[int, Candle]
-    missing: dict[int, str]  # symbol_id -> reason, e.g. "no_bar_at_open" (Review Focus 4: reported, not raised)
+    # symbol_id -> reason (Review Focus 4: reported, not raised): "no_questrade_id", "no_bar_at_open",
+    # "bar_not_complete", "timeout" or "questrade_error: HTTP <status>".
+    missing: dict[int, str]
 ```
 
 - [x] **Step 2: Write the failing framework tests and the shared fakes**
@@ -3695,9 +3697,10 @@ from importlib.metadata import EntryPoint
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
+from structlog.testing import capture_logs
 
 from tests.strategies.demo_plugin import DemoParams, DemoStrategy
 from trader.db import models as m
@@ -3713,8 +3716,14 @@ CLOCK = FixedClock(datetime(2026, 10, 6, 12, 0, tzinfo=UTC))
 
 @pytest.mark.parametrize(
     ("text", "anchor", "seconds"),
-    [("open+5m", "open", 300), ("close-30m", "close", -1800), ("open+5m5s", "open", 305), ("open", "open", 0),
-     ("close-10m", "close", -600), ("open+120m", "open", 7200)],
+    [
+        ("open+5m", "open", 300),
+        ("close-30m", "close", -1800),
+        ("open+5m5s", "open", 305),
+        ("open", "open", 0),
+        ("close-10m", "close", -600),
+        ("open+120m", "open", 7200),
+    ],
 )
 def test_session_offset_parses_and_prints(text: str, anchor: str, seconds: int) -> None:
     off = SessionOffset.parse(text)
@@ -3722,7 +3731,10 @@ def test_session_offset_parses_and_prints(text: str, anchor: str, seconds: int) 
     assert str(off) == text
 
 
-@pytest.mark.parametrize("text", ["noon+5m", "open+5", "open+5m60s", "close*2m", "", "open +5m", "open+5000m"])
+@pytest.mark.parametrize(
+    "text",
+    ["noon+5m", "open+5", "open+5m60s", "close*2m", "", "open +5m", "open+5000m", "open+5m\n", "close\n"],
+)
 def test_session_offset_rejects_garbage(text: str) -> None:
     with pytest.raises(ValueError):
         SessionOffset.parse(text)
@@ -3761,7 +3773,11 @@ def test_intents_are_frozen_and_serialise() -> None:
         "reason": "orb_breakout",
     }
     assert intent_to_json(Exit(3, "market", None, "flatten_close"))["type"] == "exit"
-    assert intent_to_json(Cancel(9, "entry_cancel_at")) == {"type": "cancel", "order_id": 9, "reason": "entry_cancel_at"}
+    assert intent_to_json(Cancel(9, "entry_cancel_at")) == {
+        "type": "cancel",
+        "order_id": 9,
+        "reason": "entry_cancel_at",
+    }
 
 
 def _patch_entry_points(monkeypatch: pytest.MonkeyPatch, *pairs: tuple[str, str]) -> None:
@@ -3800,7 +3816,9 @@ def _revisions(factory: sessionmaker[Session]) -> int:
 
 
 @pytest.mark.db
-def test_defaults_are_revision_one_and_created_once(db_factory: sessionmaker[Session], registry: StrategyRegistry) -> None:
+def test_defaults_are_revision_one_and_created_once(
+    db_factory: sessionmaker[Session], registry: StrategyRegistry
+) -> None:
     registry.ensure_defaults()
     cfg = registry.current("demo")
     assert (cfg.revision, cfg.version, cfg.enabled) == (1, "0.1.0", True)
@@ -3851,6 +3869,145 @@ def test_instance_carries_validated_params(registry: StrategyRegistry) -> None:
 def test_current_before_defaults_is_a_key_error(db_factory: sessionmaker[Session]) -> None:
     with pytest.raises(KeyError):
         StrategyRegistry(db_factory, CLOCK, plugins={"demo": DemoStrategy}).current("demo")
+
+
+# --- P2-T6 attempt 2 regression tests (gauntlet findings) ---
+
+
+class RequiredParams(BaseModel):
+    must: int  # no default: the model can't produce default settings
+
+
+class NoDefaults(DemoStrategy):
+    key = "no_defaults"
+    params_model = RequiredParams  # type: ignore[assignment]
+
+
+class Crashy(DemoStrategy):
+    key = "crashy"
+
+    def __init__(self, params: DemoParams | None = None) -> None:
+        raise RuntimeError("boom in __init__")
+
+
+class BadKind(DemoStrategy):
+    key = "bad_kind"
+    kind = "exit"  # type: ignore[assignment]
+
+
+class DemoV2(DemoStrategy):
+    version = "0.2.0"
+
+
+def test_intents_refuse_non_decimal_prices() -> None:
+    """Finding: a float price must never enter the engine (Global Constraints: never float for money)."""
+    with pytest.raises(TypeError, match="stop_loss"):
+        EnterLong(1, "stop", Decimal("20.01"), None, 19.91, "orb")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="limit"):
+        EnterLong(1, "limit", None, 20, Decimal("19.91"), "orb")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="stop_loss"):
+        EnterLong(1, "market", None, None, None, "orb")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="stop"):
+        Exit(1, "stop", 19.5, "trail")  # type: ignore[arg-type]
+    assert Exit(1, "market", None, "flatten").stop is None
+    assert EnterLong(1, "market", None, None, Decimal("19.91"), "orb").limit is None
+
+
+def test_load_plugin_wraps_every_failure_in_plugin_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    here = "tests.strategies.test_framework"
+    _patch_entry_points(
+        monkeypatch,
+        ("demo", "tests.strategies.demo_plugin:DemoStrategy"),
+        ("demo", f"{here}:DemoV2"),
+        ("gone", "tests.strategies.no_such_module:Nope"),
+        ("bad_kind", f"{here}:BadKind"),
+        ("func", f"{here}:_revisions"),
+    )
+    with pytest.raises(PluginError, match="more than once"):
+        reg.load_plugin("demo")
+    with pytest.raises(PluginError, match="failed to load: ModuleNotFoundError"):
+        reg.load_plugin("gone")
+    with pytest.raises(PluginError, match="kind"):
+        reg.load_plugin("bad_kind")
+    with pytest.raises(PluginError, match="not a class"):
+        reg.load_plugin("func")
+
+
+def test_the_same_entry_point_declared_twice_is_not_a_duplicate(monkeypatch: pytest.MonkeyPatch) -> None:
+    same = "tests.strategies.demo_plugin:DemoStrategy"
+    _patch_entry_points(monkeypatch, ("demo", same), ("demo", same))
+    assert reg.load_plugin("demo") is DemoStrategy
+
+
+def test_load_all_skips_and_logs_broken_plugins(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_entry_points(
+        monkeypatch,
+        ("demo", "tests.strategies.demo_plugin:DemoStrategy"),
+        ("gone", "tests.strategies.no_such_module:Nope"),
+        ("bad_kind", "tests.strategies.test_framework:BadKind"),
+    )
+    with capture_logs() as logs:
+        assert reg.load_all() == {"demo": DemoStrategy}
+    failed = sorted(e["plugin"] for e in logs if e["event"] == "strategy.plugin_failed")
+    assert failed == ["bad_kind", "gone"]
+    assert all(e["log_level"] == "error" for e in logs)
+
+
+def _events(factory: sessionmaker[Session]) -> list[m.EventLog]:
+    with factory() as s:
+        return list(s.execute(select(m.EventLog).order_by(m.EventLog.id)).scalars())
+
+
+@pytest.mark.db
+def test_a_broken_plugin_is_skipped_and_the_others_keep_running(db_factory: sessionmaker[Session]) -> None:
+    r = StrategyRegistry(
+        db_factory, CLOCK, plugins={"demo": DemoStrategy, "no_defaults": NoDefaults, "crashy": Crashy}
+    )
+    with capture_logs() as logs:
+        r.ensure_defaults()  # no_defaults fails, the others get revision 1
+        assert r.current("demo").revision == 1 and r.current("crashy").revision == 1
+        running = r.enabled()  # no_defaults has no settings, crashy won't start: both skipped
+    assert [cfg.strategy_key for _, cfg in running] == ["demo"]
+    assert isinstance(running[0][0], DemoStrategy)
+    assert sorted((e["plugin"], e["stage"]) for e in logs if e["event"] == "strategy.plugin_failed") == [
+        ("crashy", "enabled"),
+        ("no_defaults", "enabled"),
+        ("no_defaults", "ensure_defaults"),
+    ]
+    events = _events(db_factory)
+    assert {(e.level, e.source) for e in events} == {("error", "strategies.registry")}
+    assert sorted(e.data["strategy"] for e in events) == ["crashy", "no_defaults", "no_defaults"]
+    with pytest.raises(PluginError, match="crashy"):  # an explicit request still fails loudly
+        r.instance("crashy")
+
+
+@pytest.mark.db
+def test_a_version_bump_is_an_audited_revision(db_factory: sessionmaker[Session]) -> None:
+    StrategyRegistry(db_factory, CLOCK, plugins={"demo": DemoStrategy}).ensure_defaults()
+    r2 = StrategyRegistry(db_factory, CLOCK, plugins={"demo": DemoV2})
+    r2.ensure_defaults(actor="deploy")
+    r2.ensure_defaults(actor="deploy")  # no change, no revision, no audit
+    with db_factory() as s:
+        audits = s.execute(select(m.AuditLog)).scalars().all()
+    assert len(audits) == 1
+    a = audits[0]
+    assert (a.actor, a.action) == ("deploy", "strategy.update:demo")
+    assert (a.before["version"], a.before["revision"]) == ("0.1.0", 1)
+    assert (a.after["version"], a.after["revision"]) == ("0.2.0", 2)
+
+
+@pytest.mark.db
+def test_enabled_reads_each_config_once(registry: StrategyRegistry, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    real = registry.current
+
+    def counting(key: str) -> reg.StrategyConfigView:
+        calls.append(key)
+        return real(key)
+
+    monkeypatch.setattr(registry, "current", counting)
+    [(strategy, cfg)] = registry.enabled()
+    assert calls == ["demo"] and cfg.revision == 1 and isinstance(strategy, DemoStrategy)
 ```
 
 - [x] **Step 3: Run to see them fail**
@@ -3886,7 +4043,7 @@ from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock
 from trader.market.types import Candle, Interval, OpenBarStats, OpeningBars, UniverseMember, UniverseStatus
 
-_OFFSET = re.compile(r"^(open|close)(?:([+-])(\d{1,3})m(?:(\d{1,2})s)?)?$")
+_OFFSET = re.compile(r"(open|close)(?:([+-])(\d{1,3})m(?:(\d{1,2})s)?)?")
 MAX_OFFSET_SECONDS = 12 * 3600
 
 
@@ -3899,7 +4056,7 @@ class SessionOffset:
 
     @classmethod
     def parse(cls, text: str) -> Self:
-        m = _OFFSET.match(text)
+        m = _OFFSET.fullmatch(text)  # fullmatch: `$` would accept a trailing newline
         if m is None:
             raise ValueError(f"not a session offset: {text!r} (e.g. 'open+5m', 'close-30m', 'open+5m5s')")
         name, sign, minutes, secs = m.groups()
@@ -3928,6 +4085,18 @@ class ScheduledEvent:
     at: SessionOffset
 
 
+def _require_decimals(intent: object, names: tuple[str, ...], optional: tuple[str, ...] = ()) -> None:
+    """Global Constraints: never float for money. Intents are where a plug-in's prices enter the engine."""
+    for name in names:
+        value = getattr(intent, name)
+        if value is None and name in optional:
+            continue
+        if not isinstance(value, Decimal):
+            raise TypeError(
+                f"{type(intent).__name__}.{name} must be a Decimal, not {type(value).__name__} ({value!r})"
+            )
+
+
 @dataclass(frozen=True)
 class EnterLong:
     symbol_id: int
@@ -3938,6 +4107,9 @@ class EnterLong:
     reason: str
     evidence: Mapping[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        _require_decimals(self, ("stop", "limit", "stop_loss"), optional=("stop", "limit"))
+
 
 @dataclass(frozen=True)
 class Exit:
@@ -3945,6 +4117,9 @@ class Exit:
     order_type: Literal["market", "stop"]
     stop: Decimal | None
     reason: str
+
+    def __post_init__(self) -> None:
+        _require_decimals(self, ("stop",), optional=("stop",))
 
 
 @dataclass(frozen=True)
@@ -3957,6 +4132,11 @@ Intent = EnterLong | Exit | Cancel
 
 
 def intent_to_json(intent: Intent) -> dict[str, Any]:
+    """The intent's order fields as JSON (Decimals as strings).
+
+    `EnterLong.evidence` is deliberately left out: the engine stores it separately (with the signal), so
+    this dict stays the order-shaped part that is compared and replayed.
+    """
     if isinstance(intent, EnterLong):
         return {
             "type": "enter_long",
@@ -4002,9 +4182,13 @@ class MarketDataView(Protocol):
     async def universe(self, session_date: date) -> list[UniverseMember]: ...
     async def universe_status(self, session_date: date) -> UniverseStatus: ...
     async def open_bar_stats(self, session_date: date) -> dict[int, OpenBarStats]: ...
-    async def opening_bars(self, session_date: date, symbol_ids: Sequence[int] | None = None) -> OpeningBars: ...
+    async def opening_bars(
+        self, session_date: date, symbol_ids: Sequence[int] | None = None
+    ) -> OpeningBars: ...
     async def quotes(self, symbol_ids: Sequence[int]) -> dict[int, QtQuote]: ...
-    async def candles(self, symbol_id: int, start: datetime, end: datetime, interval: Interval) -> list[Candle]: ...
+    async def candles(
+        self, symbol_id: int, start: datetime, end: datetime, interval: Interval
+    ) -> list[Candle]: ...
     async def prior_close(self, symbol_id: int, session_date: date) -> Decimal | None: ...
     async def symbol_ids(self, tickers: Sequence[str]) -> dict[str, int]: ...
 
@@ -4069,6 +4253,10 @@ class Strategy(Protocol):
 
 Settings live in strategy_configs, one row per revision. Every change is a new revision, so each signal
 records the exact settings (and plug-in version) that produced it.
+
+A broken plug-in never takes the others down: load_all(), ensure_defaults() and enabled() log it (structlog
+error, plus an event_log row where there is a database) and carry on without it. An explicit
+load_plugin(name) or instance(key) for a broken plug-in raises PluginError.
 """
 
 from collections.abc import Mapping
@@ -4077,21 +4265,27 @@ from datetime import datetime
 from importlib.metadata import EntryPoint, entry_points
 from typing import Any, cast
 
+import structlog
 from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from trader.db import models as m
 from trader.db.session import session_scope
+from trader.events import log_event
 from trader.market.clock import Clock
 from trader.strategies.base import Strategy
 
 ENTRY_POINT_GROUP = "trader.strategies"
+KINDS = ("entry", "overlay")
+SOURCE = "strategies.registry"
 _REQUIRED = ("key", "version", "kind", "params_model", "schedule", "on_event", "on_fill")
+
+log = structlog.get_logger(SOURCE)
 
 
 class PluginError(Exception):
-    """A plug-in is missing or doesn't satisfy the Strategy protocol."""
+    """A plug-in is missing, declared twice, fails to import, or doesn't satisfy the Strategy protocol."""
 
 
 def available() -> dict[str, EntryPoint]:
@@ -4100,22 +4294,40 @@ def available() -> dict[str, EntryPoint]:
 
 
 def load_plugin(name: str) -> type[Any]:
-    eps = available()
-    if name not in eps:
+    declared = [ep for ep in entry_points(group=ENTRY_POINT_GROUP) if ep.name == name]
+    if not declared:
         raise PluginError(f"no strategy plug-in named {name!r}")
-    cls = eps[name].load()
+    targets = sorted({ep.value for ep in declared})
+    if len(targets) > 1:
+        raise PluginError(f"strategy plug-in {name!r} is declared more than once: {targets}")
+    try:
+        cls: Any = declared[0].load()
+    except Exception as exc:  # an import error, a missing attribute, an error raised at import time
+        raise PluginError(f"plug-in {name!r} failed to load: {type(exc).__name__}: {exc}") from exc
+    if not isinstance(cls, type):
+        raise PluginError(f"plug-in {name!r} loads a {type(cls).__name__}, not a class")
+    cls = cast(Any, cls)  # a plug-in class: its protocol attributes are checked below
     missing = [a for a in _REQUIRED if not hasattr(cls, a)]
     if missing:
         raise PluginError(f"plug-in {name!r} lacks {missing}")
     if cls.key != name:
         raise PluginError(f"entry point {name!r} loads a plug-in keyed {cls.key!r}")
+    if cls.kind not in KINDS:
+        raise PluginError(f"plug-in {name!r}: kind must be one of {KINDS}, not {cls.kind!r}")
     if not (isinstance(cls.params_model, type) and issubclass(cls.params_model, BaseModel)):
         raise PluginError(f"plug-in {name!r}: params_model must be a pydantic model")
     return cast(type[Any], cls)
 
 
 def load_all() -> dict[str, type[Any]]:
-    return {name: load_plugin(name) for name in sorted(available())}
+    """Every plug-in that loads. A broken one is logged and skipped, so it can't stop the others."""
+    out: dict[str, type[Any]] = {}
+    for name in sorted(available()):
+        try:
+            out[name] = load_plugin(name)
+        except PluginError as exc:
+            log.error("strategy.plugin_failed", plugin=name, stage="load", error=str(exc))
+    return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -4159,6 +4371,23 @@ class StrategyRegistry:
         schema: dict[str, Any] = self.plugin_class(key).params_model.model_json_schema()
         return schema
 
+    def _report(self, key: str, stage: str, exc: BaseException) -> None:
+        """Log a plug-in that was skipped: structlog always, event_log when the database takes it."""
+        error = f"{type(exc).__name__}: {exc}"[:500]
+        log.error("strategy.plugin_failed", plugin=key, stage=stage, error=error)
+        try:
+            with session_scope(self._factory) as s:
+                log_event(
+                    s,
+                    self._clock,
+                    "error",
+                    SOURCE,
+                    f"strategy {key} skipped ({stage})",
+                    {"strategy": key, "stage": stage, "error": error},
+                )
+        except Exception as db_exc:  # the database may be the reason the plug-in failed
+            log.error("strategy.plugin_failed_unrecorded", plugin=key, error=str(db_exc)[:300])
+
     @staticmethod
     def _lock(s: Session, key: str) -> None:
         s.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"strategy_configs:{key}"})
@@ -4173,28 +4402,49 @@ class StrategyRegistry:
         ).scalar_one_or_none()
 
     def ensure_defaults(self, actor: str = "system") -> None:
-        now = self._clock.now()
+        """Revision 1 for a new plug-in; a new, audited revision when a plug-in's version changed.
+
+        Each plug-in is handled on its own: one that fails (e.g. its stored params no longer validate
+        against the new version's model) is logged and skipped, and the others still get their rows.
+        """
         for key in self.keys():
-            cls = self.plugin_class(key)
-            with session_scope(self._factory) as s:
-                self._lock(s, key)
-                latest = self._latest(s, key)
-                if latest is not None and latest.version == cls.version:
-                    continue
-                params = (
-                    cls.params_model().model_dump(mode="json")
-                    if latest is None
-                    else cls.params_model.model_validate(latest.params).model_dump(mode="json")
-                )
+            try:
+                self._ensure_one(key, actor)
+            except Exception as exc:
+                self._report(key, "ensure_defaults", exc)
+
+    def _ensure_one(self, key: str, actor: str) -> None:
+        cls = self.plugin_class(key)
+        now = self._clock.now()
+        with session_scope(self._factory) as s:
+            self._lock(s, key)
+            latest = self._latest(s, key)
+            if latest is not None and latest.version == cls.version:
+                return
+            params = (
+                cls.params_model().model_dump(mode="json")
+                if latest is None
+                else cls.params_model.model_validate(latest.params).model_dump(mode="json")
+            )
+            row = m.StrategyConfig(
+                strategy_key=key,
+                version=cls.version,
+                revision=1 if latest is None else latest.revision + 1,
+                params=params,
+                enabled=True if latest is None else latest.enabled,
+                created_at=now,
+                created_by=actor,
+            )
+            s.add(row)
+            if latest is not None:  # a version bump changes what runs, so it's audited like update()
+                s.flush()
                 s.add(
-                    m.StrategyConfig(
-                        strategy_key=key,
-                        version=cls.version,
-                        revision=1 if latest is None else latest.revision + 1,
-                        params=params,
-                        enabled=True if latest is None else latest.enabled,
-                        created_at=now,
-                        created_by=actor,
+                    m.AuditLog(
+                        ts=now,
+                        actor=actor,
+                        action=f"strategy.update:{key}",
+                        before=_snapshot(latest),
+                        after=_snapshot(row),
                     )
                 )
 
@@ -4248,17 +4498,37 @@ class StrategyRegistry:
             )
             return _view(row)
 
-    def instance(self, key: str) -> tuple[Strategy, StrategyConfigView]:
-        cfg = self.current(key)
+    def _build(self, key: str, cfg: StrategyConfigView) -> Strategy:
         cls = self.plugin_class(key)
-        return cast(Strategy, cls(cls.params_model.model_validate(cfg.params))), cfg
+        try:
+            return cast(Strategy, cls(cls.params_model.model_validate(cfg.params)))
+        except Exception as exc:
+            raise PluginError(
+                f"plug-in {key!r} (revision {cfg.revision}) failed to start: {type(exc).__name__}: {exc}"
+            ) from exc
+
+    def instance(self, key: str) -> tuple[Strategy, StrategyConfigView]:
+        """The plug-in with its current settings; PluginError if its params don't validate or it fails."""
+        cfg = self.current(key)
+        return self._build(key, cfg), cfg
 
     def enabled(self) -> list[tuple[Strategy, StrategyConfigView]]:
-        return [self.instance(k) for k in self.keys() if self.current(k).enabled]
+        """Every enabled plug-in that starts. A broken one is logged and skipped."""
+        out: list[tuple[Strategy, StrategyConfigView]] = []
+        for key in self.keys():
+            try:
+                cfg = self.current(key)
+                if cfg.enabled:
+                    out.append((self._build(key, cfg), cfg))
+            except Exception as exc:
+                self._report(key, "enabled", exc)
+        return out
 
     def config_ids(self, key: str) -> set[int]:
         with self._factory() as s:
-            return set(s.execute(select(m.StrategyConfig.id).where(m.StrategyConfig.strategy_key == key)).scalars())
+            return set(
+                s.execute(select(m.StrategyConfig.id).where(m.StrategyConfig.strategy_key == key)).scalars()
+            )
 
     def config_key(self, config_id: int) -> str | None:
         with self._factory() as s:
@@ -4293,6 +4563,17 @@ git pull --rebase --autostash origin trunk
 git push origin HEAD:trunk
 ```
 
+- [x] **Step 9 (fix round, gauntlet attempt 2): gauntlet findings**
+
+Breaker (`tests/gauntlet/test_p2_t6t7_breaker.py`) and reviewer findings, fixed in the code above with
+regression tests in `test_framework.py`: `SessionOffset.parse` uses `re.fullmatch`; `EnterLong`/`Exit` refuse
+non-Decimal prices (`TypeError`); `load_plugin` raises `PluginError` for duplicate entry-point names, import
+failures, a non-class and a bad `kind`; `load_all()`, `ensure_defaults()` and `enabled()` isolate a broken
+plug-in (log and skip), while an explicit `instance(key)` still raises `PluginError`; a version bump in
+`ensure_defaults()` writes an `audit_log` row like `update()`; `enabled()` reads each config once. Ruling
+changes to two Breaker assertions: `load_all()` with a broken plug-in declared now returns the working ones
+(was: raises), and the audit count after a version bump is 6 (was 5).
+
 ---
 
 ### Task P2-T7: Market data service
@@ -4304,7 +4585,7 @@ git push origin HEAD:trunk
 - Consumes: `QuestradeClient.quotes/candles/candles_many` and `QuestradeApiError` (P1-T7; `candles()` raises `ValueError` for a window over 20,000 bars); `CandleRequest`, `QtQuote`, `QtSymbol` (P1-T7); `opening_bar` (P1-T8); `repository.upsert_intraday_candles`, `upsert_daily_candles` (P1-T9); models `UniverseSnapshot`, `Symbol`, `OpenBarStat`, `IntradayCandle`, `DailyCandle`, `JobRun` (P1-T2); the nightly job's `job_runs.detail` keys `source`, `fallback_from`, `fallback_stale`, `fallback_age_sessions` (P1-T9 fix round; re-read `trader/jobs/nightly.py` on trunk and use its exact key names); `UniverseMember`, `UniverseStatus`, `OpenBarStats`, `OpeningBars`, `MarketDataView` (P2-T6).
 - Produces:
   - `trader.market.data_service.QuoteClient` protocol (the three client methods above).
-  - `MarketDataService(factory, clock, calendar, client: QuoteClient)` implementing `MarketDataView`: `universe(session_date)` (DB; sorted by ticker; empty when the nightly job hasn't run), `universe_status(session_date)` (from the latest succeeded `nightly` job run for that session, else the snapshot rows' source; `UniverseStatus(None, None, False, None)` when there is no universe), `open_bar_stats(session_date)` (DB), `symbol_ids(tickers)` (DB), `quotes(symbol_ids) -> dict[int, QtQuote]` (always Questrade; re-keyed to DB ids), `opening_bars(session_date, symbol_ids=None) -> OpeningBars` (the cached 5-minute bar at the open first; the rest in one `candles_many` batch, which the client's rate limiter paces; each fetched, complete bar is cached; per-symbol reasons `no_questrade_id`, `questrade_error: HTTP <n>`, `no_bar_at_open`, `bar_not_complete`), `candles(symbol_id, start, end, interval)` (intraday: the cache when it holds every bar of the window, else Questrade then cache; `OneDay`: Questrade), `prior_close(symbol_id, session_date) -> Decimal | None` (`daily_candles` for the previous session, else Questrade `OneDay`, cached), `prior_closes(symbol_ids, session_date) -> dict[int, Decimal]` (DB only, for the pre-market scan).
+  - `MarketDataService(factory, clock, calendar, client: QuoteClient, *, fetch_deadline_s=FETCH_DEADLINE_S)` (`FETCH_DEADLINE_S = 45.0`) implementing `MarketDataView`: `universe(session_date)` (DB; sorted by ticker; empty when the nightly job hasn't run), `universe_status(session_date)` (from the latest succeeded `nightly` job run for that session, else the snapshot rows' source, and then a `fallback` universe counts as stale; `UniverseStatus(None, None, False, None)` when there is no universe), `open_bar_stats(session_date)` (DB), `symbol_ids(tickers)` (DB), `quotes(symbol_ids) -> dict[int, QtQuote]` (always Questrade; re-keyed to DB ids; the id map is cached for the process and an entry dropped when its quote is missing), `opening_bars(session_date, symbol_ids=None) -> OpeningBars` (the cached 5-minute bar at the open first; the rest in one `candles_many` batch, which the client's rate limiter paces; each fetched, complete bar is cached; the batch stops at the fetch deadline; per-symbol reasons `no_questrade_id`, `questrade_error: HTTP <n>`, `no_bar_at_open`, `bar_not_complete`, `timeout`), `candles(symbol_id, start, end, interval)` (`ValueError` for naive datetimes; intraday: the cache when it holds every bar of the window, else Questrade, caching only complete bars (end <= now) and returning a still-forming one uncached; `OneDay`: Questrade; on a `QuestradeApiError` the cached bars, possibly none, with a warning log), `prior_close(symbol_id, session_date) -> Decimal | None` (`daily_candles` for the previous session, else Questrade `OneDay`, cached), `prior_closes(symbol_ids, session_date) -> dict[int, Decimal]` (DB only, for the pre-market scan).
   - `tests/fakes_questrade.py`: `FakeQuestrade` (in-memory symbols, quotes, bars and per-id errors; records `calls` as `(method, count)`), used again by P2-T13 and P2-T15.
 
 - [x] **Step 1: Write the fake client and the failing tests**
@@ -4387,20 +4668,30 @@ class FakeQuestrade:
 
 `Trader/app/tests/market/test_data_service.py`:
 ```python
+import asyncio
+from bisect import bisect_left
+from collections.abc import Sequence
+from contextvars import ContextVar
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+import httpx
 import pytest
+import respx
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
+from structlog.testing import capture_logs
 
 from tests.factories import add_symbol
 from tests.fakes_questrade import FakeQuestrade
+from trader.adapters.questrade.auth import AccessToken
+from trader.adapters.questrade.client import QuestradeApiError, QuestradeClient, TokenBucket
+from trader.adapters.questrade.models import CandleRequest
 from trader.db import models as m
 from trader.market import repository as repo
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import FixedClock
-from trader.market.data_service import MarketDataService
+from trader.market.data_service import FETCH_DEADLINE_S, MarketDataService
 from trader.market.types import Candle, UniverseStatus
 
 pytestmark = pytest.mark.db
@@ -4409,11 +4700,20 @@ DAY = date(2026, 10, 6)
 PREV = date(2026, 10, 5)
 OPEN = CAL.session_open(DAY)  # 13:30Z
 AFTER_BAR = datetime(2026, 10, 6, 13, 35, 5, tzinfo=UTC)
+QT_BASE = "https://api05.iq.questrade.com/v1/"
 
 
 def c5(start: datetime, volume: int = 5000, close: str = "21.40") -> Candle:
-    return Candle(start, start + timedelta(minutes=5), Decimal("21.00"), Decimal("21.50"), Decimal("20.90"),
-                  Decimal(close), volume, None)
+    return Candle(
+        start,
+        start + timedelta(minutes=5),
+        Decimal("21.00"),
+        Decimal("21.50"),
+        Decimal("20.90"),
+        Decimal(close),
+        volume,
+        None,
+    )
 
 
 @pytest.fixture
@@ -4425,19 +4725,37 @@ def ids(db_factory: sessionmaker[Session]) -> dict[str, int]:
             out[t] = add_symbol(s, t, questrade_id=101 + i)
         out["DDD"] = add_symbol(s, "DDD")
         for sid in out.values():
-            s.add(m.UniverseSnapshot(session_date=DAY, symbol_id=sid, price=Decimal("20"), avg_volume=2_000_000,
-                                     atr14=Decimal("1.0000"), source="finviz"))
-            s.add(m.OpenBarStat(symbol_id=sid, session_date=DAY, avg_open_vol_14d=Decimal("1000.00"),
-                                atr14=Decimal("1.0000")))
+            s.add(
+                m.UniverseSnapshot(
+                    session_date=DAY,
+                    symbol_id=sid,
+                    price=Decimal("20"),
+                    avg_volume=2_000_000,
+                    atr14=Decimal("1.0000"),
+                    source="finviz",
+                )
+            )
+            s.add(
+                m.OpenBarStat(
+                    symbol_id=sid,
+                    session_date=DAY,
+                    avg_open_vol_14d=Decimal("1000.00"),
+                    atr14=Decimal("1.0000"),
+                )
+            )
         s.commit()
     return out
 
 
-def service(factory: sessionmaker[Session], qt: FakeQuestrade, now: datetime = AFTER_BAR) -> MarketDataService:
+def service(
+    factory: sessionmaker[Session], qt: FakeQuestrade, now: datetime = AFTER_BAR
+) -> MarketDataService:
     return MarketDataService(factory, FixedClock(now), CAL, qt)
 
 
-async def test_universe_and_stats_come_from_the_cache(db_factory: sessionmaker[Session], ids: dict[str, int]) -> None:
+async def test_universe_and_stats_come_from_the_cache(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
     qt = FakeQuestrade()
     svc = service(db_factory, qt)
     members = await svc.universe(DAY)
@@ -4450,19 +4768,36 @@ async def test_universe_and_stats_come_from_the_cache(db_factory: sessionmaker[S
     assert qt.calls == []
 
 
-async def test_universe_status_reads_the_nightly_detail(db_factory: sessionmaker[Session], ids: dict[str, int]) -> None:
+async def test_universe_status_reads_the_nightly_detail(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
     svc = service(db_factory, FakeQuestrade())
     assert await svc.universe_status(DAY) == UniverseStatus("finviz", None, False, None)
     with db_factory() as s:
-        s.add(m.JobRun(job="nightly", session_date=DAY, started_at=OPEN, finished_at=OPEN, status="succeeded",
-                       error=None, detail={"source": "fallback", "fallback_from": "2026-09-30",
-                                           "fallback_stale": True, "fallback_age_sessions": 4}))
+        s.add(
+            m.JobRun(
+                job="nightly",
+                session_date=DAY,
+                started_at=OPEN,
+                finished_at=OPEN,
+                status="succeeded",
+                error=None,
+                detail={
+                    "source": "fallback",
+                    "fallback_from": "2026-09-30",
+                    "fallback_stale": True,
+                    "fallback_age_sessions": 4,
+                },
+            )
+        )
         s.commit()
     assert await svc.universe_status(DAY) == UniverseStatus("fallback", date(2026, 9, 30), True, 4)
     assert await svc.universe_status(date(2026, 10, 7)) == UniverseStatus(None, None, False, None)
 
 
-async def test_opening_bars_use_the_cache_first(db_factory: sessionmaker[Session], ids: dict[str, int]) -> None:
+async def test_opening_bars_use_the_cache_first(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
     with db_factory() as s:
         repo.upsert_intraday_candles(s, ids["AAA"], "5m", [c5(OPEN)])
         s.commit()
@@ -4486,13 +4821,17 @@ async def test_opening_bars_fetch_the_rest_in_one_batch_and_cache_them(
     assert got.missing == {ids["CCC"]: "no_bar_at_open", ids["DDD"]: "no_questrade_id"}
     assert qt.calls == [("candles_many", 2)]  # BBB and CCC only, in one batch
     with db_factory() as s:
-        cached = s.execute(
-            select(m.IntradayCandle.volume).where(m.IntradayCandle.symbol_id == ids["BBB"])
-        ).scalars().all()
+        cached = (
+            s.execute(select(m.IntradayCandle.volume).where(m.IntradayCandle.symbol_id == ids["BBB"]))
+            .scalars()
+            .all()
+        )
     assert cached == [7000]
 
 
-async def test_opening_bars_report_api_errors_per_symbol(db_factory: sessionmaker[Session], ids: dict[str, int]) -> None:
+async def test_opening_bars_report_api_errors_per_symbol(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
     """Review Focus 4: a failing symbol is reported with a reason, never raised."""
     qt = FakeQuestrade()
     qt.errors[103] = 500
@@ -4514,7 +4853,9 @@ async def test_an_incomplete_opening_bar_is_neither_used_nor_cached(
         assert s.execute(select(m.IntradayCandle)).first() is None
 
 
-async def test_quotes_are_keyed_by_database_id(db_factory: sessionmaker[Session], ids: dict[str, int]) -> None:
+async def test_quotes_are_keyed_by_database_id(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
     qt = FakeQuestrade()
     qt.add_symbol("AAA", 101)
     qt.set_quote(101, "21.00", "21.02", "21.01", AFTER_BAR)
@@ -4524,15 +4865,41 @@ async def test_quotes_are_keyed_by_database_id(db_factory: sessionmaker[Session]
     assert qt.calls == [("quotes", 1)]
 
 
-async def test_prior_close_from_the_cache_then_questrade(db_factory: sessionmaker[Session], ids: dict[str, int]) -> None:
+async def test_prior_close_from_the_cache_then_questrade(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
     with db_factory() as s:
-        s.add(m.DailyCandle(symbol_id=ids["AAA"], date=PREV, open=Decimal("20"), high=Decimal("21"),
-                            low=Decimal("19"), close=Decimal("20.50"), volume=1, vwap=None))
+        s.add(
+            m.DailyCandle(
+                symbol_id=ids["AAA"],
+                date=PREV,
+                open=Decimal("20"),
+                high=Decimal("21"),
+                low=Decimal("19"),
+                close=Decimal("20.50"),
+                volume=1,
+                vwap=None,
+            )
+        )
         s.commit()
     qt = FakeQuestrade()
     prev_start = datetime(2026, 10, 5, 4, 0, tzinfo=UTC)  # 00:00 ET
-    qt.add_bars(102, "OneDay", [Candle(prev_start, prev_start + timedelta(days=1), Decimal("30"), Decimal("31"),
-                                       Decimal("29"), Decimal("30.25"), 1, None)])
+    qt.add_bars(
+        102,
+        "OneDay",
+        [
+            Candle(
+                prev_start,
+                prev_start + timedelta(days=1),
+                Decimal("30"),
+                Decimal("31"),
+                Decimal("29"),
+                Decimal("30.25"),
+                1,
+                None,
+            )
+        ],
+    )
     svc = service(db_factory, qt)
     assert await svc.prior_close(ids["AAA"], DAY) == Decimal("20.50")
     assert qt.calls == []
@@ -4544,16 +4911,217 @@ async def test_prior_close_from_the_cache_then_questrade(db_factory: sessionmake
     }
 
 
-async def test_candles_come_from_the_cache_when_complete(db_factory: sessionmaker[Session], ids: dict[str, int]) -> None:
+async def test_candles_come_from_the_cache_when_complete(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
     qt = FakeQuestrade()
     bars = [c5(OPEN + timedelta(minutes=5 * i)) for i in range(3)]
     qt.add_bars(101, "FiveMinutes", bars)
-    svc = service(db_factory, qt)
     end = OPEN + timedelta(minutes=15)
+    svc = service(db_factory, qt, now=end)  # all three bars complete (a forming bar is never cached)
     first = await svc.candles(ids["AAA"], OPEN, end, "FiveMinutes")
     second = await svc.candles(ids["AAA"], OPEN, end, "FiveMinutes")
     assert [c.start for c in first] == [c.start for c in second] == [b.start for b in bars]
     assert qt.calls == [("candles", 1)]  # the second read was served from the cache
+
+
+# --- P2-T7 attempt 2 regression tests (gauntlet findings) ---
+
+
+def _cached_starts(factory: sessionmaker[Session], sid: int) -> list[datetime]:
+    with factory() as s:
+        return list(
+            s.execute(
+                select(m.IntradayCandle.ts)
+                .where(m.IntradayCandle.symbol_id == sid)
+                .order_by(m.IntradayCandle.ts)
+            ).scalars()
+        )
+
+
+async def test_a_forming_bar_is_returned_but_never_cached(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
+    qt = FakeQuestrade()
+    bars = [c5(OPEN + timedelta(minutes=5 * i)) for i in range(3)]
+    qt.add_bars(101, "FiveMinutes", bars)
+    end = OPEN + timedelta(minutes=15)
+    mid = OPEN + timedelta(minutes=12)  # the 13:40 bar is still forming
+    got = await service(db_factory, qt, now=mid).candles(ids["AAA"], OPEN, end, "FiveMinutes")
+    assert [c.start for c in got] == [b.start for b in bars]
+    assert _cached_starts(db_factory, ids["AAA"]) == [bars[0].start, bars[1].start]
+
+
+async def test_candles_refuse_naive_datetimes(db_factory: sessionmaker[Session], ids: dict[str, int]) -> None:
+    svc = service(db_factory, FakeQuestrade())
+    naive = OPEN.replace(tzinfo=None)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        await svc.candles(ids["AAA"], naive, OPEN + timedelta(minutes=15), "FiveMinutes")
+    with pytest.raises(ValueError, match="timezone-aware"):
+        await svc.candles(ids["AAA"], OPEN, naive + timedelta(minutes=15), "FiveMinutes")
+
+
+async def test_a_questrade_error_serves_the_cached_bars_with_a_warning(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
+    """Review Focus 4: a failed fetch at a decision point returns what the cache has, never raises."""
+    with db_factory() as s:
+        repo.upsert_intraday_candles(s, ids["AAA"], "5m", [c5(OPEN)])
+        s.commit()
+    qt = FakeQuestrade()
+    qt.errors[101] = 503
+    qt.errors[102] = 503
+    svc = service(db_factory, qt, now=OPEN + timedelta(minutes=30))
+    end = OPEN + timedelta(minutes=15)
+    with capture_logs() as logs:
+        partial = await svc.candles(ids["AAA"], OPEN, end, "FiveMinutes")
+        empty = await svc.candles(ids["BBB"], OPEN, end, "FiveMinutes")
+    assert [c.start for c in partial] == [OPEN] and empty == []
+    warned = [e for e in logs if e["event"] == "market.candles_fetch_failed"]
+    assert [(e["log_level"], e["status"], e["served_from_cache"]) for e in warned] == [
+        ("warning", 503, 1),
+        ("warning", 503, 0),
+    ]
+    # No Questrade id: the cached bars, not a fetch.
+    with db_factory() as s:
+        repo.upsert_intraday_candles(s, ids["DDD"], "5m", [c5(OPEN)])
+        s.commit()
+    assert [c.start for c in await svc.candles(ids["DDD"], OPEN, end, "FiveMinutes")] == [OPEN]
+
+
+class HangingQuestrade(FakeQuestrade):
+    async def candles_many(
+        self, reqs: Sequence[CandleRequest]
+    ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
+        self.calls.append(("candles_many", len(reqs)))
+        await asyncio.Event().wait()  # never returns
+        raise AssertionError("unreachable")
+
+
+async def test_opening_bars_stop_at_the_deadline_and_report_timeouts(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
+    assert FETCH_DEADLINE_S <= 45  # well inside the 60 s budget for the 9:35 scan
+    with db_factory() as s:
+        repo.upsert_intraday_candles(s, ids["AAA"], "5m", [c5(OPEN)])
+        s.commit()
+    qt = HangingQuestrade()
+    svc = MarketDataService(db_factory, FixedClock(AFTER_BAR), CAL, qt, fetch_deadline_s=0.05)
+    with capture_logs() as logs:
+        got = await svc.opening_bars(DAY)
+    assert set(got.bars) == {ids["AAA"]}  # the cached bar is still served
+    assert got.missing == {ids["BBB"]: "timeout", ids["CCC"]: "timeout", ids["DDD"]: "no_questrade_id"}
+    assert [e["event"] for e in logs] == ["market.opening_bars_timeout"]
+
+
+async def test_universe_status_without_a_nightly_row_treats_a_fallback_as_stale(
+    db_factory: sessionmaker[Session],
+) -> None:
+    with db_factory() as s:
+        sid = add_symbol(s, "FALL", questrade_id=901)
+        for day, source in ((DAY, "fallback"), (PREV, "manual")):
+            s.add(
+                m.UniverseSnapshot(
+                    session_date=day, symbol_id=sid, price=None, avg_volume=None, atr14=None, source=source
+                )
+            )
+        s.add(
+            m.JobRun(
+                job="nightly",
+                session_date=DAY,
+                started_at=OPEN,
+                finished_at=OPEN,
+                status="failed",
+                error="boom",
+                detail={"source": "fallback", "fallback_stale": False},
+            )
+        )
+        s.commit()
+    svc = service(db_factory, FakeQuestrade())
+    assert await svc.universe_status(DAY) == UniverseStatus("fallback", None, True, None)
+    assert await svc.universe_status(PREV) == UniverseStatus("manual", None, False, None)
+
+
+async def test_quote_ids_are_cached_and_dropped_on_a_miss(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
+    qt = FakeQuestrade()
+    qt.add_symbol("AAA", 101)
+    qt.set_quote(101, "21.00", "21.02", "21.01", AFTER_BAR)
+    svc = service(db_factory, qt)
+    assert (await svc.quotes([ids["AAA"]]))[ids["AAA"]].ask == Decimal("21.02")
+    # AAA is re-mapped to a new Questrade id; the cached mapping misses once, then is re-read.
+    with db_factory() as s:
+        s.get(m.Symbol, ids["AAA"]).questrade_id = 111  # type: ignore[union-attr]
+        s.commit()
+    del qt.quote_map[101]
+    qt.set_quote(111, "22.00", "22.02", "22.01", AFTER_BAR)
+    assert await svc.quotes([ids["AAA"]]) == {}
+    assert (await svc.quotes([ids["AAA"]]))[ids["AAA"]].ask == Decimal("22.02")
+
+
+class _Tokens:
+    def access(self) -> AccessToken:
+        return AccessToken("tok", QT_BASE, AFTER_BAR + timedelta(minutes=30))
+
+    def force_refresh(self) -> AccessToken:
+        return self.access()
+
+
+_released_at: ContextVar[float] = ContextVar("released_at")
+
+
+@respx.mock
+async def test_a_universe_of_550_fetches_within_the_rate_limit_and_the_budget(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """~550 opening bars through the real client and TokenBucket on virtual time: <= 20 req/s, < 60 s.
+
+    The fake sleep jumps virtual time to the end of the wait without yielding, so each request's
+    virtual send time is the moment the bucket released it (kept per task in a ContextVar, because
+    the concurrent requests reach the HTTP layer in a different order).
+    """
+    n = 550
+    with db_factory() as s:
+        sids = [add_symbol(s, f"U{i:03d}", questrade_id=50_000 + i) for i in range(n)]
+        s.commit()
+    vt = {"now": 0.0}
+    sent: list[float] = []
+
+    async def virtual_sleep(seconds: float) -> None:
+        vt["now"] = max(vt["now"], vt["now"] + seconds)
+
+    class RecordingBucket(TokenBucket):
+        async def acquire(self) -> None:
+            await super().acquire()
+            _released_at.set(vt["now"])
+
+    bar = {
+        "start": OPEN.isoformat(),
+        "end": (OPEN + timedelta(minutes=5)).isoformat(),
+        "open": 20,
+        "high": 21,
+        "low": 19,
+        "close": 20.5,
+        "volume": 9000,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(_released_at.get())
+        return httpx.Response(200, json={"candles": [bar]})
+
+    respx.get(url__regex=rf"{QT_BASE}markets/candles/\d+").mock(side_effect=handler)
+    async with QuestradeClient(_Tokens(), FixedClock(AFTER_BAR), sleep=virtual_sleep) as client:
+        client._buckets["market"] = RecordingBucket(20.0, monotonic=lambda: vt["now"], sleep=virtual_sleep)
+        svc = MarketDataService(db_factory, FixedClock(AFTER_BAR), CAL, client)
+        got = await svc.opening_bars(DAY, sids)
+    assert got.missing == {} and len(got.bars) == n and len(sent) == n
+    times = sorted(sent)
+    busiest = max(bisect_left(times, t + 1.0 - 1e-6) - i for i, t in enumerate(times))
+    assert busiest <= 20, f"{busiest} requests inside one second"
+    span = times[-1] - times[0]
+    assert span == pytest.approx((n - 1) / 20.0)  # evenly spaced at 20/s: ~27.5 s
+    assert span < min(FETCH_DEADLINE_S, 60), f"took {span:.1f} s of virtual time"
 ```
 
 `Trader/app/tests/market/__init__.py` already exists (P1-T4).
@@ -4570,14 +5138,17 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'trader.market.data_se
 
 Every symbol_id here is trader.symbols.id. Questrade IDs stay at the client boundary: quotes() rewrites
 QtQuote.symbol_id to the database ID. Missing data is reported per symbol, never raised (Review Focus 4).
+Only complete bars (end <= clock.now()) are ever written to the candle cache.
 """
 
+import asyncio
 import dataclasses
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Protocol
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -4600,6 +5171,10 @@ from trader.market.types import (
 )
 
 OPENING_BAR = timedelta(minutes=5)
+OPENING_BAR_CODE = INTERVAL_CODES["FiveMinutes"]
+# One batch of opening bars must finish well inside the 60 s budget for the 9:35 scan: ~550 symbols at
+# 20 req/s take ~28 s. Symbols still outstanding at the deadline are reported as missing "timeout".
+FETCH_DEADLINE_S = 45.0
 STEP: dict[Interval, timedelta] = {
     "OneMinute": timedelta(minutes=1),
     "FiveMinutes": timedelta(minutes=5),
@@ -4608,10 +5183,14 @@ STEP: dict[Interval, timedelta] = {
     "OneDay": timedelta(days=1),
 }
 
+log = structlog.get_logger("market.data_service")
+
 
 class QuoteClient(Protocol):
     async def quotes(self, ids: Sequence[int]) -> list[QtQuote]: ...
-    async def candles(self, symbol_id: int, start: datetime, end: datetime, interval: Interval) -> list[Candle]: ...
+    async def candles(
+        self, symbol_id: int, start: datetime, end: datetime, interval: Interval
+    ) -> list[Candle]: ...
     async def candles_many(
         self, reqs: Sequence[CandleRequest]
     ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]: ...
@@ -4623,12 +5202,22 @@ def _from_row(row: m.IntradayCandle, step: timedelta) -> Candle:
 
 class MarketDataService:
     def __init__(
-        self, factory: sessionmaker[Session], clock: Clock, calendar: SessionCalendar, client: QuoteClient
+        self,
+        factory: sessionmaker[Session],
+        clock: Clock,
+        calendar: SessionCalendar,
+        client: QuoteClient,
+        *,
+        fetch_deadline_s: float = FETCH_DEADLINE_S,
     ) -> None:
         self._factory = factory
         self._clock = clock
         self._cal = calendar
         self._client = client
+        self._fetch_deadline_s = fetch_deadline_s
+        # symbols.id -> questrade_id for quotes(), kept for the process lifetime; an entry is dropped when
+        # Questrade returns no quote for it, so a re-mapped symbol is re-read from the database.
+        self._quote_qids: dict[int, int] = {}
 
     # --- cache-only reads ---------------------------------------------------------------------------------
     async def universe(self, session_date: date) -> list[UniverseMember]:
@@ -4648,17 +5237,25 @@ class MarketDataService:
         with self._factory() as s:
             detail = s.execute(
                 select(m.JobRun.detail)
-                .where(m.JobRun.job == "nightly", m.JobRun.session_date == session_date, m.JobRun.status == "succeeded")
+                .where(
+                    m.JobRun.job == "nightly",
+                    m.JobRun.session_date == session_date,
+                    m.JobRun.status == "succeeded",
+                )
                 .order_by(m.JobRun.id.desc())
                 .limit(1)
             ).scalar_one_or_none()
             source = s.execute(
-                select(m.UniverseSnapshot.source).where(m.UniverseSnapshot.session_date == session_date).limit(1)
+                select(m.UniverseSnapshot.source)
+                .where(m.UniverseSnapshot.session_date == session_date)
+                .limit(1)
             ).scalar_one_or_none()
         if source is None:
             return UniverseStatus(None, None, False, None)
         if not isinstance(detail, dict):
-            return UniverseStatus(source, None, False, None)
+            # No successful nightly run vouches for this universe. A fallback one of unknown age is
+            # treated as stale (conservative); a finviz or manual one is taken as it is.
+            return UniverseStatus(source, None, source == "fallback", None)
         fallback_from = detail.get("fallback_from")
         age = detail.get("fallback_age_sessions")
         return UniverseStatus(
@@ -4670,13 +5267,17 @@ class MarketDataService:
 
     async def open_bar_stats(self, session_date: date) -> dict[int, OpenBarStats]:
         with self._factory() as s:
-            rows = s.execute(select(m.OpenBarStat).where(m.OpenBarStat.session_date == session_date)).scalars()
+            rows = s.execute(
+                select(m.OpenBarStat).where(m.OpenBarStat.session_date == session_date)
+            ).scalars()
             return {r.symbol_id: OpenBarStats(r.symbol_id, r.avg_open_vol_14d, r.atr14) for r in rows}
 
     async def symbol_ids(self, tickers: Sequence[str]) -> dict[str, int]:
         with self._factory() as s:
             rows = s.execute(
-                select(m.Symbol.ticker, m.Symbol.id).where(m.Symbol.ticker.in_(list(tickers))).order_by(m.Symbol.id)
+                select(m.Symbol.ticker, m.Symbol.id)
+                .where(m.Symbol.ticker.in_(list(tickers)))
+                .order_by(m.Symbol.id)
             ).all()
         out: dict[str, int] = {}
         for ticker, sid in rows:
@@ -4704,7 +5305,11 @@ class MarketDataService:
 
     # --- live or fetched reads ----------------------------------------------------------------------------
     async def quotes(self, symbol_ids: Sequence[int]) -> dict[int, QtQuote]:
-        qids = self._questrade_ids(symbol_ids)
+        wanted = list(dict.fromkeys(symbol_ids))
+        uncached = [sid for sid in wanted if sid not in self._quote_qids]
+        if uncached:
+            self._quote_qids.update(self._questrade_ids(uncached))
+        qids = {sid: self._quote_qids[sid] for sid in wanted if sid in self._quote_qids}
         if not qids:
             return {}
         back = {qid: sid for sid, qid in qids.items()}
@@ -4713,6 +5318,8 @@ class MarketDataService:
             if q.symbol_id in back:
                 sid = back[q.symbol_id]
                 out[sid] = dataclasses.replace(q, symbol_id=sid)
+        for sid in qids.keys() - out.keys():  # a miss: the mapping may be stale, re-read it next time
+            self._quote_qids.pop(sid, None)
         return out
 
     async def opening_bars(self, session_date: date, symbol_ids: Sequence[int] | None = None) -> OpeningBars:
@@ -4723,7 +5330,7 @@ class MarketDataService:
         with self._factory() as s:
             cached = s.execute(
                 select(m.IntradayCandle).where(
-                    m.IntradayCandle.interval == "5m",
+                    m.IntradayCandle.interval == OPENING_BAR_CODE,
                     m.IntradayCandle.ts == open_,
                     m.IntradayCandle.symbol_id.in_(ids),
                 )
@@ -4735,41 +5342,67 @@ class MarketDataService:
         for sid in need:
             if sid not in qids:
                 missing[sid] = "no_questrade_id"
-        reqs = {sid: CandleRequest(qids[sid], open_, open_ + OPENING_BAR, "FiveMinutes") for sid in need if sid in qids}
-        results = await self._client.candles_many(list(reqs.values())) if reqs else {}
+        reqs = {
+            sid: CandleRequest(qids[sid], open_, open_ + OPENING_BAR, "FiveMinutes")
+            for sid in need
+            if sid in qids
+        }
+        results: dict[CandleRequest, list[Candle] | QuestradeApiError] = {}
+        if reqs:
+            try:
+                async with asyncio.timeout(self._fetch_deadline_s):
+                    results = await self._client.candles_many(list(reqs.values()))
+            except TimeoutError:
+                log.warning(
+                    "market.opening_bars_timeout",
+                    session_date=session_date.isoformat(),
+                    symbols=len(reqs),
+                    deadline_s=self._fetch_deadline_s,
+                )
         now = self._clock.now()
         fetched: dict[int, Candle] = {}
         for sid, req in reqs.items():
-            result = results[req]
-            if isinstance(result, QuestradeApiError):
+            result = results.get(req)
+            if result is None:
+                missing[sid] = "timeout"
+            elif isinstance(result, QuestradeApiError):
                 missing[sid] = f"questrade_error: HTTP {result.status}"
-                continue
-            found = opening_bar(result, self._cal, session_date)
-            if found is None:
-                missing[sid] = "no_bar_at_open"
-            elif found.end > now:
-                missing[sid] = "bar_not_complete"
             else:
-                fetched[sid] = found
+                found = opening_bar(result, self._cal, session_date)
+                if found is None:
+                    missing[sid] = "no_bar_at_open"
+                elif found.end > now:
+                    missing[sid] = "bar_not_complete"
+                else:
+                    fetched[sid] = found
         if fetched:
             with session_scope(self._factory) as s:
                 for sid, found in fetched.items():
-                    repo.upsert_intraday_candles(s, sid, "5m", [found])
+                    repo.upsert_intraday_candles(s, sid, OPENING_BAR_CODE, [found])
         bars.update(fetched)
         return OpeningBars(bars, missing)
 
-    async def candles(self, symbol_id: int, start: datetime, end: datetime, interval: Interval) -> list[Candle]:
-        qids = self._questrade_ids([symbol_id])
+    async def candles(
+        self, symbol_id: int, start: datetime, end: datetime, interval: Interval
+    ) -> list[Candle]:
+        """Bars with start in [start, end), from the cache when it holds them all, else from Questrade.
+
+        `start` and `end` must be timezone-aware (ValueError otherwise). A bar still forming
+        (end > clock.now()) is returned but never cached. On a Questrade error the cached bars (possibly
+        none) are returned and a warning logged, so a decision point never crashes (Review Focus 4).
+        """
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("candles() needs timezone-aware start and end")
         step = STEP[interval]
+        cached: list[Candle] = []
         if interval != "OneDay":
-            code = INTERVAL_CODES[interval]
             expected = int((end - start) / step)
             with self._factory() as s:
                 rows = s.execute(
                     select(m.IntradayCandle)
                     .where(
                         m.IntradayCandle.symbol_id == symbol_id,
-                        m.IntradayCandle.interval == code,
+                        m.IntradayCandle.interval == INTERVAL_CODES[interval],
                         m.IntradayCandle.ts >= start,
                         m.IntradayCandle.ts < end,
                     )
@@ -4778,19 +5411,35 @@ class MarketDataService:
                 cached = [_from_row(r, step) for r in rows]
             if expected > 0 and len(cached) >= expected:
                 return cached
+        qids = self._questrade_ids([symbol_id])
         if symbol_id not in qids:
-            return []
-        fetched = await self._client.candles(qids[symbol_id], start, end, interval)
-        if interval != "OneDay" and fetched:
-            with session_scope(self._factory) as s:
-                repo.upsert_intraday_candles(s, symbol_id, INTERVAL_CODES[interval], fetched)
+            return cached
+        try:
+            fetched = await self._client.candles(qids[symbol_id], start, end, interval)
+        except QuestradeApiError as exc:
+            log.warning(
+                "market.candles_fetch_failed",
+                symbol_id=symbol_id,
+                interval=interval,
+                status=exc.status,
+                served_from_cache=len(cached),
+            )
+            return cached
+        if interval != "OneDay":
+            now = self._clock.now()
+            complete = [c for c in fetched if max(c.end, c.start + step) <= now]
+            if complete:
+                with session_scope(self._factory) as s:
+                    repo.upsert_intraday_candles(s, symbol_id, INTERVAL_CODES[interval], complete)
         return fetched
 
     async def prior_close(self, symbol_id: int, session_date: date) -> Decimal | None:
         prev = self._cal.previous_session(session_date)
         with self._factory() as s:
             close = s.execute(
-                select(m.DailyCandle.close).where(m.DailyCandle.symbol_id == symbol_id, m.DailyCandle.date == prev)
+                select(m.DailyCandle.close).where(
+                    m.DailyCandle.symbol_id == symbol_id, m.DailyCandle.date == prev
+                )
             ).scalar_one_or_none()
         if close is not None:
             return close
@@ -4825,6 +5474,17 @@ git commit -m "P2-T7: market data service (cache first, Questrade second, per-sy
 git pull --rebase --autostash origin trunk
 git push origin HEAD:trunk
 ```
+
+- [x] **Step 6 (fix round, gauntlet attempt 2): gauntlet findings**
+
+Fixed in the code above with regression tests in `test_data_service.py`: `candles()` refuses naive datetimes,
+never caches a bar with end > now (it is returned uncached), and returns the cached bars with a warning on a
+Questrade error (Review Focus 4); `opening_bars()` stops the batch at `FETCH_DEADLINE_S` (45 s) and reports
+the outstanding symbols as `timeout`; `universe_status` treats a fallback universe with no succeeded nightly
+row as stale; `quotes()` caches the id map and drops an entry on a miss; the `"5m"` literal is
+`INTERVAL_CODES["FiveMinutes"]`. A universe-scale test runs ~550 opening bars through the real
+`QuestradeClient` and `TokenBucket` on virtual time: at most 20 requests in any second, ~27.5 s in all.
+`test_candles_come_from_the_cache_when_complete` now runs at 13:45 so that all three bars are complete.
 
 ---
 

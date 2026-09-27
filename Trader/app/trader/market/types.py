@@ -60,6 +60,6 @@ class OpenBarStats:
 @dataclass(frozen=True, slots=True)
 class OpeningBars:
     bars: dict[int, Candle]
-    missing: dict[
-        int, str
-    ]  # symbol_id -> reason, e.g. "no_bar_at_open" (Review Focus 4: reported, not raised)
+    # symbol_id -> reason (Review Focus 4: reported, not raised): "no_questrade_id", "no_bar_at_open",
+    # "bar_not_complete", "timeout" or "questrade_error: HTTP <status>".
+    missing: dict[int, str]

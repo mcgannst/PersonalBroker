@@ -2,14 +2,17 @@
 
 Every symbol_id here is trader.symbols.id. Questrade IDs stay at the client boundary: quotes() rewrites
 QtQuote.symbol_id to the database ID. Missing data is reported per symbol, never raised (Review Focus 4).
+Only complete bars (end <= clock.now()) are ever written to the candle cache.
 """
 
+import asyncio
 import dataclasses
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Protocol
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -32,6 +35,10 @@ from trader.market.types import (
 )
 
 OPENING_BAR = timedelta(minutes=5)
+OPENING_BAR_CODE = INTERVAL_CODES["FiveMinutes"]
+# One batch of opening bars must finish well inside the 60 s budget for the 9:35 scan: ~550 symbols at
+# 20 req/s take ~28 s. Symbols still outstanding at the deadline are reported as missing "timeout".
+FETCH_DEADLINE_S = 45.0
 STEP: dict[Interval, timedelta] = {
     "OneMinute": timedelta(minutes=1),
     "FiveMinutes": timedelta(minutes=5),
@@ -39,6 +46,8 @@ STEP: dict[Interval, timedelta] = {
     "OneHour": timedelta(hours=1),
     "OneDay": timedelta(days=1),
 }
+
+log = structlog.get_logger("market.data_service")
 
 
 class QuoteClient(Protocol):
@@ -57,12 +66,22 @@ def _from_row(row: m.IntradayCandle, step: timedelta) -> Candle:
 
 class MarketDataService:
     def __init__(
-        self, factory: sessionmaker[Session], clock: Clock, calendar: SessionCalendar, client: QuoteClient
+        self,
+        factory: sessionmaker[Session],
+        clock: Clock,
+        calendar: SessionCalendar,
+        client: QuoteClient,
+        *,
+        fetch_deadline_s: float = FETCH_DEADLINE_S,
     ) -> None:
         self._factory = factory
         self._clock = clock
         self._cal = calendar
         self._client = client
+        self._fetch_deadline_s = fetch_deadline_s
+        # symbols.id -> questrade_id for quotes(), kept for the process lifetime; an entry is dropped when
+        # Questrade returns no quote for it, so a re-mapped symbol is re-read from the database.
+        self._quote_qids: dict[int, int] = {}
 
     # --- cache-only reads ---------------------------------------------------------------------------------
     async def universe(self, session_date: date) -> list[UniverseMember]:
@@ -98,7 +117,9 @@ class MarketDataService:
         if source is None:
             return UniverseStatus(None, None, False, None)
         if not isinstance(detail, dict):
-            return UniverseStatus(source, None, False, None)
+            # No successful nightly run vouches for this universe. A fallback one of unknown age is
+            # treated as stale (conservative); a finviz or manual one is taken as it is.
+            return UniverseStatus(source, None, source == "fallback", None)
         fallback_from = detail.get("fallback_from")
         age = detail.get("fallback_age_sessions")
         return UniverseStatus(
@@ -148,7 +169,11 @@ class MarketDataService:
 
     # --- live or fetched reads ----------------------------------------------------------------------------
     async def quotes(self, symbol_ids: Sequence[int]) -> dict[int, QtQuote]:
-        qids = self._questrade_ids(symbol_ids)
+        wanted = list(dict.fromkeys(symbol_ids))
+        uncached = [sid for sid in wanted if sid not in self._quote_qids]
+        if uncached:
+            self._quote_qids.update(self._questrade_ids(uncached))
+        qids = {sid: self._quote_qids[sid] for sid in wanted if sid in self._quote_qids}
         if not qids:
             return {}
         back = {qid: sid for sid, qid in qids.items()}
@@ -157,6 +182,8 @@ class MarketDataService:
             if q.symbol_id in back:
                 sid = back[q.symbol_id]
                 out[sid] = dataclasses.replace(q, symbol_id=sid)
+        for sid in qids.keys() - out.keys():  # a miss: the mapping may be stale, re-read it next time
+            self._quote_qids.pop(sid, None)
         return out
 
     async def opening_bars(self, session_date: date, symbol_ids: Sequence[int] | None = None) -> OpeningBars:
@@ -167,7 +194,7 @@ class MarketDataService:
         with self._factory() as s:
             cached = s.execute(
                 select(m.IntradayCandle).where(
-                    m.IntradayCandle.interval == "5m",
+                    m.IntradayCandle.interval == OPENING_BAR_CODE,
                     m.IntradayCandle.ts == open_,
                     m.IntradayCandle.symbol_id.in_(ids),
                 )
@@ -184,42 +211,62 @@ class MarketDataService:
             for sid in need
             if sid in qids
         }
-        results = await self._client.candles_many(list(reqs.values())) if reqs else {}
+        results: dict[CandleRequest, list[Candle] | QuestradeApiError] = {}
+        if reqs:
+            try:
+                async with asyncio.timeout(self._fetch_deadline_s):
+                    results = await self._client.candles_many(list(reqs.values()))
+            except TimeoutError:
+                log.warning(
+                    "market.opening_bars_timeout",
+                    session_date=session_date.isoformat(),
+                    symbols=len(reqs),
+                    deadline_s=self._fetch_deadline_s,
+                )
         now = self._clock.now()
         fetched: dict[int, Candle] = {}
         for sid, req in reqs.items():
-            result = results[req]
-            if isinstance(result, QuestradeApiError):
+            result = results.get(req)
+            if result is None:
+                missing[sid] = "timeout"
+            elif isinstance(result, QuestradeApiError):
                 missing[sid] = f"questrade_error: HTTP {result.status}"
-                continue
-            found = opening_bar(result, self._cal, session_date)
-            if found is None:
-                missing[sid] = "no_bar_at_open"
-            elif found.end > now:
-                missing[sid] = "bar_not_complete"
             else:
-                fetched[sid] = found
+                found = opening_bar(result, self._cal, session_date)
+                if found is None:
+                    missing[sid] = "no_bar_at_open"
+                elif found.end > now:
+                    missing[sid] = "bar_not_complete"
+                else:
+                    fetched[sid] = found
         if fetched:
             with session_scope(self._factory) as s:
                 for sid, found in fetched.items():
-                    repo.upsert_intraday_candles(s, sid, "5m", [found])
+                    repo.upsert_intraday_candles(s, sid, OPENING_BAR_CODE, [found])
         bars.update(fetched)
         return OpeningBars(bars, missing)
 
     async def candles(
         self, symbol_id: int, start: datetime, end: datetime, interval: Interval
     ) -> list[Candle]:
-        qids = self._questrade_ids([symbol_id])
+        """Bars with start in [start, end), from the cache when it holds them all, else from Questrade.
+
+        `start` and `end` must be timezone-aware (ValueError otherwise). A bar still forming
+        (end > clock.now()) is returned but never cached. On a Questrade error the cached bars (possibly
+        none) are returned and a warning logged, so a decision point never crashes (Review Focus 4).
+        """
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("candles() needs timezone-aware start and end")
         step = STEP[interval]
+        cached: list[Candle] = []
         if interval != "OneDay":
-            code = INTERVAL_CODES[interval]
             expected = int((end - start) / step)
             with self._factory() as s:
                 rows = s.execute(
                     select(m.IntradayCandle)
                     .where(
                         m.IntradayCandle.symbol_id == symbol_id,
-                        m.IntradayCandle.interval == code,
+                        m.IntradayCandle.interval == INTERVAL_CODES[interval],
                         m.IntradayCandle.ts >= start,
                         m.IntradayCandle.ts < end,
                     )
@@ -228,12 +275,26 @@ class MarketDataService:
                 cached = [_from_row(r, step) for r in rows]
             if expected > 0 and len(cached) >= expected:
                 return cached
+        qids = self._questrade_ids([symbol_id])
         if symbol_id not in qids:
-            return []
-        fetched = await self._client.candles(qids[symbol_id], start, end, interval)
-        if interval != "OneDay" and fetched:
-            with session_scope(self._factory) as s:
-                repo.upsert_intraday_candles(s, symbol_id, INTERVAL_CODES[interval], fetched)
+            return cached
+        try:
+            fetched = await self._client.candles(qids[symbol_id], start, end, interval)
+        except QuestradeApiError as exc:
+            log.warning(
+                "market.candles_fetch_failed",
+                symbol_id=symbol_id,
+                interval=interval,
+                status=exc.status,
+                served_from_cache=len(cached),
+            )
+            return cached
+        if interval != "OneDay":
+            now = self._clock.now()
+            complete = [c for c in fetched if max(c.end, c.start + step) <= now]
+            if complete:
+                with session_scope(self._factory) as s:
+                    repo.upsert_intraday_candles(s, symbol_id, INTERVAL_CODES[interval], complete)
         return fetched
 
     async def prior_close(self, symbol_id: int, session_date: date) -> Decimal | None:

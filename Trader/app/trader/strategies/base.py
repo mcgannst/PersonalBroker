@@ -20,7 +20,7 @@ from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock
 from trader.market.types import Candle, Interval, OpenBarStats, OpeningBars, UniverseMember, UniverseStatus
 
-_OFFSET = re.compile(r"^(open|close)(?:([+-])(\d{1,3})m(?:(\d{1,2})s)?)?$")
+_OFFSET = re.compile(r"(open|close)(?:([+-])(\d{1,3})m(?:(\d{1,2})s)?)?")
 MAX_OFFSET_SECONDS = 12 * 3600
 
 
@@ -33,7 +33,7 @@ class SessionOffset:
 
     @classmethod
     def parse(cls, text: str) -> Self:
-        m = _OFFSET.match(text)
+        m = _OFFSET.fullmatch(text)  # fullmatch: `$` would accept a trailing newline
         if m is None:
             raise ValueError(f"not a session offset: {text!r} (e.g. 'open+5m', 'close-30m', 'open+5m5s')")
         name, sign, minutes, secs = m.groups()
@@ -62,6 +62,18 @@ class ScheduledEvent:
     at: SessionOffset
 
 
+def _require_decimals(intent: object, names: tuple[str, ...], optional: tuple[str, ...] = ()) -> None:
+    """Global Constraints: never float for money. Intents are where a plug-in's prices enter the engine."""
+    for name in names:
+        value = getattr(intent, name)
+        if value is None and name in optional:
+            continue
+        if not isinstance(value, Decimal):
+            raise TypeError(
+                f"{type(intent).__name__}.{name} must be a Decimal, not {type(value).__name__} ({value!r})"
+            )
+
+
 @dataclass(frozen=True)
 class EnterLong:
     symbol_id: int
@@ -72,6 +84,9 @@ class EnterLong:
     reason: str
     evidence: Mapping[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        _require_decimals(self, ("stop", "limit", "stop_loss"), optional=("stop", "limit"))
+
 
 @dataclass(frozen=True)
 class Exit:
@@ -79,6 +94,9 @@ class Exit:
     order_type: Literal["market", "stop"]
     stop: Decimal | None
     reason: str
+
+    def __post_init__(self) -> None:
+        _require_decimals(self, ("stop",), optional=("stop",))
 
 
 @dataclass(frozen=True)
@@ -91,6 +109,11 @@ Intent = EnterLong | Exit | Cancel
 
 
 def intent_to_json(intent: Intent) -> dict[str, Any]:
+    """The intent's order fields as JSON (Decimals as strings).
+
+    `EnterLong.evidence` is deliberately left out: the engine stores it separately (with the signal), so
+    this dict stays the order-shaped part that is compared and replayed.
+    """
     if isinstance(intent, EnterLong):
         return {
             "type": "enter_long",

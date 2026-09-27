@@ -5,9 +5,10 @@ from importlib.metadata import EntryPoint
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
+from structlog.testing import capture_logs
 
 from tests.strategies.demo_plugin import DemoParams, DemoStrategy
 from trader.db import models as m
@@ -39,7 +40,8 @@ def test_session_offset_parses_and_prints(text: str, anchor: str, seconds: int) 
 
 
 @pytest.mark.parametrize(
-    "text", ["noon+5m", "open+5", "open+5m60s", "close*2m", "", "open +5m", "open+5000m"]
+    "text",
+    ["noon+5m", "open+5", "open+5m60s", "close*2m", "", "open +5m", "open+5000m", "open+5m\n", "close\n"],
 )
 def test_session_offset_rejects_garbage(text: str) -> None:
     with pytest.raises(ValueError):
@@ -175,3 +177,142 @@ def test_instance_carries_validated_params(registry: StrategyRegistry) -> None:
 def test_current_before_defaults_is_a_key_error(db_factory: sessionmaker[Session]) -> None:
     with pytest.raises(KeyError):
         StrategyRegistry(db_factory, CLOCK, plugins={"demo": DemoStrategy}).current("demo")
+
+
+# --- P2-T6 attempt 2 regression tests (gauntlet findings) ---
+
+
+class RequiredParams(BaseModel):
+    must: int  # no default: the model can't produce default settings
+
+
+class NoDefaults(DemoStrategy):
+    key = "no_defaults"
+    params_model = RequiredParams  # type: ignore[assignment]
+
+
+class Crashy(DemoStrategy):
+    key = "crashy"
+
+    def __init__(self, params: DemoParams | None = None) -> None:
+        raise RuntimeError("boom in __init__")
+
+
+class BadKind(DemoStrategy):
+    key = "bad_kind"
+    kind = "exit"  # type: ignore[assignment]
+
+
+class DemoV2(DemoStrategy):
+    version = "0.2.0"
+
+
+def test_intents_refuse_non_decimal_prices() -> None:
+    """Finding: a float price must never enter the engine (Global Constraints: never float for money)."""
+    with pytest.raises(TypeError, match="stop_loss"):
+        EnterLong(1, "stop", Decimal("20.01"), None, 19.91, "orb")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="limit"):
+        EnterLong(1, "limit", None, 20, Decimal("19.91"), "orb")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="stop_loss"):
+        EnterLong(1, "market", None, None, None, "orb")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="stop"):
+        Exit(1, "stop", 19.5, "trail")  # type: ignore[arg-type]
+    assert Exit(1, "market", None, "flatten").stop is None
+    assert EnterLong(1, "market", None, None, Decimal("19.91"), "orb").limit is None
+
+
+def test_load_plugin_wraps_every_failure_in_plugin_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    here = "tests.strategies.test_framework"
+    _patch_entry_points(
+        monkeypatch,
+        ("demo", "tests.strategies.demo_plugin:DemoStrategy"),
+        ("demo", f"{here}:DemoV2"),
+        ("gone", "tests.strategies.no_such_module:Nope"),
+        ("bad_kind", f"{here}:BadKind"),
+        ("func", f"{here}:_revisions"),
+    )
+    with pytest.raises(PluginError, match="more than once"):
+        reg.load_plugin("demo")
+    with pytest.raises(PluginError, match="failed to load: ModuleNotFoundError"):
+        reg.load_plugin("gone")
+    with pytest.raises(PluginError, match="kind"):
+        reg.load_plugin("bad_kind")
+    with pytest.raises(PluginError, match="not a class"):
+        reg.load_plugin("func")
+
+
+def test_the_same_entry_point_declared_twice_is_not_a_duplicate(monkeypatch: pytest.MonkeyPatch) -> None:
+    same = "tests.strategies.demo_plugin:DemoStrategy"
+    _patch_entry_points(monkeypatch, ("demo", same), ("demo", same))
+    assert reg.load_plugin("demo") is DemoStrategy
+
+
+def test_load_all_skips_and_logs_broken_plugins(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_entry_points(
+        monkeypatch,
+        ("demo", "tests.strategies.demo_plugin:DemoStrategy"),
+        ("gone", "tests.strategies.no_such_module:Nope"),
+        ("bad_kind", "tests.strategies.test_framework:BadKind"),
+    )
+    with capture_logs() as logs:
+        assert reg.load_all() == {"demo": DemoStrategy}
+    failed = sorted(e["plugin"] for e in logs if e["event"] == "strategy.plugin_failed")
+    assert failed == ["bad_kind", "gone"]
+    assert all(e["log_level"] == "error" for e in logs)
+
+
+def _events(factory: sessionmaker[Session]) -> list[m.EventLog]:
+    with factory() as s:
+        return list(s.execute(select(m.EventLog).order_by(m.EventLog.id)).scalars())
+
+
+@pytest.mark.db
+def test_a_broken_plugin_is_skipped_and_the_others_keep_running(db_factory: sessionmaker[Session]) -> None:
+    r = StrategyRegistry(
+        db_factory, CLOCK, plugins={"demo": DemoStrategy, "no_defaults": NoDefaults, "crashy": Crashy}
+    )
+    with capture_logs() as logs:
+        r.ensure_defaults()  # no_defaults fails, the others get revision 1
+        assert r.current("demo").revision == 1 and r.current("crashy").revision == 1
+        running = r.enabled()  # no_defaults has no settings, crashy won't start: both skipped
+    assert [cfg.strategy_key for _, cfg in running] == ["demo"]
+    assert isinstance(running[0][0], DemoStrategy)
+    assert sorted((e["plugin"], e["stage"]) for e in logs if e["event"] == "strategy.plugin_failed") == [
+        ("crashy", "enabled"),
+        ("no_defaults", "enabled"),
+        ("no_defaults", "ensure_defaults"),
+    ]
+    events = _events(db_factory)
+    assert {(e.level, e.source) for e in events} == {("error", "strategies.registry")}
+    assert sorted(e.data["strategy"] for e in events) == ["crashy", "no_defaults", "no_defaults"]
+    with pytest.raises(PluginError, match="crashy"):  # an explicit request still fails loudly
+        r.instance("crashy")
+
+
+@pytest.mark.db
+def test_a_version_bump_is_an_audited_revision(db_factory: sessionmaker[Session]) -> None:
+    StrategyRegistry(db_factory, CLOCK, plugins={"demo": DemoStrategy}).ensure_defaults()
+    r2 = StrategyRegistry(db_factory, CLOCK, plugins={"demo": DemoV2})
+    r2.ensure_defaults(actor="deploy")
+    r2.ensure_defaults(actor="deploy")  # no change, no revision, no audit
+    with db_factory() as s:
+        audits = s.execute(select(m.AuditLog)).scalars().all()
+    assert len(audits) == 1
+    a = audits[0]
+    assert (a.actor, a.action) == ("deploy", "strategy.update:demo")
+    assert (a.before["version"], a.before["revision"]) == ("0.1.0", 1)
+    assert (a.after["version"], a.after["revision"]) == ("0.2.0", 2)
+
+
+@pytest.mark.db
+def test_enabled_reads_each_config_once(registry: StrategyRegistry, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    real = registry.current
+
+    def counting(key: str) -> reg.StrategyConfigView:
+        calls.append(key)
+        return real(key)
+
+    monkeypatch.setattr(registry, "current", counting)
+    [(strategy, cfg)] = registry.enabled()
+    assert calls == ["demo"] and cfg.revision == 1 and isinstance(strategy, DemoStrategy)

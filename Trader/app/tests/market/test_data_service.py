@@ -1,17 +1,27 @@
+import asyncio
+from bisect import bisect_left
+from collections.abc import Sequence
+from contextvars import ContextVar
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+import httpx
 import pytest
+import respx
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
+from structlog.testing import capture_logs
 
 from tests.factories import add_symbol
 from tests.fakes_questrade import FakeQuestrade
+from trader.adapters.questrade.auth import AccessToken
+from trader.adapters.questrade.client import QuestradeApiError, QuestradeClient, TokenBucket
+from trader.adapters.questrade.models import CandleRequest
 from trader.db import models as m
 from trader.market import repository as repo
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import FixedClock
-from trader.market.data_service import MarketDataService
+from trader.market.data_service import FETCH_DEADLINE_S, MarketDataService
 from trader.market.types import Candle, UniverseStatus
 
 pytestmark = pytest.mark.db
@@ -20,6 +30,7 @@ DAY = date(2026, 10, 6)
 PREV = date(2026, 10, 5)
 OPEN = CAL.session_open(DAY)  # 13:30Z
 AFTER_BAR = datetime(2026, 10, 6, 13, 35, 5, tzinfo=UTC)
+QT_BASE = "https://api05.iq.questrade.com/v1/"
 
 
 def c5(start: datetime, volume: int = 5000, close: str = "21.40") -> Candle:
@@ -236,9 +247,208 @@ async def test_candles_come_from_the_cache_when_complete(
     qt = FakeQuestrade()
     bars = [c5(OPEN + timedelta(minutes=5 * i)) for i in range(3)]
     qt.add_bars(101, "FiveMinutes", bars)
-    svc = service(db_factory, qt)
     end = OPEN + timedelta(minutes=15)
+    svc = service(db_factory, qt, now=end)  # all three bars complete (a forming bar is never cached)
     first = await svc.candles(ids["AAA"], OPEN, end, "FiveMinutes")
     second = await svc.candles(ids["AAA"], OPEN, end, "FiveMinutes")
     assert [c.start for c in first] == [c.start for c in second] == [b.start for b in bars]
     assert qt.calls == [("candles", 1)]  # the second read was served from the cache
+
+
+# --- P2-T7 attempt 2 regression tests (gauntlet findings) ---
+
+
+def _cached_starts(factory: sessionmaker[Session], sid: int) -> list[datetime]:
+    with factory() as s:
+        return list(
+            s.execute(
+                select(m.IntradayCandle.ts)
+                .where(m.IntradayCandle.symbol_id == sid)
+                .order_by(m.IntradayCandle.ts)
+            ).scalars()
+        )
+
+
+async def test_a_forming_bar_is_returned_but_never_cached(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
+    qt = FakeQuestrade()
+    bars = [c5(OPEN + timedelta(minutes=5 * i)) for i in range(3)]
+    qt.add_bars(101, "FiveMinutes", bars)
+    end = OPEN + timedelta(minutes=15)
+    mid = OPEN + timedelta(minutes=12)  # the 13:40 bar is still forming
+    got = await service(db_factory, qt, now=mid).candles(ids["AAA"], OPEN, end, "FiveMinutes")
+    assert [c.start for c in got] == [b.start for b in bars]
+    assert _cached_starts(db_factory, ids["AAA"]) == [bars[0].start, bars[1].start]
+
+
+async def test_candles_refuse_naive_datetimes(db_factory: sessionmaker[Session], ids: dict[str, int]) -> None:
+    svc = service(db_factory, FakeQuestrade())
+    naive = OPEN.replace(tzinfo=None)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        await svc.candles(ids["AAA"], naive, OPEN + timedelta(minutes=15), "FiveMinutes")
+    with pytest.raises(ValueError, match="timezone-aware"):
+        await svc.candles(ids["AAA"], OPEN, naive + timedelta(minutes=15), "FiveMinutes")
+
+
+async def test_a_questrade_error_serves_the_cached_bars_with_a_warning(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
+    """Review Focus 4: a failed fetch at a decision point returns what the cache has, never raises."""
+    with db_factory() as s:
+        repo.upsert_intraday_candles(s, ids["AAA"], "5m", [c5(OPEN)])
+        s.commit()
+    qt = FakeQuestrade()
+    qt.errors[101] = 503
+    qt.errors[102] = 503
+    svc = service(db_factory, qt, now=OPEN + timedelta(minutes=30))
+    end = OPEN + timedelta(minutes=15)
+    with capture_logs() as logs:
+        partial = await svc.candles(ids["AAA"], OPEN, end, "FiveMinutes")
+        empty = await svc.candles(ids["BBB"], OPEN, end, "FiveMinutes")
+    assert [c.start for c in partial] == [OPEN] and empty == []
+    warned = [e for e in logs if e["event"] == "market.candles_fetch_failed"]
+    assert [(e["log_level"], e["status"], e["served_from_cache"]) for e in warned] == [
+        ("warning", 503, 1),
+        ("warning", 503, 0),
+    ]
+    # No Questrade id: the cached bars, not a fetch.
+    with db_factory() as s:
+        repo.upsert_intraday_candles(s, ids["DDD"], "5m", [c5(OPEN)])
+        s.commit()
+    assert [c.start for c in await svc.candles(ids["DDD"], OPEN, end, "FiveMinutes")] == [OPEN]
+
+
+class HangingQuestrade(FakeQuestrade):
+    async def candles_many(
+        self, reqs: Sequence[CandleRequest]
+    ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
+        self.calls.append(("candles_many", len(reqs)))
+        await asyncio.Event().wait()  # never returns
+        raise AssertionError("unreachable")
+
+
+async def test_opening_bars_stop_at_the_deadline_and_report_timeouts(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
+    assert FETCH_DEADLINE_S <= 45  # well inside the 60 s budget for the 9:35 scan
+    with db_factory() as s:
+        repo.upsert_intraday_candles(s, ids["AAA"], "5m", [c5(OPEN)])
+        s.commit()
+    qt = HangingQuestrade()
+    svc = MarketDataService(db_factory, FixedClock(AFTER_BAR), CAL, qt, fetch_deadline_s=0.05)
+    with capture_logs() as logs:
+        got = await svc.opening_bars(DAY)
+    assert set(got.bars) == {ids["AAA"]}  # the cached bar is still served
+    assert got.missing == {ids["BBB"]: "timeout", ids["CCC"]: "timeout", ids["DDD"]: "no_questrade_id"}
+    assert [e["event"] for e in logs] == ["market.opening_bars_timeout"]
+
+
+async def test_universe_status_without_a_nightly_row_treats_a_fallback_as_stale(
+    db_factory: sessionmaker[Session],
+) -> None:
+    with db_factory() as s:
+        sid = add_symbol(s, "FALL", questrade_id=901)
+        for day, source in ((DAY, "fallback"), (PREV, "manual")):
+            s.add(
+                m.UniverseSnapshot(
+                    session_date=day, symbol_id=sid, price=None, avg_volume=None, atr14=None, source=source
+                )
+            )
+        s.add(
+            m.JobRun(
+                job="nightly",
+                session_date=DAY,
+                started_at=OPEN,
+                finished_at=OPEN,
+                status="failed",
+                error="boom",
+                detail={"source": "fallback", "fallback_stale": False},
+            )
+        )
+        s.commit()
+    svc = service(db_factory, FakeQuestrade())
+    assert await svc.universe_status(DAY) == UniverseStatus("fallback", None, True, None)
+    assert await svc.universe_status(PREV) == UniverseStatus("manual", None, False, None)
+
+
+async def test_quote_ids_are_cached_and_dropped_on_a_miss(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
+    qt = FakeQuestrade()
+    qt.add_symbol("AAA", 101)
+    qt.set_quote(101, "21.00", "21.02", "21.01", AFTER_BAR)
+    svc = service(db_factory, qt)
+    assert (await svc.quotes([ids["AAA"]]))[ids["AAA"]].ask == Decimal("21.02")
+    # AAA is re-mapped to a new Questrade id; the cached mapping misses once, then is re-read.
+    with db_factory() as s:
+        s.get(m.Symbol, ids["AAA"]).questrade_id = 111  # type: ignore[union-attr]
+        s.commit()
+    del qt.quote_map[101]
+    qt.set_quote(111, "22.00", "22.02", "22.01", AFTER_BAR)
+    assert await svc.quotes([ids["AAA"]]) == {}
+    assert (await svc.quotes([ids["AAA"]]))[ids["AAA"]].ask == Decimal("22.02")
+
+
+class _Tokens:
+    def access(self) -> AccessToken:
+        return AccessToken("tok", QT_BASE, AFTER_BAR + timedelta(minutes=30))
+
+    def force_refresh(self) -> AccessToken:
+        return self.access()
+
+
+_released_at: ContextVar[float] = ContextVar("released_at")
+
+
+@respx.mock
+async def test_a_universe_of_550_fetches_within_the_rate_limit_and_the_budget(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """~550 opening bars through the real client and TokenBucket on virtual time: <= 20 req/s, < 60 s.
+
+    The fake sleep jumps virtual time to the end of the wait without yielding, so each request's
+    virtual send time is the moment the bucket released it (kept per task in a ContextVar, because
+    the concurrent requests reach the HTTP layer in a different order).
+    """
+    n = 550
+    with db_factory() as s:
+        sids = [add_symbol(s, f"U{i:03d}", questrade_id=50_000 + i) for i in range(n)]
+        s.commit()
+    vt = {"now": 0.0}
+    sent: list[float] = []
+
+    async def virtual_sleep(seconds: float) -> None:
+        vt["now"] = max(vt["now"], vt["now"] + seconds)
+
+    class RecordingBucket(TokenBucket):
+        async def acquire(self) -> None:
+            await super().acquire()
+            _released_at.set(vt["now"])
+
+    bar = {
+        "start": OPEN.isoformat(),
+        "end": (OPEN + timedelta(minutes=5)).isoformat(),
+        "open": 20,
+        "high": 21,
+        "low": 19,
+        "close": 20.5,
+        "volume": 9000,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(_released_at.get())
+        return httpx.Response(200, json={"candles": [bar]})
+
+    respx.get(url__regex=rf"{QT_BASE}markets/candles/\d+").mock(side_effect=handler)
+    async with QuestradeClient(_Tokens(), FixedClock(AFTER_BAR), sleep=virtual_sleep) as client:
+        client._buckets["market"] = RecordingBucket(20.0, monotonic=lambda: vt["now"], sleep=virtual_sleep)
+        svc = MarketDataService(db_factory, FixedClock(AFTER_BAR), CAL, client)
+        got = await svc.opening_bars(DAY, sids)
+    assert got.missing == {} and len(got.bars) == n and len(sent) == n
+    times = sorted(sent)
+    busiest = max(bisect_left(times, t + 1.0 - 1e-6) - i for i, t in enumerate(times))
+    assert busiest <= 20, f"{busiest} requests inside one second"
+    span = times[-1] - times[0]
+    assert span == pytest.approx((n - 1) / 20.0)  # evenly spaced at 20/s: ~27.5 s
+    assert span < min(FETCH_DEADLINE_S, 60), f"took {span:.1f} s of virtual time"

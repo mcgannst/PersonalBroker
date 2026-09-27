@@ -20,7 +20,7 @@
 - [x] Create the **`trader_dev` database** and roles `trader_dev_owner` / `trader_dev_app` on `192.168.68.86`. Done 2026-09-26: schema `trader` owned by `trader_dev_owner`; the app role gets read/write on new tables through default privileges and can't create or drop tables. Connection URLs are in `docker/.env.dev` (git-ignored).
 - [x] Add a **Pi-hole v6 Local DNS record**: `trader-dev.sunspinner.ca` → `192.168.68.73`. Done 2026-09-26 on Pi-hole (Proxmox LXC 102, `192.168.68.84`); resolves correctly.
 - [x] Add an **NPM proxy host** for `trader-dev.sunspinner.ca`, with an Access List allowing only `192.168.68.0/22` (the home LAN is a /22, not a /24). Done 2026-09-26: proxy host 4 → `http://trader-dev:8000`, access list 1 "Home LAN only", websockets on, block exploits on. Returns 502 until the container exists.
-- [ ] Add the **TLS certificate** for `trader-dev.sunspinner.ca` in NPM (edit proxy host 4 → SSL → request new → DNS challenge, Cloudflare), then turn on Force SSL and HTTP/2. The NPM API doesn't expose the stored Cloudflare token, so this needs the Cloudflare API token or doing it in the NPM UI.
+- [x] Add the **TLS certificate** for `trader-dev.sunspinner.ca` in NPM. Done 2026-09-26: Let's Encrypt certificate 7 (Cloudflare DNS challenge, zone-scoped DNS-edit token stored in NPM for auto-renewal), expires 2026-12-26. Force SSL and HTTP/2 are on; HTTP redirects to HTTPS. Don't delete that Cloudflare token, because NPM needs it to renew.
 - [x] Confirm the existing Postgres **backup** will include the new `trader_dev` database. Yes: the Postgres host is backed up as a whole Proxmox VM (per Stephen, 2026-08-31, recorded in RetirementPlanner's TODO), so every database on it is included.
 
 ## Separate security note (FinanceTracker, not Trader)

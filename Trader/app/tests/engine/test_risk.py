@@ -166,3 +166,12 @@ def test_exits_and_cancels_of_unknown_things_are_invalid() -> None:
     assert isinstance(RISK.evaluate(Cancel(999, "x"), ctx()), Rejection)
     stopless = RISK.evaluate(Exit(POS.id, "stop", None, "x"), ctx())
     assert isinstance(stopless, Rejection) and stopless.check == "invalid"
+
+
+# --- fix round 1 (attempt 2) ------------------------------------------------------------------------------
+@pytest.mark.parametrize("stop_loss", ["0", "-1.99", "-0.0001"])
+def test_a_stop_loss_at_or_below_zero_is_invalid(stop_loss: str) -> None:
+    """Second safety net for the T8/T9 finding: a strategy that emits stop_loss <= 0 never gets sized."""
+    intent = replace(ENTRY, stop_loss=Decimal(stop_loss))
+    out = RISK.evaluate(intent, ctx(account=account("100000", "100000")))
+    assert isinstance(out, Rejection) and out.check == "invalid" and "above zero" in out.reason

@@ -450,6 +450,7 @@ def build_engine(core: Core, client: QuoteClient, catalysts: CatalystSource) -> 
         calendar=core.calendar,
         settings=core.settings.load,  # the entry cutoff follows no_entry_before_close_minutes live
     )
+    killswitches = KillSwitches(core.factory, core.clock)
     return Engine(
         factory=core.factory,
         clock=core.clock,
@@ -459,8 +460,16 @@ def build_engine(core: Core, client: QuoteClient, catalysts: CatalystSource) -> 
         data=MarketDataService(core.factory, core.clock, core.calendar, client),
         catalysts=catalysts,
         broker=broker,
-        proposals=ProposalService(core.factory, core.clock, core.settings, broker, run.id),
+        # an entry approved while a kill switch is tripped (or /pause is on) is never submitted (SPEC §6.3)
+        proposals=ProposalService(
+            core.factory,
+            core.clock,
+            core.settings,
+            broker,
+            run.id,
+            entry_blocked=killswitches.entry_guard(),
+        ),
         risk=RiskManager(core.calendar),
-        killswitches=KillSwitches(core.factory, core.clock),
+        killswitches=killswitches,
         run_id=run.id,
     )

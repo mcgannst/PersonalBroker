@@ -15,6 +15,16 @@ from trader.settings_store import Market, RuntimeSettings
 from trader.strategies.base import Cancel, EnterLong, Exit, Intent
 
 ProposalKind = Literal["entry", "stop", "exit", "cancel"]
+RiskCheck = Literal[
+    "kill_switch",
+    "daily_loss",
+    "max_positions",
+    "market_hours",
+    "settled_cash",
+    "market_enabled",
+    "zero_shares",
+    "invalid",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +58,7 @@ class SizedOrder:
 @dataclass(frozen=True, slots=True)
 class Rejection:
     intent: Intent
-    check: str
+    check: RiskCheck
     reason: str
     detail: dict[str, Any] = field(default_factory=dict)
 
@@ -100,6 +110,13 @@ class RiskManager:
         return SizedOrder(intent, kind, pos.qty, spec, position_id=pos.id)
 
     def _entry(self, intent: EnterLong, ctx: RiskContext) -> SizedOrder | Rejection:
+        """Run the six SPEC §6.1 checks, then size the entry.
+
+        `ctx.account.buying_power` is already the right cash for the account mode: the broker computes it as
+        settled cash when `cash_account_mode` is on and total cash when it is off (P2-T5
+        `SimBroker.account_state`). The risk manager never recomputes it; `sizing["cash_account_mode"]`
+        only records which mode the buying power was computed under, for the audit trail.
+        """
         s = ctx.settings
         if ctx.blocking_switch is not None:
             return Rejection(intent, "kill_switch", f"kill switch {ctx.blocking_switch} is tripped")
@@ -141,6 +158,10 @@ class RiskManager:
             entry = ctx.reference_price
         if entry is None or entry <= 0:
             return Rejection(intent, "invalid", "no entry price to size from")
+        if (
+            intent.stop_loss <= 0
+        ):  # second safety net: a strategy bug must never size off a stop at or below 0
+            return Rejection(intent, "invalid", f"stop_loss {intent.stop_loss} is not above zero")
         per_share = entry - intent.stop_loss
         if per_share <= 0:
             return Rejection(

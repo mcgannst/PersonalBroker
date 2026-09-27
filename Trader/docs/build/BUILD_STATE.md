@@ -7,7 +7,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 2 (P2-T0 planning finishing) |
-| Current task | P2-B1 building (T2 done), P2-T12 building (parallel) |
+| Current task | B1 gauntlet, B2 (T6/T7) building, T12 gauntlet, P3-T0 planning |
 | Gauntlet stage | Breaker + reviewers |
 | Last updated (UTC) | 2026-09-27T04:44:00Z |
 | Last pushed commit | d64518b |
@@ -36,8 +36,8 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | accepted | 2 | review ✅ + should-fix round ✅ (orchestrator ran check.sh: 333 passed) | ad82bfa |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | accepted | 2 | review ❌ → fix ff0e1ce (plan code re-validated: 585 passed) | ff0e1ce |
 | P2-T1 | Migration 0002: trading tables, views, ledger trigger, factories | P1 | gauntlet | 1 | V✅ (Breaker+review folded into P2-B1 gauntlet) | 2cab471 |
-| P2-B1 | Batch 1: T2 runs/settings, T3 ledger, T4 fill model, T5 sim broker | P2-T1, plan fix | building | 1 |  |  |
-| P2-B2 | Batch 2: T6 framework, T7 market data, T8 orb_sip, T9 spy_overlay | B1 V✅ | todo | 0 | | |
+| P2-B1 | Batch 1: T2 runs/settings, T3 ledger, T4 fill model, T5 sim broker | P2-T1, plan fix | gauntlet | 1 | built T2-T5 (fe80311); V+B and review running | fe80311 |
+| P2-B2 | Batch 2: T6 framework, T7 market data, T8 orb_sip, T9 spy_overlay | B1 V✅ | building | 1 | T6→T7 building; T8, T9 start when T7 lands |  |
 | P2-B3 | Batch 3: T10 risk/kill switches, T11 proposals, T12 Claude catalysts | B2 V✅ | todo | 0 | | |
 | P2-B4 | Batch 4: T13 orchestrator, T14 premarket (LIVE), T15 full day | B3 V✅ | todo | 0 | | |
 | P2-T2 | Runs, sim account, full runtime settings | T1 | todo | 0 | | |
@@ -50,12 +50,12 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P2-T9 | spy_overlay 1.0.0 | T6, T7 | todo | 0 | | |
 | P2-T10 | Risk manager + kill switches | T5 | todo | 0 | | |
 | P2-T11 | Proposal service | T5, T10 | todo | 0 | | |
-| P2-T12 | Claude catalyst classifier, store, service | T2 | building | 1 |  |  |
+| P2-T12 | Claude catalyst classifier, store, service | T2 | gauntlet | 1 | built; B + review running | e4c9f39 |
 | P2-T13 | Engine orchestrator | T8–T12 | todo | 0 | | |
 | P2-T14 | Pre-market job + premarket CLI | T7, T12 | todo | 0 | | |
 | P2-T15 | Integration: one full simulated day | T13, T14 | todo | 0 | | |
 | P2-REVIEW | Phase 2 whole-phase review | all P2 | todo | 0 | | |
-| P3-T0 | Write the Phase 3 plan | P2-REVIEW | todo | 0 | | |
+| P3-T0 | Write the Phase 3 plan | P2-REVIEW | building | 1 |  |  |
 
 ## Escalations
 
@@ -715,3 +715,24 @@ None open.
 
 ### 2026-09-27 00:25 MT · P2-B1 · Builder · attempt 1 · started
 - Notes: batch P2-T2..T5 from Trader/docs/plans/2026-09-27-phase-2-engine.md
+
+### 2026-09-27 00:28 MT · P2-T12 · Builder · attempt 1 · started
+- Notes: built early in parallel (depends only on P2-T2), worktree agent-af29b0ae9916b21ce
+
+### 2026-09-27 00:29 MT · P3-T0 · Planner · attempt 1 · started
+- Result: in progress, writing the Phase 3 specification plan
+
+### 2026-09-27 00:29 MT · P2-T6+T7 (B2 part 1) · Builder · attempt 1 · started
+- Notes: worktree agent-a538c57580632f073, trunk at 75c1172
+
+### 2026-09-27 00:31 MT · P2-T12 · Builder · attempt 1 · finished
+- Result: done, all 6 plan steps ticked, code copied verbatim from the plan (ruff format only)
+- Commits: e4c9f39
+- Gate: check.sh passed (443 tests after rebase onto P2-T3/T4), new file 18 tests
+- Notes: anthropic 1.8.0 and httpx2 2.13.1 added via uv add, no uv.lock conflict on rebase
+
+### 2026-09-27 00:32 MT · P2-T12 · Spec+Code reviewer · attempt 1 · started
+- Notes: reviewing commit e4c9f39 against phase-2 plan P2-T12, SPEC §4.3, BR-05, Global Constraints
+
+### 2026-09-27 00:32 MT · P2-T12 · Breaker · attempt 1 · started
+- Notes: breaking trader/adapters/claude/catalyst.py, tests in tests/gauntlet/test_p2_t12_breaker.py

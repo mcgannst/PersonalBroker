@@ -5633,7 +5633,7 @@ git push origin HEAD:trunk
     - Exits and cancels skip every check (Review Focus 5). `Exit` → `SizedOrder(kind="stop" if order_type == "stop" else "exit", qty=position.qty, spec=sell OrderSpec for the whole position)`; `Cancel` → `SizedOrder(kind="cancel", qty=order.qty, spec=None, cancel_order_id=...)`. An unknown or closed position, or an order that isn't working, → `Rejection(check="invalid")`.
   - `trader.engine.killswitch`: `SWITCHES = ("daily_loss_pct", "max_drawdown_pct", "expectancy", "manual_pause")`; `KillSwitchInputs(start_equity, equity, peak_equity, closed_trades, expectancy_r)` with `daily_pnl_pct` and `drawdown_pct` properties (6 dp); `ActiveSwitch(switch, event_id, tripped_at, value)`; `KillSwitches(factory, clock)`: `active(run_id, session_date) -> list[ActiveSwitch]` (unreset trips; a `daily_loss_pct` trip counts only on its own session, so it resets automatically next session), `blocking(run_id, session_date) -> str | None`, `inputs(run_id, session_date, account, session_open) -> KillSwitchInputs` (start of day = the last equity snapshot before the open, else the sim account's starting cash; peak = the highest of stored peaks, starting cash and current equity; trades and average `pnl_r` from `trades`), `evaluate(run_id, session_date, inputs, settings) -> list[str]` (trips each switch whose threshold is crossed and that isn't already active: `kill_switch_events` row plus an `error` event), `pause(run_id, session_date, actor) -> bool`, `resume(run_id, actor) -> bool` (lifts only `manual_pause`), `reset(run_id, switch, reason, actor) -> None` (needs a non-blank reason; not for `manual_pause`; `ValueError` when nothing is tripped). Pause, resume and reset write `audit_log` (`killswitch.pause`, `killswitch.resume`, `killswitch.reset:<switch>`).
 
-- [ ] **Step 1: Write the failing risk tests**
+- [x] **Step 1: Write the failing risk tests**
 
 `Trader/app/tests/engine/test_risk.py`:
 ```python
@@ -5789,12 +5789,12 @@ def test_exits_and_cancels_of_unknown_things_are_invalid() -> None:
     assert isinstance(stopless, Rejection) and stopless.check == "invalid"
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `uv --directory Trader/app run pytest tests/engine/test_risk.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.engine.risk'`.
 
-- [ ] **Step 3: Implement `trader/engine/risk.py`**
+- [x] **Step 3: Implement `trader/engine/risk.py`**
 
 ```python
 """Risk manager (SPEC §6.1, BR-40): sizes entries and runs the six checks in SPEC order.
@@ -5971,12 +5971,12 @@ class RiskManager:
         return SizedOrder(intent, "entry", shares, spec, sizing=sizing)
 ```
 
-- [ ] **Step 4: Run the risk tests**
+- [x] **Step 4: Run the risk tests**
 
 Run: `uv --directory Trader/app run pytest tests/engine/test_risk.py -q`
 Expected: all pass.
 
-- [ ] **Step 5: Write the failing kill-switch tests**
+- [x] **Step 5: Write the failing kill-switch tests**
 
 `Trader/app/tests/engine/test_killswitch.py`:
 ```python
@@ -6111,12 +6111,12 @@ def test_inputs_come_from_snapshots_account_and_trades(
     assert later.closed_trades == 1 and later.expectancy_r == Decimal("-0.5000")
 ```
 
-- [ ] **Step 6: Run to see them fail**
+- [x] **Step 6: Run to see them fail**
 
 Run: `uv --directory Trader/app run pytest tests/engine/test_killswitch.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.engine.killswitch'`.
 
-- [ ] **Step 7: Implement `trader/engine/killswitch.py`**
+- [x] **Step 7: Implement `trader/engine/killswitch.py`**
 
 ```python
 """Kill switches (SPEC §6.3, BR-41): checked before every entry proposal and after every fill.
@@ -6320,12 +6320,12 @@ class KillSwitches:
             log_event(s, self._clock, "warning", SOURCE, f"kill switch {switch} reset", {"reason": reason.strip()}, run_id)
 ```
 
-- [ ] **Step 8: Run the tests**
+- [x] **Step 8: Run the tests**
 
 Run: `uv --directory Trader/app run pytest tests/engine/test_risk.py tests/engine/test_killswitch.py -q`
 Expected: all pass. In `test_daily_loss_trips_and_resets_next_session`, `(684 − 720) / 720 = −0.05` exactly, which trips (`>=`), while `684.01` gives `−0.049986`.
 
-- [ ] **Step 9: Run the gate, commit and push**
+- [x] **Step 9: Run the gate, commit and push**
 
 Run: `uv --directory Trader/app run ruff format .` then `bash Trader/app/scripts/check.sh` → all pass.
 ```bash

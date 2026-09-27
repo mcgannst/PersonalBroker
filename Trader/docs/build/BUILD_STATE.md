@@ -27,7 +27,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T3 | Crypto and runtime settings store | T2 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 7b5eca2 |
 | P1-T4 | Market types, clock and session calendar | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 4af1355 |
 | P1-T5 | FinViz parser and scraper | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | b1d45e5 |
-| P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | gauntlet | 2 | V✅ B❌ S+C✅ → fix 0607f11 (verify+review running) | 0607f11 |
+| P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 0607f11 |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | fixing | 2 | V✅ B❌ S+C❌ | 879520e |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | building | 1 |  |  |
@@ -546,3 +546,10 @@ None open.
 
 ### 2026-09-27T05:10:07Z · P1-T6 · Verifier+Fix reviewer · attempt 2 · started
 - Notes: verifying trunk after fix commit 0607f11 and reviewing the fix against the findings
+
+### 2026-09-27T05:17:53Z · P1-T6 · Verifier+Fix reviewer · attempt 2 · finished
+- Result: PASS
+- Commits: reviewed 0607f11 (trunk HEAD 9df1e6d)
+- Gate: ruff, format, mypy clean. pytest 254 passed, 2 failed, both in tests/gauntlet/test_p1_t7_breaker.py (P1-T7 fix round, ignored). All P1-T6 tests incl. test_p1_t6_breaker.py pass. P1-T6 plan steps all ticked. Tree clean.
+- Findings: no must-fix or should-fix. Nits - (1) _parse_token_response lets OverflowError escape when expires_in is Infinity or 1e400, and a very large int overflows at now+timedelta, so that malformed 200 is not recorded or throttled (no leak, fails closed). (2) Negative or zero expires_in is accepted, so every access() would exchange. (3) questrade-seed without --force is allowed whenever last_error is set, including a transient network or 5xx error on a probably-healthy chain.
+- Notes: TokenSource and AccessToken unchanged. The failure cooldown runs 60 s from the last failed attempt only, because throttled raises do not touch updated_at. typer pretty_exceptions_show_locals defaults to False (typer 0.27.2), so tracebacks do not print locals.

@@ -23,8 +23,19 @@ is not run. `force` still runs it.
 alerts it). The scheduler passes `warning` for a safety event that keeps retrying past its alerted
 attempts, so a persistently failing event is not one phone alert every two minutes until the close.
 
-`retry` (P5): a `RetryPolicy` re-runs a failed body in-process (P5-T15 implements it); `None` or one
-attempt behaves exactly as above.
+`retry` (P5-T15, SPEC §9 as amended): a `RetryPolicy(attempts=n, first_delay_s=d, backoff=b)` with n > 1
+re-runs a failed body in-process, for the day-level cron jobs only (events keep the scheduler's own
+retries). The single-flight lock is held across every attempt, so a second process starting the same run
+while this one waits gets `skipped` ("already running"). Each attempt goes through `_start` (so "already
+succeeded" still skips) and inserts its own job_runs row. A failed attempt k < n is recorded `failed` with
+a `warning` event ("... (attempt k of n), retrying in S s"), then the runner sleeps d * b^(k-1) seconds
+through the injected `sleep`; only the last failed attempt writes the alerting event ("... after n
+attempts", at the caller's `failure_level`). A success after failed attempts adds `"attempts": k` to the
+detail. Never retried: a `JobFailure` (deliberate), a non-Exception (interrupt, cancellation: recorded and
+re-raised as above) and a success that could not be recorded. An interrupt during a wait writes one
+`error` event (at `failure_level`) saying the retries stopped, and is re-raised with the lock released.
+A (job, session) therefore can have `failed` rows followed by a `succeeded` one: its result is its latest
+row. `None` or one attempt behaves exactly as above.
 """
 
 import asyncio
@@ -66,10 +77,26 @@ class RetryPolicy:
     def from_settings(cls, s: RuntimeSettings) -> "RetryPolicy":
         return cls(attempts=s.jobs_retry_attempts, first_delay_s=float(s.jobs_retry_delay_seconds))
 
+    def delay(self, attempt: int) -> float:
+        """The wait after failed attempt `attempt` (1-based)."""
+        return self.first_delay_s * self.backoff ** (attempt - 1)
 
-def _check_retry(retry: RetryPolicy | None) -> None:
-    if retry is not None and retry.attempts > 1:
-        raise NotImplementedError("P5-T15")
+
+def _attempts(retry: RetryPolicy | None) -> int:
+    return retry.attempts if retry is not None and retry.attempts > 1 else 1
+
+
+_LEVEL_RANK = {"debug": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
+
+
+def _at_most(level: str, cap: str) -> str:
+    """`level`, lowered to `cap` when the caller asked for a lower failure level (never raised)."""
+    return level if _LEVEL_RANK.get(level, 0) <= _LEVEL_RANK.get(cap, 3) else cap
+
+
+def _retryable(exc: BaseException) -> bool:
+    """A transient failure worth another attempt: any Exception except a deliberate JobFailure."""
+    return isinstance(exc, Exception) and not isinstance(exc, JobFailure)
 
 
 class JobRunMissing(RuntimeError):
@@ -162,18 +189,28 @@ def run_job(
     outcome is `failed` ("succeeded but could not be recorded: <type>"), a best-effort critical event
     is written, and nothing is raised. With `rerun_abandoned=False` a leftover `running` row is settled
     as failed (OUTCOME_UNKNOWN) and the body is not run."""
-    _check_retry(retry)
+    tries = _Tries(factory, clock, job, session_date, failure_level, retry)
     with _single_flight(factory, job, session_date) as acquired:
         if not acquired:
             return JobOutcome("skipped", {"reason": "already running"})
-        started = _start(factory, clock, job, session_date, force, rerun_abandoned)
-        if isinstance(started, JobOutcome):
-            return started
-        try:
-            detail = fn()
-        except BaseException as exc:
-            return _failed(factory, clock, job, session_date, started, exc, failure_level)
-        return _record_success(factory, clock, job, session_date, started, detail)
+        attempt = 1
+        while True:
+            started = _start(factory, clock, job, session_date, force, rerun_abandoned)
+            if isinstance(started, JobOutcome):
+                return started
+            try:
+                detail = fn()
+            except BaseException as exc:
+                if not tries.again(exc, attempt):
+                    return tries.failed(started, exc, attempt)
+                error, wait = tries.retrying(started, exc, attempt)
+                try:
+                    sleep(wait)
+                except BaseException as stop:
+                    return tries.interrupted(error, stop, attempt)
+                attempt += 1
+                continue
+            return _record_success(factory, clock, job, session_date, started, tries.detail(detail, attempt))
 
 
 async def run_job_async(
@@ -191,18 +228,28 @@ async def run_job_async(
 ) -> JobOutcome:
     """run_job for an async body, with exactly run_job's semantics. A cancellation of the awaiting task
     (CancelledError) is recorded as a failure and re-raised, and the lock is released."""
-    _check_retry(retry)
+    tries = _Tries(factory, clock, job, session_date, failure_level, retry)
     with _single_flight(factory, job, session_date) as acquired:
         if not acquired:
             return JobOutcome("skipped", {"reason": "already running"})
-        started = _start(factory, clock, job, session_date, force, rerun_abandoned)
-        if isinstance(started, JobOutcome):
-            return started
-        try:
-            detail = await fn()
-        except BaseException as exc:
-            return _failed(factory, clock, job, session_date, started, exc, failure_level)
-        return _record_success(factory, clock, job, session_date, started, detail)
+        attempt = 1
+        while True:
+            started = _start(factory, clock, job, session_date, force, rerun_abandoned)
+            if isinstance(started, JobOutcome):
+                return started
+            try:
+                detail = await fn()
+            except BaseException as exc:
+                if not tries.again(exc, attempt):
+                    return tries.failed(started, exc, attempt)
+                error, wait = tries.retrying(started, exc, attempt)
+                try:
+                    await sleep(wait)
+                except BaseException as stop:
+                    return tries.interrupted(error, stop, attempt)
+                attempt += 1
+                continue
+            return _record_success(factory, clock, job, session_date, started, tries.detail(detail, attempt))
 
 
 def _start(
@@ -260,21 +307,107 @@ def _start(
         return run.id
 
 
-def _failed(
-    factory: sessionmaker[Session],
-    clock: Clock,
-    job: str,
-    session_date: date,
-    run_id: int,
-    exc: BaseException,
-    level: str = "error",
-) -> JobOutcome:
-    """Record the body's failure; re-raise a non-Exception (interrupt, cancellation) once recorded."""
-    error = _describe(exc)
-    _record_failure(factory, clock, job, session_date, run_id, error, level)
-    if not isinstance(exc, Exception):
-        raise exc
-    return JobOutcome("failed", error=error)
+@dataclass(frozen=True)
+class _Tries:
+    """The attempts of one run_job / run_job_async call: what each failure records, and whether to go on."""
+
+    factory: sessionmaker[Session]
+    clock: Clock
+    job: str
+    session_date: date
+    failure_level: str
+    retry: RetryPolicy | None
+
+    @property
+    def attempts(self) -> int:
+        return _attempts(self.retry)
+
+    def again(self, exc: BaseException, attempt: int) -> bool:
+        return attempt < self.attempts and _retryable(exc)
+
+    def _data(self, error: str, attempt: int) -> dict[str, Any]:
+        if self.attempts == 1:
+            return {"error": error}  # exactly P3's event
+        return {"error": error, "attempt": attempt, "attempts": self.attempts}
+
+    def failed(self, run_id: int, exc: BaseException, attempt: int) -> JobOutcome:
+        """The run's final failure: the alerting event at the caller's level. Re-raises a non-Exception
+        (interrupt, cancellation) once recorded."""
+        error = _describe(exc)
+        message = f"{self.job} failed for {self.session_date}"
+        if self.attempts > 1 and attempt == self.attempts and _retryable(exc):
+            message += f" after {self.attempts} attempts"
+        _record_failure(
+            self.factory,
+            self.clock,
+            self.job,
+            self.session_date,
+            run_id,
+            error,
+            self.failure_level,
+            message=message,
+            data=self._data(error, attempt),
+        )
+        if not isinstance(exc, Exception):
+            raise exc
+        return JobOutcome("failed", error=error)
+
+    def retrying(self, run_id: int, exc: BaseException, attempt: int) -> tuple[str, float]:
+        """Record a failed attempt that will be retried (a `warning`, never an alert); returns the error
+        text and the wait before the next attempt."""
+        assert self.retry is not None  # attempts > 1
+        error = _describe(exc)
+        wait = self.retry.delay(attempt)
+        _record_failure(
+            self.factory,
+            self.clock,
+            self.job,
+            self.session_date,
+            run_id,
+            error,
+            _at_most("warning", self.failure_level),
+            message=(
+                f"{self.job} failed for {self.session_date} (attempt {attempt} of {self.attempts}), "
+                f"retrying in {wait:g} s"
+            ),
+            data=self._data(error, attempt),
+        )
+        log.warning(
+            "job.retrying",
+            job=self.job,
+            session_date=self.session_date.isoformat(),
+            attempt=attempt,
+            attempts=self.attempts,
+            wait_s=wait,
+        )
+        return error, wait
+
+    def interrupted(self, error: str, stop: BaseException, attempt: int) -> JobOutcome:
+        """The wait between attempts was interrupted: the retries end here, so write the alerting event
+        (best effort, on a fresh session), then re-raise a non-Exception or return the failure."""
+        name = type(stop).__name__
+        try:
+            with session_scope(self.factory) as s:
+                log_event(
+                    s,
+                    self.clock,
+                    self.failure_level,
+                    f"job.{self.job}",
+                    f"{self.job} failed for {self.session_date}: retries stopped after attempt {attempt} "
+                    f"of {self.attempts} ({name})",
+                    {**self._data(error, attempt), "interrupted": name},
+                )
+        except Exception:
+            log.exception(
+                "job.record_interrupt_failed", job=self.job, session_date=self.session_date.isoformat()
+            )
+        if not isinstance(stop, Exception):
+            raise stop
+        return JobOutcome("failed", error=error)
+
+    @staticmethod
+    def detail(detail: dict[str, Any], attempt: int) -> dict[str, Any]:
+        return {**detail, "attempts": attempt} if attempt > 1 else detail
 
 
 def _record_success(
@@ -339,6 +472,9 @@ def _record_failure(
     run_id: int,
     error: str,
     level: str = "error",
+    *,
+    message: str | None = None,
+    data: dict[str, Any] | None = None,
 ) -> None:
     try:
         with session_scope(factory) as s:
@@ -346,7 +482,14 @@ def _record_failure(
             if row is None:
                 raise JobRunMissing(f"job_runs row {run_id} disappeared")
             row.status, row.finished_at, row.error = "failed", clock.now(), error
-            log_event(s, clock, level, f"job.{job}", f"{job} failed for {session_date}", {"error": error})
+            log_event(
+                s,
+                clock,
+                level,
+                f"job.{job}",
+                message or f"{job} failed for {session_date}",
+                data if data is not None else {"error": error},
+            )
     except Exception:
         log.exception(
             "job.record_failure_failed", job=job, session_date=session_date.isoformat(), run_id=run_id

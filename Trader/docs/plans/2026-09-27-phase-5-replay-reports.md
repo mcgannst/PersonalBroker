@@ -820,15 +820,17 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - **Restart scenario** (one integration test in the new file, building on P3's `test_worker_restart_mid_session` by importing the helpers of `tests/integration/test_worker_day.py`, which is not edited): worker A is stopped without its shutdown path (its lock connection closed, heartbeat left `session`, the `event:orb_open` job row left `running`, one `notifications` row left `sending`, the relay cursor behind the last fill); worker B starts at a later fake time.
 
 **Acceptance tests:**
-- [ ] 1. A body failing twice then succeeding with `attempts=3`: three `job_runs` rows (failed, failed, succeeded), two `warning` events and no `error` event, the sleeps were 120 s and 240 s (fake sleep), the outcome `succeeded` with `attempts: 3` in the detail.
-- [ ] 2. A body failing three times: three failed rows, two `warning` events and exactly one `error` event (after the third), outcome `failed`; the relay (P3) would alert once.
-- [ ] 3. A `JobFailure` is not retried (one row, one `error` event); a `CancelledError` during the sleep is recorded and re-raised, and the lock is released.
-- [ ] 4. A second process starting the same job while the first sleeps between attempts gets `skipped` (`already running`).
-- [ ] 5. `run_job_async` has the same semantics with an async fake sleep.
-- [ ] 6. **Restart:** worker B acquires the lock (A's is gone), does not re-run `orb_open` (it is settled `failed` with `OUTCOME_UNKNOWN` and one `critical` event), keeps polling the working entry order, which fills once; the `sending` notification becomes `unknown` and is never re-sent; the relay sends each later fill once; B's heartbeat goes to `session`.
-- [ ] 7. **No duplicates:** after the restart there is one signal and one order per intent, one fill per order, and one notification per dedupe key.
-- [ ] 8. A pending entry proposal created by A expires on time under B, and B's flatten still closes the position before the close.
-- [ ] 9. Gate and commit `P5-T15: ...`.
+- [x] 1. A body failing twice then succeeding with `attempts=3`: three `job_runs` rows (failed, failed, succeeded), two `warning` events and no `error` event, the sleeps were 120 s and 240 s (fake sleep), the outcome `succeeded` with `attempts: 3` in the detail.
+- [x] 2. A body failing three times: three failed rows, two `warning` events and exactly one `error` event (after the third), outcome `failed`; the relay (P3) would alert once.
+- [x] 3. A `JobFailure` is not retried (one row, one `error` event); a `CancelledError` during the sleep is recorded and re-raised, and the lock is released.
+- [x] 4. A second process starting the same job while the first sleeps between attempts gets `skipped` (`already running`).
+- [x] 5. `run_job_async` has the same semantics with an async fake sleep.
+- [x] 6. **Restart:** worker B acquires the lock (A's is gone), does not re-run `orb_open` (it is settled `failed` with `OUTCOME_UNKNOWN` and one `critical` event), keeps polling the working entry order, which fills once; the `sending` notification becomes `unknown` and is never re-sent; the relay sends each later fill once; B's heartbeat goes to `session`.
+- [x] 7. **No duplicates:** after the restart there is one signal and one order per intent, one fill per order, and one notification per dedupe key.
+- [x] 8. A pending entry proposal created by A expires on time under B, and B's flatten still closes the position before the close.
+- [x] 9. Gate and commit `P5-T15: ...`.
+
+*Builder note (P5-T15):* on trunk nothing turns a `sending` notification into `unknown`; the P3 notifier already treats `sending` exactly like `unknown` (never claimed or re-sent again), so test 6 checks it stays `sending` and is never re-sent. The notification and cursor footprints need a fill before a kill while test 6 also wants a working entry order after one, so the killed day has two kills (A at 09:35:40 with the entry working and orb_open `running`; B at 09:36:00 inside the ENTRY FILLED send) and worker C finishes it; test 8's expiring proposal is a second test.
 
 ---
 

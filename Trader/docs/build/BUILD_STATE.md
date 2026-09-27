@@ -7,14 +7,14 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 1 |
-| Current task | T2/T5/T8 fixing, T3 B+review, T4 fix verify, T6 building |
+| Current task | T2/T3 fixing, T5/T6 verifying |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-27T06:05:00Z |
+| Last updated (UTC) | 2026-09-27T04:41:00Z |
 | Last pushed commit | d64518b |
-| Questrade token owner | `docker/.env.dev` (moves to `trader_dev.trader.api_credentials` in P1-T6) |
-| Token last refreshed (UTC) | 2026-09-27T03:36:53Z (spike S1) |
+| Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
+| Token last refreshed (UTC) | 2026-09-27T04:39:34Z (P1-T6 LIVE) |
 | Phase 1 start commit | d64518b |
-| Phase 1 estimate | 4–5 h from 04:13Z → finish ~08:30–09:30Z (critical path T1→T2→T3→T6→T7→T9) |
+| Phase 1 estimate | Revised 04:41Z: finish ~05:30Z (started 04:13Z; 3/9 accepted after 28 min). Earlier header times were estimates, not clock readings. |
 
 ## Task board
 
@@ -27,7 +27,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T3 | Crypto and runtime settings store | T2 | fixing | 2 | V✅ B❌ S✅ C✅(should-fix) | f5ad3a4 |
 | P1-T4 | Market types, clock and session calendar | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 4af1355 |
 | P1-T5 | FinViz parser and scraper | T1 | gauntlet | 2 | V✅ B❌ S❌ C❌ → fix b1d45e5 (verify+review running) | b1d45e5 |
-| P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | building | 1 |  |  |
+| P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | gauntlet | 1 |  | d922a9c |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | todo | 0 | | |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | todo | 0 | | |
@@ -414,3 +414,12 @@ None open.
 - LIVE: questrade-seed printed "seeded". token-refresh printed "ok, access token valid until 2026-09-27T05:09:34Z". QUESTRADE_REFRESH_TOKEN and its "rotated" comment were removed from the main checkout docker/.env.dev (mode 0600 kept) and the ownership comment was appended.
 - TOKEN OWNERSHIP: the Questrade token chain is now owned by trader_dev.trader.api_credentials. NEVER run spikes/qt.py or spikes/s1_tokens.py again. Keep-alive is now `bash Trader/app/scripts/trader-dev.sh token-refresh` (at least every 24 h).
 - Notes: deviation from the plan code. keep_alive's min_age shortcut required a fresh access token (fresh for 28 min), so the plan's own keep_alive test failed at +30 min. It now requires a stored access token plus api_server instead. A note was added to the plan. Also added `# noqa: S105` on TOKEN_URL (ruff flagged it as a password).
+
+### 2026-09-27T04:40:31Z · P1-T5 · Verifier+fix reviewer · attempt 2 · started
+- Notes: verifying trunk after fix commits d510910, addd66e, b1d45e5 and reviewing them against round-1 findings
+
+### 2026-09-27T04:40:44Z · P1-T2 · Builder · attempt 2 · finished
+- Result: done, all gauntlet findings fixed, test_p1_t2_breaker.py passes unedited (8/8)
+- Commits: 5e8a594
+- Gate: check.sh 101 passed, 8 failed (only the known P1-T5 x7 and P1-T8 x1 breaker tests)
+- Notes: env.py also pins search_path=public. The trader_dev owner's search_path is "trader, public", and with that alembic check reported phantom add_table/FK diffs. It is now clean on trader_dev. LIVE (read-only): alembic current = 0001 (head). No corrective migration needed.

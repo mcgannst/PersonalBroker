@@ -117,7 +117,7 @@ Path: `Trader/docs/build/BUILD_STATE.md`. It is the single source of truth for w
 - [ ] **Recover an interrupted stage.** If the header shows a task in `building`, `gauntlet` or `fixing`, check the activity log for that stage's `finished` entry.
   - No `finished` entry: the agent died. Run `git status`. Commit any uncommitted work that belongs to the task's file list (message `<ID>: WIP recovered after interruption`), then restart that stage with a fresh agent and tell it about the recovered commit.
   - There is a `finished` entry: continue from the next stage.
-- [ ] **Pick the next task.** It's the first `todo` task whose dependencies (listed in the phase plan) are all `accepted`. Tasks whose file lists don't overlap may run in parallel (the phase plan marks them as parallel lanes). Run at most **3 Builders at once**.
+- [ ] **Pick the next tasks.** Start every `todo` task whose dependencies have all at least **passed the Verifier** (full acceptance isn't required; if a dependency later needs a fix, dependants are re-verified). Run at most **5 Builders at once**, each in its own worktree (Agent tool `isolation: "worktree"`). Builders, Verifiers and Breakers get worktrees; the read-only reviewers work from the main checkout.
 - [ ] **Build.** Set the task to `building`, commit and push the state file, and spawn a Builder (§6.1).
 - [ ] **Gauntlet.** When the Builder finishes, set `gauntlet` and run the stages in §5.
 - [ ] **Accept.** When every stage passes, set `accepted`, record the last commit, commit and push the state file, and append an orchestrator log entry.
@@ -155,20 +155,27 @@ The orchestrator fills in the `<...>` parts. Every prompt starts with the common
 **Common preamble**
 ```
 You are the <ROLE> for task <TASK_ID> ("<TITLE>") of the Trader build, attempt <N>.
-Repo: /Users/stephen/Documents/Code/Claude Code/Trader (git, branch trunk; never create branches).
+Main checkout: /Users/stephen/Documents/Code/Claude Code/Trader (branch trunk). Builders, Verifiers and
+Breakers run in their OWN git worktree (their Bash working directory; the harness may name a temporary
+local branch). Always sync with `git pull --rebase --autostash origin trunk` and publish with
+`git push origin HEAD:trunk`. Never push any other branch.
 Read first: Trader/docs/plans/2026-09-26-build-master-plan.md (Global Constraints, §3 state-file rules),
 then the task section in <PHASE_PLAN_PATH>, then the SPEC sections it cites.
-Log to the shared state file exactly as §3.2 says: append a "started" entry now and a
-"finished" or "failed" entry at the end, each with ONE `cat >> ... <<'EOF'` command.
-Never print or commit secrets. Stage files by explicit path.
-Shell rules (a hook enforces them): one command per Bash call. No `&&`, `;` or `||` chaining, no `cd`
-at all (even on its own), and no `git -C`. Use absolute paths, and `uv --directory
-"/Users/stephen/Documents/Code/Claude Code/Trader/Trader/app" run ...` wherever a plan says "run from
-Trader/app". Git commands run from the repo root, the Bash tool's default working directory. Always pull with `git pull --rebase --autostash` (other agents' log entries leave
-BUILD_STATE.md modified). So "git pull --rebase && git push" means two separate calls, and a plan's `cd ... && git add ...` block
-becomes separate `git add` / `git commit` calls with absolute or repo-relative paths. Avoid semicolons
-even inside heredoc bodies (the hook sees them). If `uv sync` ran before `trader/` existed, run
-`uv sync --reinstall-package trader` once.
+Log to the SHARED state file in the main checkout, by absolute path:
+/Users/stephen/Documents/Code/Claude Code/Trader/Trader/docs/build/BUILD_STATE.md
+Append a "started" entry now and a "finished"/"failed" entry at the end, each ONE `cat >> ... <<'EOF'`
+command (§3.2). Never edit or stage the worktree's own copy of BUILD_STATE.md.
+Secrets: docker/.env.dev exists only in the main checkout. For LIVE steps use
+`uv --directory <your worktree>/Trader/app run --env-file "/Users/stephen/Documents/Code/Claude Code/Trader/Trader/docker/.env.dev" ...`.
+Never print, cat or commit secrets. Stage files by explicit path.
+Shell rules (a hook enforces them): one command per Bash call. No chaining with the and-and, semicolon
+or or-or operators, no `cd` at all, and no `git -C`. Run git from your working directory. Use
+`uv --directory <path>/Trader/app run ...` wherever a plan says "run from Trader/app". A plan's combined
+cd-and-git-add block becomes separate `git add` / `git commit` calls. Avoid semicolons even inside heredoc
+bodies. If `uv sync` ran before `trader/` existed, run `uv sync --reinstall-package trader` once.
+Other tasks are being built in parallel. If `git pull --rebase` hits a conflict in the phase plan file
+(checkbox ticks), keep both sides' ticks. If check.sh fails only because of another task's committed code,
+say so in your report rather than editing that code.
 ```
 
 ### 6.1 Builder
@@ -176,7 +183,7 @@ even inside heredoc bodies (the hook sees them). If `uv sync` ran before `trader
 Implement the task by following its steps in order, ticking each checkbox in the plan file as you go
 (commit the plan file together with your code). Use TDD exactly as written: run each failing test and
 see it fail before implementing. Run `bash Trader/app/scripts/check.sh` before every commit.
-Commit and push after every green step (`git pull --rebase && git push`).
+Commit and push after every green step (`git pull --rebase --autostash origin trunk`, then `git push origin HEAD:trunk`).
 If a step is impossible as written (wrong API, spec conflict), do not improvise a different design:
 stop, log "failed" with the reason, and report back.
 <On a fix attempt:> Fix these gauntlet findings, adding a regression test for each: <FINDINGS>.

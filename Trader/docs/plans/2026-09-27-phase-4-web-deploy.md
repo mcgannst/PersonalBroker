@@ -1,0 +1,838 @@
+# Phase 4: API, Web App and Deployment (specification plan)
+
+> **For agentic workers:** Run under the gauntlet process in [`2026-09-26-build-master-plan.md`](2026-09-26-build-master-plan.md) (§4–§6). Read its **Global Constraints** and **Review Focus** first, then this plan's Global Constraints reminder and Review Focus below. This is a **specification** plan (master plan §6.6): it says WHAT to build and HOW TO KNOW it works. Builders design and write the code, matching the style of the existing code on trunk, and write each numbered acceptance test first (TDD). Each task has one checkbox per acceptance test plus one for the gate and commit: tick them in this file as you go and commit the file with your code.
+
+**Goal:** A FastAPI REST API (session login, CSRF, every SPEC §11 route except replays), a phone-friendly React web app that shows the day, lets Stephen approve proposals, reset kill switches and change settings, and live-updates over SSE; and one Docker image (api, worker, cron under supervisord) deployed to `trader-dev` on the shared Docker host behind Nginx Proxy Manager, checked end to end with Playwright and LIVE steps.
+
+**Architecture:** New package `trader/api/` (app factory, auth, schemas, routers, change feed, job launcher), a small `trader/market/watchlist.py` and `trader/reports/export.py`, and a React 18 + TypeScript + Vite app in `Trader/web/`. The API is a thin read/write layer over the Phase 1–3 services: approvals go through `trader.runtime.build_decider` (the same `ProposalService.decide` with the kill-switch entry guard that the Telegram bot uses), kill switches through `KillSwitches`, settings through `SettingsStore`, strategy settings through `StrategyRegistry`, status numbers through `trader.notify.views` (the builders `/status` uses). Processes still talk only through PostgreSQL (SPEC §1). **Live updates:** a single change feed in the API process polls cheap watermark queries every `web.sse_poll_seconds` (1 s) while at least one browser is connected, and pushes `invalidate` hints over SSE; the browser refetches the affected queries (decision and reasons below). **Deployment:** a multi-stage image (`node:22-alpine` builds the web app, `python:3.12-slim-bookworm` runs it) with supervisord running `api` (uvicorn), `worker` (`python -m trader.worker` through a restart wrapper) and `cron` (supercronic with `docker/crontab`), a read-only root filesystem, no published ports, the external `proxy` network, secrets only from `docker/.env.dev`.
+
+**Tech stack:** Python 3.12 via uv; FastAPI, uvicorn, argon2-cffi, pyotp, python-multipart, tzdata (pinned), supervisor (image only, locked in a `deploy` dependency group); SQLAlchemy 2, Alembic, psycopg 3; structlog; pytest, pytest-asyncio, httpx (`TestClient`), testcontainers. Web: React 18, TypeScript, Vite, React Router 6, TanStack Query 5, Recharts, Vitest, Testing Library, jsdom, Playwright. Docker Desktop on the Mac (`desktop-linux`, amd64 build), Docker context `shared-docker-server`, supercronic, supervisord.
+
+**Spec:** [`../BRD.md`](../BRD.md) BR-30, BR-31, BR-33, BR-34 (web side), BR-41 (web reset), BR-50, BR-51, BR-52, BR-53, BR-55, BR-56, BR-62 (export route); [`../SPEC.md`](../SPEC.md) §1 (processes), §4.2 (manual CSV upload), §6.2, §6.3 (web reset and pause), §11 (API), §12 (web), §13 (env and runtime settings), §14 (security), §15 and §15.1 (deployment, dev environment), §16 (UI tests). Master plan §7.4 (outline and "Notes for the P4 planner"), §7.1 (contracts).
+
+**Task IDs for the board:** P4-T1, P4-T2, P4-T3, P4-T4, P4-T5, P4-T6, P4-T7, P4-T8, P4-T9, P4-T10, P4-T11, P4-T12, P4-T13, P4-T14, P4-T15, P4-T16, P4-T17, P4-T18, P4-T19.
+
+## Task list, dependencies and parallel lanes
+
+| ID | Task | Depends on | Lane |
+|---|---|---|---|
+| P4-T1 | Backend contracts: dependencies, migration 0005, settings and env keys, API schemas, deps, errors, shared views, stubs, fakes, gate | P3 (every P3 task past its Verifier, P3-T12 and P3-T13 included) | A |
+| P4-T2 | Web contracts: Vite scaffold, API types and client interface, formatters, UI primitives, page stubs, test helpers | P3 | W |
+| P4-T3 | API core: app factory, JSON errors, security headers, request logging, health and meta, SPA serving and deep links, `python -m trader.api` | T1 | B |
+| P4-T4 | Authentication: passwords, sessions, CSRF, rate limit and lockout, TOTP, admin bootstrap, auth routes | T1 | C |
+| P4-T5 | Dashboard and trading reads: dashboard, candidates, orders, fills, positions and position detail, trades, quote cache | T1 | D |
+| P4-T6 | Decisions: proposals (list, get, approve, reject), kill switches (state, reset, pause, resume), decision time in Telegram | T1 | E |
+| P4-T7 | Performance, journal and CSV export | T1 | F |
+| P4-T8 | Settings and strategies (form descriptors) | T1 | G |
+| P4-T9 | System: status, events, job history and manual runs, Questrade token paste, Telegram test | T1 | H |
+| P4-T10 | Watchlist CSV upload and the nightly manual source | T1 | I |
+| P4-T11 | Live updates: change feed and SSE stream | T1 | J |
+| P4-T12 | Web shell: HTTP client, login, layout and navigation, routes and deep links, live updates, time display | T2 | K |
+| P4-T13 | Web Dashboard and Candidates pages | T2 | L |
+| P4-T14 | Web Trades, Performance, Journal and Reports pages | T2 | M |
+| P4-T15 | Web Settings page | T2 | N |
+| P4-T16 | Web System page | T2 | O |
+| P4-T17 | Docker image, supervisord, entrypoint, compose files, deploy and smoke scripts | T1, T2 | P |
+| P4-T18 | Wiring: service composition, CLI commands, worker additions, route sweep, contract checks, §7.1 rows | T3–T17 | A |
+| P4-T19 | End to end: local smoke stack with Playwright, deploy to `trader-dev`, LIVE checks | T18 | A |
+
+**Critical path:** P4-T1 → P4-T5 (the largest backend build task) → P4-T18 → P4-T19: **4 tasks** (T2 runs beside T1, so the web path T2 → T13 → T18 → T19 is also 4).
+**Maximum parallel width:** **15** (T3–T17 all start once T1 and, for the web tasks, T2 have passed their Verifiers). The orchestrator's cap is 8 builders: start T1 and T2 together; then T5, T6, T4, T11, T3, T12, T13 and T17 first (the safety-critical and largest ones), then T7, T8, T9, T10, T14, T15 and T16 as slots free up.
+
+Every build task (T3–T17) depends only on the contract tasks: backend tasks use each other's work through the T1 contracts (`ApiServices`, protocols, schemas, `trader/api/views.py`) and the fakes in `tests/fakes_api.py`; web tasks use the T2 contracts (`ApiClient`, `types.ts`, formatters, UI primitives) and `FakeApiClient`. Only T18 and T19 use real implementations together.
+
+**Changes from the master-plan outline (§7.4), with reasons:**
+- **Two contract tasks** (T1 backend, T2 web) run in parallel, so 15 build tasks can start at once. The schemas below are specified field by field so both sides are written from this plan.
+- The outline's T1 (skeleton and health) is **T3**; outline T2 (auth) is **T4**; outline T3/T4 (read and write endpoints) are split by resource into **T5–T10**, each owning its router files; outline T5 (SSE) is **T11**; outline T6–T9 (web) are **T12–T16** (Settings and System are separate pages with separate owners); outline T10 (Docker) is **T17**; outline T11 (deploy and smoke) is **T19**, after the new **T18** wiring task that owns every shared registration point (`cli.py`, `runtime.py`, `worker.py`, `trader/api/services.py`, the master plan).
+- **Watchlist upload** (SPEC §4.2 manual fallback) gets its own small task (T10) because it also changes the nightly job.
+- **Replays** (`/replays` routes and page) stay in Phase 5 (P5-T4, P5-T5). **Metrics** and **CSV export** are served now from SQL (T7); P5-T1 and P5-T6 replace or extend the computations behind the same routes.
+
+**Contracts refined (master plan §7.1; names and meaning kept; T18 updates §7.1):**
+1. **Web link paths** (P3 contract 4): the web app serves `/dashboard?proposal=<id>`, `/trades?position=<id>`, `/journal?date=<YYYY-MM-DD>`, `/system` and `/reports?week=<YYYY-MM-DD>` (the week-ending date `MessageRenderer.weekly_link` writes), plus `/candidates`, `/performance`, `/settings`, `/login`. Every one returns the SPA (HTTP 200) with or without a session; the SPA sends a logged-out visitor to `/login?next=<path and query>`.
+2. **`ProposalView`** gains `decided_at: datetime | None = None` (the last field, with a default, so existing constructors keep working); `trader.notify.views.proposal_view` fills it; `MessageRenderer.proposal_closed` shows the decision time.
+3. **Proposals from the web** use `trader.runtime.build_decider(core, run_id)` (a `ProposalService` with `entry_blocked=KillSwitches.entry_guard()` over its own `SimBroker`), with `via="web"` and `actor="web:<username>"`. No other `ProposalService` is built in the API.
+4. **SPEC §1 `LISTEN/NOTIFY`:** not used; the SSE stream is fed by polling (decision below). No triggers are added.
+5. **New contract rows** (T18 adds them to §7.1): "Web API" (`/api` routes, `ApiServices`, session cookie `trader_session`, header `X-CSRF-Token`, error shape), "Web API types" (`web/src/api/types.ts` mirrors `trader/api/schemas.py`, checked by a test), "Users and sessions" (`users`, `web_sessions`), "Manual watchlist" (`manual_watchlists`, nightly source `manual`).
+6. **`WorkerDeps`** gains `heartbeat_extra: Callable[[], Mapping[str, Any]] | None = None` (additive; its result is merged into the heartbeat `detail`, used for the Questrade rate-limit numbers), and `run_worker` gains a live-run guard with exit code `4` (decision below).
+
+### Key decisions
+
+- **SSE by polling, not `LISTEN/NOTIFY`.** One background task in the API process (`ChangeFeed`) runs one watermark query per `web.sse_poll_seconds` (default 1 s), only while a browser is connected, and turns changed watermarks into `invalidate` messages. Reasons: (1) it meets the 2 s target with one indexed query a second for a single user; (2) `LISTEN/NOTIFY` would need triggers on about ten tables written by three processes plus a dedicated async listener connection with reconnect handling, and a notification sent while the listener is reconnecting is lost, so a catch-up query is needed anyway; (3) Phase 3's relay already polls the same tables, so both paths share one model and nothing in the engine changes. If load ever matters, triggers can feed the same `ChangeFeed` interface later.
+- **Sessions are server-side.** The cookie carries a random token plus an HMAC (key derived from `SESSION_SECRET`); the database keeps only the token's SHA-256, so logout, password change and expiry really end a session. Cookie: `trader_session`, `HttpOnly; Secure; SameSite=Strict; Path=/`. CSRF: a per-session token returned by login and `/auth/me`, required in `X-CSRF-Token` on every `POST`/`PUT`/`DELETE` except login.
+- **One uvicorn process** (`workers=1`): the change feed and the login rate limiter live in memory.
+- **The API reads quotes itself** for open positions (a Questrade client through `MarketDataService.quotes`, cached `web.quote_cache_seconds`), sharing the DB-held token chain safely (Review Focus 1 of the master plan). A quote failure shows `n/a`, never an error.
+- **Changing the live run** (point 2 of the P3-T12 review): Phase 4 adds **no** API or web action that resets the live run or starts a new one (SPEC §11 has none; promotion starts a fresh run in a fresh database, SPEC §15.1). The API reads the live run on every request, so it is never stale. The worker keeps the run id it read at start-up, so T18 adds a **live-run guard** to `run_worker`: every 60 s it compares `get_live_run(...).id` with its own; when they differ it logs one `critical` event ("live run changed: worker restarting"), sets the worker's stop event and `run_worker` returns exit code `4` (`EXIT_RUN_CHANGED`); supervisord restarts the worker at once, and the new process reads the new run. Any future code that replaces the live run needs nothing more.
+- **Telegram not configured:** the worker then relays nothing, so pending proposals are always viewable and approvable on the web Dashboard, and the System page (and the Dashboard, as a one-line notice) shows "Telegram not configured" from `SystemOut.telegram_configured`.
+- **Time display.** Times are sent as UTC ISO strings; the web formats them in `America/Edmonton` (`TZ_DISPLAY`) labelled `MT`. Because a browser's time-zone data may predate tzdata 2026c (Alberta on UTC−6 all year), the web compares its own offset for "now" with the server's (`/api/meta`); if they differ it formats with the server's fixed offset and the System page shows a warning. All stored data is from September 2026 or later, when both rules agree on UTC−6.
+- **Playwright "approve a seeded proposal" runs against a throwaway local stack** (the real image plus a throwaway PostgreSQL), never against `trader_dev`: a fake proposal in the dev live run would pollute the soak record that promotion depends on (10 clean days). Against `trader-dev` the smoke is read-only.
+
+Every command below runs from the repository root of your worktree unless it says otherwise. "Run from `Trader/app`" means `uv --directory Trader/app run ...`; web commands use `npm --prefix Trader/web ...`. LIVE steps use `uv --directory Trader/app run --env-file ../../../../../Trader/docker/.env.dev ...` (master plan §6 preamble) or the scripts named in the step.
+
+## File map
+
+One owner per file. Paths are under `Trader/app/` unless they start with `web/`, `docker/`, `docs/` or `Trader/`. T1 and T2 create the stub modules marked (stub); the owning task replaces the stub with the implementation.
+
+| Path | Responsibility | Task |
+|---|---|---|
+| `pyproject.toml`, `uv.lock` | Add fastapi, uvicorn, argon2-cffi, pyotp, python-multipart, `tzdata>=2026.3`; group `deploy = [supervisor]` | T1 |
+| `scripts/check.sh` | Also run the web check (`npm run check`) | T1 |
+| `Trader/.gitignore` | `web/node_modules/`, `web/dist/`, `web/test-results/`, `web/playwright-report/` | T1 |
+| `trader/config.py` | `EnvSettings`: admin, app env and version, web dist dir, cache dir | T1 |
+| `trader/settings_store.py` | Phase 4 runtime settings (`web.*`) | T1 |
+| `trader/db/models.py`, `trader/db/migrations/versions/0005_web.py` | `User`, `WebSession`, `ManualWatchlist` (number re-checked at build time) | T1 |
+| `trader/notify/types.py`, `trader/notify/views.py` | `ProposalView.decided_at`, filled by `proposal_view` | T1 |
+| `trader/api/__init__.py`, `trader/api/schemas.py`, `trader/api/deps.py`, `trader/api/errors.py`, `trader/api/views.py`, `trader/api/routers/__init__.py` | API contracts and small shared builders (real) | T1 |
+| `trader/api/main.py`, `trader/api/__main__.py`, `trader/api/routers/meta.py` (stubs) | App factory, entry point, health and meta | T3 |
+| `trader/api/auth.py`, `trader/api/routers/auth.py` (stubs) | Authentication | T4 |
+| `trader/api/routers/dashboard.py`, `trader/api/routers/trading.py`, `trader/api/quotes.py` (stubs) | Dashboard and trading reads | T5 |
+| `trader/api/routers/proposals.py`, `trader/api/routers/killswitch.py` (stubs), `trader/notify/messages.py` (decision time) | Decisions | T6 |
+| `trader/api/routers/performance.py`, `trader/api/routers/journal.py`, `trader/reports/__init__.py`, `trader/reports/export.py` (stubs) | Performance, journal, export | T7 |
+| `trader/api/routers/settings.py`, `trader/api/routers/strategies.py`, `trader/api/forms.py` (stubs) | Settings and strategies | T8 |
+| `trader/api/routers/system.py`, `trader/api/routers/jobs.py`, `trader/api/routers/credentials.py`, `trader/api/launcher.py` (stubs) | System, jobs, token paste, Telegram test | T9 |
+| `trader/api/routers/watchlist.py`, `trader/market/watchlist.py` (stubs), `trader/jobs/nightly.py` (manual source) | Watchlist | T10 |
+| `trader/api/routers/stream.py`, `trader/api/feed.py` (stubs) | Change feed and SSE | T11 |
+| `trader/api/services.py` (stub), `trader/cli.py`, `trader/runtime.py`, `trader/worker.py`, `docs/plans/2026-09-26-build-master-plan.md` (§7.1 rows) | Wiring | T18 |
+| `tests/fakes_api.py`, `tests/api/__init__.py`, `tests/api/conftest.py`, `tests/db/test_migration_0005.py`, `tests/test_runtime_settings_phase4.py`, `tests/test_phase4_contracts.py`, `tests/test_tzdata.py`, `tests/api/test_views.py`, `tests/api/test_errors.py` | T1 tests and helpers | T1 |
+| `tests/api/test_main.py`, `tests/api/test_meta.py`, `tests/api/test_spa.py` | T3 tests | T3 |
+| `tests/api/test_auth.py`, `tests/api/test_auth_routes.py` | T4 tests | T4 |
+| `tests/api/test_dashboard.py`, `tests/api/test_trading.py`, `tests/api/test_quotes.py` | T5 tests | T5 |
+| `tests/api/test_proposals.py`, `tests/api/test_killswitch.py`, `tests/notify/test_messages_decided_at.py` | T6 tests | T6 |
+| `tests/api/test_performance.py`, `tests/api/test_journal.py`, `tests/reports/__init__.py`, `tests/reports/test_export.py` | T7 tests | T7 |
+| `tests/api/test_settings.py`, `tests/api/test_strategies.py`, `tests/api/test_forms.py` | T8 tests | T8 |
+| `tests/api/test_system.py`, `tests/api/test_jobs.py`, `tests/api/test_credentials.py`, `tests/api/test_launcher.py` | T9 tests | T9 |
+| `tests/api/test_watchlist.py`, `tests/market/test_watchlist.py`, `tests/jobs/test_nightly_manual.py` | T10 tests | T10 |
+| `tests/api/test_feed.py`, `tests/api/test_stream.py` | T11 tests | T11 |
+| `web/package.json`, `web/package-lock.json`, `web/tsconfig.json`, `web/vite.config.ts`, `web/index.html`, `web/src/styles.css`, `web/src/vite-env.d.ts`, `web/src/api/types.ts`, `web/src/api/client.ts`, `web/src/api/queryKeys.ts`, `web/src/lib/format.ts`, `web/src/lib/format.test.ts`, `web/src/components/ui.tsx`, `web/src/components/ui.test.tsx`, `web/src/test/setup.ts`, `web/src/test/fakeApi.ts`, `web/src/test/fixtures.ts`, `web/src/test/render.tsx` | Web contracts (real) | T2 |
+| `web/src/main.tsx`, `web/src/App.tsx`, `web/src/api/http.ts`, `web/src/live/useLiveUpdates.ts`, `web/src/pages/Login.tsx` (stubs), `web/src/layout/*`, `web/src/shell.test.tsx`, `web/src/api/http.test.ts`, `web/src/live/useLiveUpdates.test.ts` | Web shell | T12 |
+| `web/src/pages/Dashboard.tsx`, `web/src/pages/Candidates.tsx` (stubs), `web/src/pages/dashboard/*` | Dashboard, Candidates | T13 |
+| `web/src/pages/Trades.tsx`, `web/src/pages/Performance.tsx`, `web/src/pages/Journal.tsx`, `web/src/pages/Reports.tsx` (stubs), `web/src/pages/trades/*`, `web/src/pages/performance/*` | Trades, Performance, Journal, Reports | T14 |
+| `web/src/pages/Settings.tsx` (stub), `web/src/pages/settings/*` | Settings | T15 |
+| `web/src/pages/System.tsx` (stub), `web/src/pages/system/*` | System | T16 |
+| `Trader/.dockerignore`, `docker/Dockerfile`, `docker/supervisord.conf`, `docker/entrypoint.sh`, `docker/run-worker.sh`, `docker/docker-compose.dev.yml`, `docker/docker-compose.prod.yml`, `docker/docker-compose.smoke.yml`, `docker/smoke/init.sql`, `docker/deploy.sh`, `docker/smoke.sh`, `tests/test_docker_files.py`, `tests/test_run_worker_sh.py` | Image, runtime and scripts | T17 |
+| `tests/api/test_routes_sweep.py`, `tests/api/test_ts_contract.py`, `tests/test_runtime_phase4.py`, `tests/test_cli_phase4.py` | T18 tests | T18 |
+| `web/playwright.config.ts`, `web/tests/smoke.spec.ts`, `tests/e2e/__init__.py`, `tests/e2e/seed_smoke.py` | End to end | T19 |
+
+## Global Constraints (reminder)
+
+The master plan's **Global Constraints** apply word for word (trunk only, uv, SPEC §3 layout, DDL only in migrations, `timestamptz` UTC, `Decimal` money, time only from a `Clock`, no secrets printed or committed, no network in unit or adapter tests, testcontainers for DB tests, `check.sh` before every commit, `P4-Tn: ` commit prefix and the `Co-Authored-By` trailer, explicit staging). Phase-specific additions:
+
+- **Every `/api` route needs a session** except `POST /api/auth/login`, `GET /api/health` and `GET /api/meta` (T18 sweeps the route table). Every state-changing route needs the CSRF header and writes an `audit_log` row (directly or through the service it calls).
+- **Money on the wire:** `Decimal` fields serialise as JSON strings (pydantic's default); the web never does money arithmetic in floating point beyond display (it parses for charts only).
+- **No secret ever leaves the server or reaches a log:** passwords, TOTP secrets and codes, the Questrade token, session tokens and cookies. Validation errors never echo input values (T1 errors). The request log records method, path, status and duration, never bodies, cookies or the `Authorization`/`Cookie` headers.
+- **Sync DB work stays off the event loop:** routes that only touch the database are plain `def` (FastAPI's thread pool); `async def` routes run DB work with `anyio.to_thread.run_sync`.
+- **Web times** are shown in MT (`TZ_DISPLAY`) labelled `MT`, through `web/src/lib/format.ts` only. **Web tests** never depend on the host's time-zone data: they use the formatter's fixed-offset mode or explicit zones.
+- **Web on a phone:** every page works at 390 px wide with no horizontal page scroll; buttons are at least 44 px tall.
+- **Runtime settings:** every new field declares `alias="<db key>"` (P2 rule); no `model_validator`.
+- **Migrations:** Phase 4's migration is `0005` (0003 and 0004 are taken); it names the schema explicitly and keeps `test_models_match_migrated_schema` and the Alembic autogenerate check passing.
+- **LIVE safety:** Questrade is read-only; every order is a `SimBroker` row; agents never call the QuestTrade MCP order tools; only the dev bot and `trader_dev` are used; no fake trading rows are written into `trader_dev`.
+- Phase 1–3 interfaces used, read from trunk (commit c83d4c7): `Core`/`build_core`, `EnvSettings`, `SettingsStore.load/set`, `RuntimeSettings`, `get_live_run(factory, clock, settings) -> RunInfo`, `sim_account`, `StrategyRegistry(factory, clock).keys/plugin_class/json_schema/current/update/ensure_defaults`, `KillSwitches(factory, clock).active/blocking/entry_guard/pause/resume/reset`, `SWITCHES`, `ProposalService.decide(proposal_id, decision, via, actor) -> DecisionResult(status, already_decided, order_id, blocked)` (raises `KeyError` for a proposal not in the run), `Decision`, `Via`, `ProposalStatus`, `QuestradeAuth.seed/access/health`, `TokenHealth`, `MarketDataService(factory, clock, calendar, client).quotes/candles`, `trader.notify.views.proposal_view/position_lines/status_view/token_state/heartbeat_age/db_token_health/pending_count/next_event/Quotes`, `trader.adapters.telegram.commands.pnl_view` and `_reset_hint` (consistency checks only), `trader.runtime.build_decider/build_notifier/questrade_auth/questrade_client/LazyQuestrade/plan_builder/fired_for/telegram_configured/telegram_test_message/finviz_cache_dir/run_worker`, `trader.engine.scheduler.DayPlan/fired_keys/event_job/MISSED_PREFIX`, `session_phase`, `current_session`, `et_date`, `log_event`, `session_scope`, `run_job`, `JobRun`, `configure_logging`, `redact_text`, `NightlyDeps`, `run_nightly`, `target_session`, `to_questrade_ticker`, `TICKER_PATTERN`, `Candle`, `QtQuote`, `worker.EXIT_LOCK_LOST` (3), second-instance exit 2. If a name on trunk differs from this plan, use the trunk name and say so in your report.
+
+## Review Focus
+
+The five Phase 4 failure modes most likely to hurt Stephen, most likely first. Each is pinned by acceptance tests in the task named.
+
+1. **A web approval that bypasses the kill switches, or a double decision** (an entry approved on the web while `/pause` or `max_drawdown_pct` is active; a web approve and a Telegram tap together; a stale page approving an expired proposal; a cross-site request). Expected: the entry is refused (`rejected`, `entry blocked: ...`, no order); stops, exits and cancels go through; the first decision wins and the second gets `already_decided`; a request without the CSRF header is refused. [T6 tests 1–7; T4 tests 8–9; T18 test 2]
+2. **Authentication holes** (a route without a session check, cookie flags missing, brute force, a session surviving logout or a password change, secrets echoed in a 422 or a log). Expected: every route except the three public ones returns 401 without a session; the cookie is `HttpOnly; Secure; SameSite=Strict`; the sixth wrong password locks the account; logout and password change end the sessions; no password, code or token appears in a response body or a log line. [T4 tests 1–13; T1 test 7; T18 test 1]
+3. **Deployment breaking trading** (the worker killed before its `stopped` heartbeat, a second worker looping on exit 2, a write to the read-only filesystem, secrets baked into the image, migrations as the wrong role, supercronic reading the crontab in UTC). Expected: `stop_grace_period` and `stopwaitsecs` let the worker finish; exit 2/3 retry every 30 s; nothing writes outside `/tmp` and `/app/logs`; no `.env` file or secret in any image layer; migrations run as the owner and the app runs as the app role; supercronic schedules in America/New_York. [T17 tests 1–8 and LIVE 1–4; T19 LIVE 2–8]
+4. **Time zones disagreeing** (the container's zoneinfo, the Mac's, the browser's ICU data; cron in ET; MT labels). Expected: the image uses the pinned pip `tzdata` (`PYTHONTZPATH` empty) and shows America/Edmonton at UTC−6; the web detects a browser/server offset mismatch and uses the server's offset; cron lines stay ET. [T1 test 6; T2 tests 1–3; T12 test 8; T17 test 2 and LIVE 2; T19 LIVE 5]
+5. **Live updates stale or stuck** (NPM buffering SSE, a lost connection never resynced, subscribers leaking, a stream that blocks shutdown). Expected: a new proposal reaches the dashboard within 2 s through NPM; a reconnect gets a full invalidate; closed streams unsubscribe; shutdown ends every stream within the graceful timeout. [T11 tests 1–9; T12 tests 6–7; T19 LIVE 6]
+
+---
+
+### Task P4-T1: Backend contracts: dependencies, migration 0005, settings and env keys, API schemas, deps, errors, shared views, stubs, fakes, gate
+
+**Goal:** Create every shared backend contract of Phase 4 so T3–T11 and T17 can be built in parallel against it. Declarations, one migration, the error shape, a few small shared builders, fakes and the gate change. No route behaviour. SPEC §10 (`users`), §11, §13, §14.
+
+**Migration number (re-check at build time):** `0003` and `0004` are taken. Phase 4's migration is **`0005_web.py`, `revision = "0005"`, `down_revision = "0004"`**. Before writing it, pull trunk and run `uv --directory Trader/app run alembic heads` (and list `trader/db/migrations/versions/`): there must be exactly one head. If it is not `0004`, use the next free number, chain onto the single head, rename the migration and its test to match, and say so in the report.
+
+**Files:** `pyproject.toml`, `uv.lock`, `scripts/check.sh`, `Trader/.gitignore`, `trader/config.py`, `trader/settings_store.py`, `trader/db/models.py`, `trader/db/migrations/versions/0005_web.py`, `trader/notify/types.py`, `trader/notify/views.py`, `trader/api/{__init__,schemas,deps,errors,views}.py`, `trader/api/routers/__init__.py`, every (stub) module of T3-T11 and T18 in the file map, `tests/fakes_api.py`, `tests/api/{__init__,conftest}.py`, `tests/db/test_migration_0005.py`, `tests/test_runtime_settings_phase4.py`, `tests/test_phase4_contracts.py`, `tests/test_tzdata.py`, `tests/api/test_views.py`, `tests/api/test_errors.py`.
+
+**Interfaces (produce):**
+- **Dependencies** (`uv add`): `fastapi>=0.115`, `uvicorn[standard]>=0.30`, `argon2-cffi>=23.1`, `pyotp>=2.9`, `python-multipart>=0.0.9`, `tzdata>=2026.3` (a direct dependency, so zoneinfo can be pinned to it); dependency group `deploy = ["supervisor>=4.2"]` (image only, locked in `uv.lock`). Mypy overrides only for packages without types (`pyotp` if needed, `supervisor` is never imported).
+- **`scripts/check.sh`:** after pytest, when `../web/package.json` exists (T1 and T2 land in either order), run the web check: when `../web/node_modules` is missing or older than `../web/package-lock.json`, `npm --prefix ../web ci`; then `npm --prefix ../web run -s check`. With the web project present, a missing `npm` is a failure (the gate must be complete).
+- **`Trader/.gitignore`:** add `web/node_modules/`, `web/dist/`, `web/test-results/`, `web/playwright-report/`.
+- **`EnvSettings`** (new, all optional): `admin_username: str | None` (pattern `^[a-z][a-z0-9_.-]{2,49}$`), `admin_password_initial: SecretStr | None`, `app_env: Literal["dev", "prod"] = "dev"`, `app_version: str = "dev"`, `web_dist_dir: str | None` (`WEB_DIST_DIR`), `cache_dir: str | None` (env `TRADER_CACHE_DIR`, through a `validation_alias`, since the default name would be `CACHE_DIR`).
+- **Runtime settings** (field → DB key, default, bounds): `web_session_idle_hours` → `web.session_idle_hours`, 168, 1–2160; `web_session_max_days` → `web.session_max_days`, 30, 1–365; `web_login_max_failures` → `web.login_max_failures`, 5, 3–20; `web_lockout_minutes` → `web.lockout_minutes`, 15, 1–1440; `web_login_rate_per_minute` → `web.login_rate_per_minute`, 10, 1–60; `web_sse_poll_seconds: float` → `web.sse_poll_seconds`, 1.0, 0.5–10; `web_quote_cache_seconds: float` → `web.quote_cache_seconds`, 5.0, 1–60.
+- **Migration 0005 and ORM models** (schema `trader`, timestamps `timestamptz`; operational tables, no `run_id`):
+  - `User` (`users`): `id` bigint identity PK, `username` varchar(50) unique not null, `password_hash` text not null, `totp_secret_enc` text NULL, `totp_pending_enc` text NULL, `totp_last_step` bigint NULL, `failed_logins` int not null default 0, `locked_until` NULL, `created_at`, `updated_at`, `password_changed_at` not null, `last_login_at` NULL.
+  - `WebSession` (`web_sessions`): `id` bigint identity PK, `user_id` bigint FK `users.id` ON DELETE CASCADE not null, `token_hash` varchar(64) unique not null, `csrf_token` varchar(64) not null, `created_at`, `last_seen_at`, `expires_at` not null, `revoked_at` NULL, `ip` varchar(45) NULL, `user_agent` varchar(200) NULL; index `ix_web_sessions_user_id`.
+  - `ManualWatchlist` (`manual_watchlists`): `session_date` date PK, `tickers` jsonb not null, `filename` varchar(200) NULL, `uploaded_at` not null, `uploaded_by` varchar(50) not null.
+- **`ProposalView.decided_at: datetime | None = None`** (last field) and `proposal_view` sets it from the row.
+- **`trader.api.errors`** (real): `ApiError(Exception)` with `status: int`, `code: str`, `message: str`, `fields: list[dict[str, Any]] | None = None`; `install_error_handlers(app: FastAPI) -> None` rendering `ErrorOut` for `ApiError`, Starlette `HTTPException` (code from status: `not_found`, `unauthorized`, `forbidden`, `method_not_allowed`, `conflict`, `too_many_requests`, else `http_error`; `Retry-After` kept), `RequestValidationError` (422, code `validation`, `fields = [{"loc", "msg"}]` only: never `input` or `ctx`), and any other exception (500, code `internal`, message `Internal error`, logged with the exception type and a redacted message). Every error body carries `request_id` when the request has one (`request.state.request_id`).
+- **`trader.api.schemas`** (real; pydantic v2, `ConfigDict(frozen=True)`; JSON field names are the Python names; `Decimal` → string, `datetime` → ISO UTC, `date` → `YYYY-MM-DD`). Literals: `SessionPhase` (from `trader.market.sessions`), `TimelineStatus = Literal["done", "failed", "missed", "running", "skipped", "next", "upcoming"]`, `FieldKind = Literal["decimal", "integer", "number", "boolean", "string", "enum", "string_list", "enum_list"]`, `Topic = Literal["proposals", "orders", "fills", "positions", "trades", "candidates", "killswitch", "events", "journal", "jobs", "settings", "strategies", "system"]`, `ManualJob = Literal["nightly", "premarket", "preopen", "postclose", "token-refresh"]`. Generic `Items[T]` = `{items: list[T]}`. Models (field: type; `?` = `| None`):
+  - Errors and misc: `FieldError(loc: list[str | int], msg: str)`; `ErrorBody(code, message, fields: list[FieldError]?, request_id: str?)`; `ErrorOut(error: ErrorBody)`; `OkOut(ok: bool = True, message: str?)`.
+  - Auth: `LoginIn(username: str 1–50, password: str 1–200, totp: str? pattern ^\d{6}$)`; `UserOut(username, totp_enabled: bool)`; `SessionOut(user: UserOut, csrf_token: str, expires_at: datetime)`; `PasswordChangeIn(current_password: str 1–200, new_password: str 12–200, totp: str?)`; `TotpSetupIn(password: str 1–200)`; `TotpSetupOut(secret: str, otpauth_uri: str)`; `TotpConfirmIn(code: str ^\d{6}$)`; `TotpDisableIn(password: str 1–200, code: str ^\d{6}$)`.
+  - Health and meta: `HealthOut(status: Literal["ok", "degraded", "down"], time: datetime, version: str, db_ok: bool, db_latency_ms: int?, token_ok: bool, token_age_hours: float?, worker_ok: bool, worker_phase: str?, worker_age_seconds: float?)`; `MetaOut(server_time, app_env, version, tz_display, tz_offset_minutes: int, tz_iana_version: str?, public_base_url)`.
+  - Status parts: `TokenOut(ok, seeded, age_hours: float?, expires_at?, last_refresh_at?, error: str?)`; `WorkerOut(ok, phase: str?, beat_at?, age_seconds: float?, session_date: date?, pid: int?, host: str?, detail: dict?)`; `EventOut(id, ts, level, source, message, data: dict?)`; `KillSwitchOut(switch, label, tripped: bool, tripped_at?, value: Decimal?, threshold: Decimal?, automatic: bool, needs_web_reset: bool, clears: str)`; `KillSwitchEventOut(id, switch, session_date, tripped_at, value?, threshold?, reset_at?, reset_reason?, reset_by?)`.
+  - Trading: `ProposalOut(id, kind, status, ticker, side, order_type, qty: int, stop?, limit?, stop_loss?, risk_usd?, reason, strategy_key, created_at, expires_at, decided_at?, decided_via?, decided_by?, decision_latency_ms: int?, error?, order_id: int?, position_id: int?)` with `classmethod from_view(v: ProposalView, p: Proposal) -> ProposalOut` (pure mapping); `PositionOut(id, symbol_id, ticker, strategy_key, status: Literal["open", "closed"], qty, entry: Decimal, last?, stop?, stop_working: bool, unrealized_pnl?, unprotected_seconds: int, opened_at, closed_at?)` with `classmethod from_line(line: PositionLine, *, symbol_id, strategy_key, opened_at) -> PositionOut` (an open position); `OrderOut(id, proposal_id?, position_id?, symbol_id, ticker, side, order_type, purpose, qty, stop_price?, limit_price?, stop_loss?, tif, status, reason, session_date, submitted_at, closed_at?, cancel_reason?)`; `FillOut(id, order_id, ticker, side, purpose, ts, qty, price, fees: dict, quote_snapshot: dict, slippage)`; `TradeOut(id, position_id, symbol_id, ticker, strategy_key, session_date, entry_price, exit_price, qty, pnl, pnl_r?, planned_risk?, exit_reason, slippage_total, fees_total, opened_at, closed_at)`; `SignalOut(id, strategy_key, config_revision: int, config_version: str, event_key, ts, intent: dict, evidence: dict)`; `CandleOut(start, open, high, low, close, volume: int)`; `PositionDetailOut(position: PositionOut, trade: TradeOut?, signal: SignalOut?, proposals: list[ProposalOut], orders: list[OrderOut], fills: list[FillOut], candles: list[CandleOut], chart_error: str?)`; `CandidateOut(id, session_date, strategy_key, symbol_id, ticker, rvol?, rank: int?, passed: bool, reject_reason?, candle: dict?, data: dict?)`; `HeadlineOut(ts: datetime?, title, source: str?, url: str?)`; `CatalystOut(symbol_id, ticker, session_date, catalyst_type, direction, quality: int?, confirmed: bool?, reason?, gap_pct: Decimal?, earnings_date: date?, headlines: list[HeadlineOut], model: str?, classified_at?)`; `CandidatesOut(session_date, brief: str?, catalysts: list[CatalystOut], ranking: list[CandidateOut])`.
+  - Dashboard: `SessionInfoOut(date, phase: SessionPhase, is_session: bool, open_at?, close_at?)`; `TimelineItemOut(key, label, kind: Literal["job", "event"], at: datetime, status: TimelineStatus, detail: str?)`; `PnlOut(session_date, realized_today, unrealized: Decimal?, unrealized_partial: bool, week_to_date, equity, peak_equity, drawdown_pct)`; `DashboardOut(server_time, run_id, session: SessionInfoOut, approval_mode: Literal["manual", "auto"], telegram_configured: bool, timeline: list[TimelineItemOut], pending: list[ProposalOut], positions: list[PositionOut], pnl: PnlOut, killswitches: list[KillSwitchOut], events: list[EventOut], token: TokenOut, worker: WorkerOut, candidates_top: list[CandidateOut], candidates_count: int)`.
+  - Decisions: `DecisionOut(proposal: ProposalOut, already_decided: bool, blocked: str?, message: str)`; `KillSwitchesOut(switches: list[KillSwitchOut], history: list[KillSwitchEventOut])`; `ResetIn(reason: str 3–500 after stripping)`.
+  - Performance and journal: `HistogramBinOut(lo: Decimal, hi: Decimal, count: int)`; `MetricsOut(run_id, from_date: date?, to_date: date?, trades: int, wins: int, win_rate?, avg_win_r?, avg_loss_r?, expectancy_r?, profit_factor?, avg_slippage?, max_drawdown_pct?, adherence_pct?, total_pnl: Decimal, r_histogram: list[HistogramBinOut])`; `EquityPointOut(ts, equity, cash, settled_cash, peak_equity, drawdown_pct)`; `EquityOut(run_id, points: list[EquityPointOut])`; `JournalDayOut(session_date, rules_followed: bool?, notes: str?, answered_via: str?, updated_at?, trades: int, realized_pnl: Decimal?)`; `JournalIn(rules_followed: bool?, notes: str? ≤ 5000)` (fields not sent are left unchanged: the route reads `model_fields_set`).
+  - Settings and strategies: `FieldOut(name, kind: FieldKind, title, description?, default: Any, minimum: str?, maximum: str?, exclusive_minimum: bool = False, exclusive_maximum: bool = False, enum: list[str]?, item_enum: list[str]?, pattern: str?, nullable: bool = False)`; `SettingOut(key, value: Any, default: Any, is_default: bool, group: str, field: FieldOut, updated_at?, updated_by?)`; `SettingsOut(items: list[SettingOut])`; `SettingIn(value: Any)`; `StrategyOut(key, version, kind: Literal["entry", "overlay"], enabled: bool, revision: int, params: dict, schema: dict, fields: list[FieldOut], updated_at, updated_by: str?, owns_open_positions: bool)`; `StrategyIn(params: dict?, enabled: bool?)`.
+  - System and jobs: `JobRunOut(id, job, session_date, started_at, finished_at?, status, error?, detail: dict?, duration_seconds: float?)`; `JobRunIn(date: date?, force: bool = False)`; `JobLaunchOut(job, session_date, launched: bool, message)`; `NotificationOut(id, kind, status, created_at, sent_at?, attempts: int, error?)`; `SystemOut(server_time, version, app_env, alembic_revision: str?, tz_iana_version: str?, telegram_configured: bool, token: TokenOut, worker: WorkerOut, rate_limit: dict[str, int]?, last_runs: list[JobRunOut], errors: list[EventOut], notifications_failed: list[NotificationOut], manual_jobs: list[ManualJob])`; `CredentialIn(refresh_token: SecretStr 1–400)`; `TelegramTestOut(sent: bool, message)`.
+  - Watchlist: `WatchlistOut(session_date, tickers: list[str], filename?, uploaded_at, uploaded_by)`; `RejectedRowOut(row: int, value: str, reason: str)`; `WatchlistUploadOut(watchlist: WatchlistOut, rejected: list[RejectedRowOut], launched: JobLaunchOut?)`.
+  - Stream: `StreamHello(server_time)`; `StreamInvalidate(topics: list[Topic])`; `StreamEvents(items: list[EventOut])`.
+- **`trader.api.deps`** (real):
+  - `AuthUser(id: int, username: str, session_id: int, csrf_token: str)` (frozen dataclass); `actor(user) -> str` = `"web:<username>"`.
+  - Protocols: `CredentialStore` (`health() -> TokenHealth`, `seed(refresh_token: str) -> None`, `access() -> AccessToken`; `QuestradeAuth` satisfies it); `JobLauncher` (`async launch(job: ManualJob, session_date: date | None, force: bool, actor: str) -> JobLaunchOut`, `running(job: str) -> bool`); `ChangeFeed` (`subscribe() -> AbstractAsyncContextManager[AsyncIterator[FeedMessage]]`, `async run(stop: asyncio.Event) -> None`, `subscriber_count() -> int`); `FeedMessage(kind: Literal["hello", "invalidate", "events"], data: dict[str, Any])` (frozen); `CandleSource = Callable[[int, datetime, datetime], Awaitable[list[Candle]]]` (5-minute candles).
+  - `ApiServices` (frozen dataclass): `core: Core`, `registry: StrategyRegistry`, `killswitches: KillSwitches`, `credentials: CredentialStore`, `decider_for: Callable[[int], Callable[[int, Decision, Via, str], DecisionResult]]`, `notifier: Notifier`, `telegram_configured: bool`, `quotes: Quotes | None`, `candles: CandleSource | None`, `jobs: JobLauncher`, `feed: ChangeFeed`, `plan: Callable[[date], DayPlan]`, `fired: Callable[[date], set[str]]`.
+  - `get_services(request) -> ApiServices` (`request.app.state.services`); `current_user(request, services) -> AuthUser` delegating to `trader.api.auth.authenticate(request, services)`; `require_csrf(request, user = Depends(current_user)) -> AuthUser` delegating to `trader.api.auth.check_csrf(request, user)`; `live_run_id(services) -> int` (`get_live_run(...).id`); `resolve_run(services, run: str = "live") -> int` (`live`, or an existing `runs.id`, else `ApiError(404, "not_found", ...)`).
+- **`trader.api.views`** (real, small, shared by T5, T6 and T9): `token_out(token_health: Callable[[], TokenHealth], now) -> TokenOut` (via `notify.views.token_state`); `worker_out(factory, now, stale_seconds: int) -> WorkerOut` (`ok` when the row exists, its phase is not `stopping`/`stopped` and `beat_at` is within `stale_seconds`); `event_out(row: EventLog) -> EventOut` (message and string data values passed through `redact_text`); `killswitch_states(killswitches, factory, run_id, session_date) -> list[KillSwitchOut]` (all four `SWITCHES` in that order; `label` a short human name; `automatic` False only for `manual_pause`; `needs_web_reset` True for `max_drawdown_pct` and `expectancy` when tripped; `clears` = `commands._reset_hint(switch)` wording for automatic switches, "lift it with Resume (web) or /resume" for `manual_pause`, "" when not tripped; value and threshold from the open `kill_switch_events` row).
+- **`trader.api.routers.__init__`** (real): `ROUTERS: tuple[APIRouter, ...]` importing `router` from each module in the file map, in this order: meta, auth, dashboard, trading, proposals, killswitch, performance, journal, settings, strategies, system, jobs, credentials, watchlist, stream. Each stub module defines `router = APIRouter(tags=[<name>])` with no routes.
+- **Stubs** (functions raise `NotImplementedError`; classes have constructor and method signatures) with the exact signatures in each owning task's Interfaces: `trader/api/main.py`, `trader/api/__main__.py`, `trader/api/auth.py`, `trader/api/quotes.py`, `trader/api/forms.py`, `trader/api/launcher.py`, `trader/api/feed.py`, `trader/api/services.py`, `trader/market/watchlist.py`, `trader/reports/export.py`, and every router module.
+- **`tests/fakes_api.py`:** `test_core(factory, clock, **env) -> Core` (an `EnvSettings` with generated throwaway keys, the given factory, `FixedClock`, `SessionCalendar`, `SettingsStore`); `make_services(core, **overrides) -> ApiServices` (real `StrategyRegistry` and `KillSwitches` on the test DB; `FakeCredentialStore`, `recording_decider_for` wrapping a real `build_decider`, `RecordingNotifier` from `tests/fakes_telegram.py`, `telegram_configured=True`, `fake_quotes(prices: Mapping[int, Decimal])`, `fake_candles(candles)`, `FakeJobLauncher` (records launches, `running()` configurable), `FakeFeed` (a queue you push `FeedMessage`s into), `plan` = a fixed `DayPlan` builder, `fired` = a fixed set).
+- **`tests/api/conftest.py`:** `make_client(services, *routers, user: AuthUser | None = DEFAULT_USER) -> TestClient` building a bare FastAPI app with `install_error_handlers`, the routers under `/api`, `app.state.services`, and dependency overrides: `current_user` returns `user` (or raises `ApiError(401)` when None), `require_csrf` returns the user. Base URL `https://testserver` (the session cookie is `Secure`).
+
+**Behaviour and decisions:**
+- The three tables carry no `run_id` (operational data, like `job_runs`). The app role's default privileges (set up on `trader_dev`) cover new tables.
+- The schemas are the single source for the TypeScript mirror written by T2 from this plan; T18 checks the two agree.
+
+**Acceptance tests:**
+- [ ] 1. After `alembic upgrade head` the three tables exist with the columns, keys, FK (cascade) and index above; downgrade to `0004` drops them and leaves the Phase 3 tables; the ORM models match the migrated schema.
+- [ ] 2. A second `users` row with the same username and a second `web_sessions` row with the same `token_hash` violate their unique constraints; deleting a user deletes its sessions.
+- [ ] 3. Every new runtime setting has its default and rejects a value outside its bounds; every new env key is optional and `ADMIN_USERNAME` rejects `Stephen!`.
+- [ ] 4. `proposal_view` of a decided proposal carries `decided_at`; a `ProposalView` built without it has `decided_at is None`.
+- [ ] 5. `ProposalOut.from_view` and `PositionOut.from_line` copy every field; a `Decimal("21.5608")` serialises as `"21.5608"` in `model_dump(mode="json")`.
+- [ ] 6. `tests/test_tzdata.py`: `tzdata.IANA_VERSION >= "2026c"`; with `zoneinfo.reset_tzpath([])` (the pip package only) America/Edmonton has offset −6 h on 2026-12-01 and on 2027-07-01; `zoneinfo.reset_tzpath()` restores the default afterwards.
+- [ ] 7. `install_error_handlers`: an `ApiError(409, "conflict", "x")` renders `{"error": {"code": "conflict", "message": "x", ...}}`; a 422 for a body `{"password": "hunter2hunter2"}` failing validation contains no `hunter2`; an unhandled `RuntimeError("token=abc")` gives 500 `internal` and the captured log has no `abc`.
+- [ ] 8. `trader.api.views`: `killswitch_states` on a DB with `max_drawdown_pct` tripped returns four items in `SWITCHES` order, that one tripped with `needs_web_reset` True and its value and threshold; `manual_pause` tripped has `automatic` False; `worker_out` marks a `stopped` row not OK however fresh; `event_out` masks a bot token in a message.
+- [ ] 9. The contract test imports every stub module, checks `ROUTERS` has 15 routers, `QuestradeAuth` satisfies `CredentialStore`, `FakeJobLauncher` satisfies `JobLauncher`, `FakeFeed` satisfies `ChangeFeed` (typed assignments, checked by mypy), and `make_client` serves a router added in the test with a 401 when `user=None`.
+- [ ] 10. Gate: `bash Trader/app/scripts/check.sh` passes (its web step runs whenever `Trader/web/package.json` is on trunk); commit `P4-T1: ...` and push.
+
+**LIVE step:** apply migration 0005 to `trader_dev`: `uv --directory Trader/app run --env-file ../../../../../Trader/docker/.env.dev alembic upgrade head` → `Running upgrade 0004 -> 0005`; `... alembic current` → `0005 (head)`. Record it in the activity log.
+
+---
+
+### Task P4-T2: Web contracts: Vite scaffold, API types and client interface, formatters, UI primitives, page stubs, test helpers
+
+**Goal:** Create the web project and every shared web contract so T12–T16 (and T17's image build) can start at once. SPEC §2 (web stack), §12.
+
+**Files:** the `web/` rows of T2 in the file map, plus the (stub) web modules of T12-T16.
+
+**Interfaces (produce):**
+- **Project** (`Trader/web/`): `package.json` with `"private": true`, `"type": "module"`, `"engines": {"node": ">=22"}`, scripts `dev` (vite), `build` (`tsc -b && vite build`), `preview`, `test` (`vitest run`), `check` (`tsc -b --noEmit && vitest run`), `e2e` (`playwright test`); dependencies `react@18`, `react-dom@18`, `react-router-dom@6`, `@tanstack/react-query@5`, `recharts@2`; dev dependencies `typescript@5`, `vite@5` or later, `@vitejs/plugin-react`, `vitest`, `jsdom`, `@testing-library/react`, `@testing-library/user-event`, `@testing-library/jest-dom`, `@types/react`, `@types/react-dom`, `@playwright/test`; exact versions locked in `package-lock.json` (`npm install` once, then commit the lock). `tsconfig.json` strict (`"strict": true`, `noUncheckedIndexedAccess`). `vite.config.ts`: React plugin, dev server proxy `/api` → `http://127.0.0.1:8000` (with SSE not buffered), build `outDir: "dist"`, Vitest `environment: "jsdom"`, `setupFiles: ["src/test/setup.ts"]`, `include: ["src/**/*.test.{ts,tsx}"]`. `index.html` with `<div id="root">`, `<meta name="viewport" content="width=device-width, initial-scale=1">`, title `Trader`.
+- **`src/api/types.ts`** (real): one exported TypeScript type per `trader.api.schemas` model with the same name and the same field names (snake_case); `Decimal` → `Money = string`; `datetime` → `IsoTime = string`; `date` → `IsoDate = string`; `X | None` → `X | null`; literals as string unions (`Topic`, `TimelineStatus`, `FieldKind`, `ManualJob`, `SessionPhase`); `Items<T> = { items: T[] }`.
+- **`src/api/client.ts`** (real): `class ApiError extends Error { status: number; code: string; fields?: FieldError[]; requestId?: string }`; `interface ApiClient` with one method per route: `login(body: LoginIn): Promise<SessionOut>`, `logout(): Promise<OkOut>`, `me(): Promise<SessionOut>`, `changePassword(body)`, `totpSetup(body)`, `totpConfirm(body)`, `totpDisable(body)`, `meta(): Promise<MetaOut>`, `health(): Promise<HealthOut>`, `dashboard(): Promise<DashboardOut>`, `proposals(q: { status?: "pending" | "all"; date?: IsoDate; limit?: number }): Promise<Items<ProposalOut>>`, `proposal(id: number)`, `approve(id: number): Promise<DecisionOut>`, `reject(id: number): Promise<DecisionOut>`, `candidates(date?: IsoDate): Promise<CandidatesOut>`, `orders(q)`, `fills(q)`, `positions(q: { status?: "open" | "closed" | "all"; date?: IsoDate })`, `position(id: number): Promise<PositionDetailOut>`, `trades(q: { run?: string; from?: IsoDate; to?: IsoDate; limit?: number; offset?: number })`, `metrics(q: { run?: string; from?: IsoDate; to?: IsoDate })`, `equity(q: { run?: string; from?: IsoDate; to?: IsoDate })`, `exportTradesUrl(q): string`, `journal(q: { from?: IsoDate; to?: IsoDate })`, `putJournal(date: IsoDate, body: JournalIn): Promise<JournalDayOut>`, `killswitches(): Promise<KillSwitchesOut>`, `resetKillSwitch(sw: string, body: ResetIn)`, `pause()`, `resume()`, `settings(): Promise<SettingsOut>`, `putSetting(key: string, value: unknown): Promise<SettingOut>`, `strategies(): Promise<Items<StrategyOut>>`, `putStrategy(key: string, body: StrategyIn): Promise<StrategyOut>`, `system(): Promise<SystemOut>`, `events(q: { since?: number; before?: number; level?: string; source?: string; limit?: number })`, `telegramTest(): Promise<TelegramTestOut>`, `jobs(q: { job?: string; limit?: number })`, `runJob(job: ManualJob, body: JobRunIn): Promise<JobLaunchOut>`, `putQuestradeToken(token: string): Promise<TokenOut>`, `watchlist(date?: IsoDate): Promise<WatchlistOut | null>`, `uploadWatchlist(file: File, opts: { date?: IsoDate; runNightly?: boolean }): Promise<WatchlistUploadOut>`, `deleteWatchlist(date: IsoDate): Promise<OkOut>`, `streamUrl(): string`. `ApiContext` (React context), `ApiProvider`, `useApi(): ApiClient`.
+- **`src/api/queryKeys.ts`** (real): `qk` factory (`qk.dashboard()`, `qk.proposals(q)`, `qk.proposal(id)`, `qk.candidates(date)`, `qk.positions(q)`, `qk.position(id)`, `qk.trades(q)`, `qk.metrics(q)`, `qk.equity(q)`, `qk.journal(q)`, `qk.killswitches()`, `qk.settings()`, `qk.strategies()`, `qk.system()`, `qk.events(q)`, `qk.jobs(q)`, `qk.watchlist(date)`, `qk.me()`, `qk.meta()`), each key an array starting with its resource name; `TOPIC_KEYS: Record<Topic, readonly string[]>` (the resource-name prefixes each SSE topic invalidates: `proposals` → dashboard, proposals, proposal, position; `fills`/`orders`/`positions`/`trades` → dashboard, positions, position, trades, metrics, equity; `candidates` → dashboard, candidates; `killswitch` → dashboard, killswitches; `events` → dashboard, events, system; `journal` → journal, metrics; `jobs` → dashboard, jobs, system, candidates; `settings` → settings, dashboard; `strategies` → strategies, dashboard; `system` → system, dashboard).
+- **`src/lib/format.ts`** (real, pure): `setDisplayZone(mode: { zone: string } | { fixedOffsetMinutes: number; label: string }, check?: { browserOffsetMinutes: number; serverOffsetMinutes: number })`; `displayZoneInfo(): { mode: "zone" | "fixed"; browserOffsetMinutes: number | null; serverOffsetMinutes: number | null }` (what the System page shows); `fmtTime(iso)` → `07:35 MT`; `fmtDateTime(iso)` → `2026-10-06 07:35 MT`; `fmtDate(isoDate)`; `fmtMoney(s: Money | null)` → `$1,234.56`, `-$12.30`, `n/a` for null; `fmtPrice` (4 dp trimmed to at least 2); `fmtPct(fraction)` → `+1.23%`; `fmtR(s)` → `+2.17R`; `fmtDuration(seconds)` → `3m 20s`; `zoneOffsetMinutes(zone, iso): number` (from `Intl`); `secondsUntil(iso, serverSkewMs)`.
+- **`src/components/ui.tsx`** (real, stateless): `Card({title, children, actions})`, `Badge({tone: "ok" | "warn" | "bad" | "info" | "muted", children})`, `Button({variant: "primary" | "danger" | "plain", busy?, ...buttonProps})` (min height 44 px, disabled while busy), `Stat({label, value, sub?})`, `Table` (horizontally scrollable wrapper), `ErrorBox({error: unknown, onRetry?})` (shows `ApiError.message`, never a stack), `Loading()`, `Empty({children})`, `Light({tone, label})` (kill-switch light).
+- **`src/styles.css`** (real): CSS variables for colours and spacing, light and dark (`prefers-color-scheme`), a single-column layout below 720 px, `.page`, `.grid`, `.row` helpers.
+- **Stubs** (T12–T16 replace them): `src/main.tsx` (renders `<App />`), `src/App.tsx` (renders the title), `src/api/http.ts` (`createHttpClient(opts: { baseUrl?: string; onUnauthorized?: () => void }): ApiClient`, throwing), `src/live/useLiveUpdates.ts` (`useLiveUpdates(): { connected: boolean }`), and `src/pages/{Login,Dashboard,Candidates,Trades,Performance,Journal,Reports,Settings,System}.tsx` (each a default-exported component rendering its title).
+- **Test helpers:** `src/test/setup.ts` (jest-dom matchers; the formatter set to the fixed offset −360 min, label `MT`); `src/test/fixtures.ts` (one realistic object per response type: a pending entry proposal for AAA, an open position, a dashboard, candidates, a trade detail with 5-minute candles, metrics, settings with each `FieldKind`, strategies, system with Telegram configured); `src/test/fakeApi.ts` (`class FakeApiClient implements ApiClient`: returns the fixtures, records `calls: [method, args][]`, `fail(method, error)`); `src/test/render.tsx` (`renderWithProviders(ui, { api?, route?, path? })`: a `QueryClient` with retries off, `MemoryRouter` at `route`, `ApiProvider`).
+
+**Behaviour and decisions:**
+- No CSS framework and no component library: plain CSS and the primitives above keep the bundle small and phone-friendly.
+- The `Money` type stays a string end to end; charts parse with `Number()` for plotting only.
+
+**Acceptance tests (Vitest):**
+- [ ] 1. `fmtTime("2026-10-06T13:35:05Z")` → `07:35 MT` in the fixed −360 mode; with `{ zone: "America/Denver" }` 2026-11-02T14:35:05Z → `07:35 MT` (a zone that still changes its clocks, as in P3-T4 test 7).
+- [ ] 2. `fmtMoney("-12.3")` → `-$12.30`; `fmtMoney(null)` → `n/a`; `fmtPct("0.0123")` → `+1.23%`; `fmtR("2.1700")` → `+2.17R`; `fmtPrice("21.5600")` → `21.56`, `fmtPrice("21.5608")` → `21.5608`; `fmtDuration(200)` → `3m 20s`.
+- [ ] 3. `secondsUntil` uses the server skew: expires in 120 s by the server's clock with the browser 30 s fast gives 120.
+- [ ] 4. `Button` with `busy` is disabled and at least 44 px tall (inline style or class checked); `ErrorBox` shows an `ApiError`'s message and a Retry button that calls `onRetry`.
+- [ ] 5. `FakeApiClient` satisfies `ApiClient` (`tsc`), records calls, and `fail("approve", new ApiError(...))` makes `approve` reject.
+- [ ] 6. `renderWithProviders(<Dashboard />)` renders the stub title (the harness works).
+- [ ] 7. `npm run build` produces `dist/index.html` and hashed assets.
+- [ ] 8. Gate: `bash Trader/app/scripts/check.sh` passes (it runs `npm run check`); commit `P4-T2: ...` and push.
+
+---
+
+### Task P4-T3: API core: app factory, JSON errors, security headers, request logging, health and meta, SPA serving and deep links, `python -m trader.api`
+
+**Goal:** The FastAPI application every router plugs into: lifespan, error handling, security headers, structured request logs through `configure_logging`, the public health and meta routes, and the built web app served with SPA deep links. SPEC §11 (`/health`), §12 (served by FastAPI), §14, §15 (health check); master plan §7.4 notes (uvicorn logging, web links).
+
+**Files:** `trader/api/main.py`, `trader/api/__main__.py`, `trader/api/routers/meta.py`, `tests/api/test_main.py`, `tests/api/test_meta.py`, `tests/api/test_spa.py`.
+
+**Interfaces:**
+- Consumes: `ROUTERS`, `install_error_handlers`, `ApiServices`, `get_services`, `views.token_out`, `views.worker_out` (T1); `trader.api.services.build_services(core, stack)` (T18, called only by the default factory); `configure_logging`; `EnvSettings.web_dist_dir/app_env/app_version/tz_display/public_base_url`.
+- Produces in `trader.api.main`: `create_app(*, services_factory: Callable[[AsyncExitStack], Awaitable[ApiServices]] | None = None, web_dist: Path | None = None) -> FastAPI` (the default factory builds `Core` with `build_core()` and calls `build_services(core, stack)`); `web_dist_dir(env) -> Path` (`WEB_DIST_DIR`, else `<package>/../../web/dist`); `SECURITY_HEADERS: Mapping[str, str]`.
+- Produces in `trader.api.routers.meta`: `GET /api/health -> HealthOut` (public), `GET /api/meta -> MetaOut` (public).
+- Produces `trader/api/__main__.py`: `main() -> None` = `configure_logging("api")` then `uvicorn.run(create_app(), host="0.0.0.0", port=8000, log_config=None, access_log=False, proxy_headers=True, forwarded_allow_ips="*", timeout_graceful_shutdown=10)`.
+
+**Behaviour and decisions:**
+- **Lifespan:** enter an `AsyncExitStack`, build services, store them on `app.state.services`, start `services.feed.run(stop)` as a task, and on shutdown set `stop`, await the feed task (5 s bound) and close the stack. A services build failure is logged and re-raised (the process exits and supervisord restarts it).
+- **Routers:** every router in `ROUTERS` is included under the `/api` prefix. Unknown `/api/...` paths give a JSON 404 (`not_found`), never the SPA.
+- **Request log** (middleware): assigns `request.state.request_id` (a short random id, echoed as `X-Request-ID`), binds it to structlog contextvars, and logs one `http.request` line (method, path without the query string, status, `duration_ms`, request id) at INFO; `/api/health` and `/api/stream` at DEBUG. Never bodies, query strings, cookies or auth headers.
+- **Security headers** on every response: `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'` (inline styles only, for chart attributes), `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, `X-Frame-Options: DENY`; `Cache-Control: no-store` on `/api` responses.
+- **SPA:** files under `<dist>/assets/` are served with `Cache-Control: public, max-age=31536000, immutable`; any other GET that is not `/api/...` returns `<dist>/index.html` with `Cache-Control: no-cache` and status 200 (deep links, contract refinement 1). A path with `..` or a hidden file never escapes `dist`. With no `index.html` present, non-API GETs return 503 with a short plain-text "web app not built" body.
+- **Logging:** uvicorn runs with `log_config=None` and `access_log=False`, so `uvicorn` and `uvicorn.error` records reach the root handler that `configure_logging("api")` installed (JSON, redacted).
+- **Health:** `db_ok` from `SELECT 1` with a 2 s statement timeout (`db_latency_ms`); token from `views.token_out(lambda: trader.notify.views.db_token_health(factory), now)` (reads no token value); worker from `views.worker_out(..., stale_seconds=settings.worker_heartbeat_stale_seconds)`. `status`: `down` (and HTTP 503) when the DB check fails; `degraded` (HTTP 200) when the token or the worker is not OK; else `ok`. No error text in the body. Settings unreadable → defaults.
+- **Meta:** `tz_offset_minutes` is the current UTC offset of `TZ_DISPLAY` from the process's zoneinfo; `tz_iana_version` from `tzdata.IANA_VERSION` when zoneinfo reads the pip package, else None.
+
+**Acceptance tests:**
+- [ ] 1. `create_app(services_factory=fake)` with a tmp `dist` (an `index.html` and `assets/app.123.js`): `GET /api/health` → 200 `ok` with DB up (fake token OK, fresh heartbeat), without a session.
+- [ ] 2. Health with a factory whose DB check raises → 503 `down`; with a stale heartbeat → 200 `degraded`, `worker_ok` false; the body contains no exception text.
+- [ ] 3. `GET /dashboard?proposal=5`, `/trades?position=3`, `/journal?date=2026-10-06`, `/system`, `/reports?week=2026-10-09`, `/candidates`, `/settings`, `/login?next=%2Fsystem` each → 200 with the `index.html` body; `/assets/app.123.js` → 200 with the immutable cache header; `/api/nope` → 404 JSON `not_found`; `/../etc/passwd` and `/assets/../../x` never return a file outside `dist`.
+- [ ] 4. Every response carries the CSP and the other security headers; `/api/...` responses carry `Cache-Control: no-store`.
+- [ ] 5. After `configure_logging("api")`, a request produces one JSON `http.request` line with method, path, status and `request_id`, and no query string; a `logging.getLogger("uvicorn.error").info("x")` record comes out as one JSON line (uvicorn logs go through `configure_logging`).
+- [ ] 6. An unhandled exception in a test route → 500 `internal` with the `request_id` that is also in the `X-Request-ID` header.
+- [ ] 7. `GET /api/meta` without a session → `tz_display == "America/Edmonton"` and `tz_offset_minutes == -360` under a `FixedClock` on 2026-12-01 (pinned pip tzdata).
+- [ ] 8. The lifespan starts the feed task and stops it on shutdown (`TestClient` as a context manager; the fake feed records `run` start and stop).
+- [ ] 9. With no `index.html`, `/dashboard` → 503 "web app not built", while `/api/health` still works.
+- [ ] 10. Gate and commit `P4-T3: ...`.
+
+---
+
+### Task P4-T4: Authentication: passwords, sessions, CSRF, rate limit and lockout, TOTP, admin bootstrap, auth routes
+
+**Goal:** Single-user login with Argon2 passwords, server-side sessions in a signed `HttpOnly; Secure; SameSite=Strict` cookie, CSRF on changes, login rate limiting and lockout, optional TOTP, and the first-start admin from env. SPEC §2 (auth), §10 (`users`), §11 (`/auth/*`), §14 (cookies, CSRF, rate limit, audit); BR-56.
+
+**Files:** `trader/api/auth.py`, `trader/api/routers/auth.py`, `tests/api/test_auth.py`, `tests/api/test_auth_routes.py`.
+
+**Interfaces:**
+- Consumes: `User`, `WebSession`, `AuditLog` models, `Crypto` (TOTP secret at rest), `SettingsStore` (`web.*`), `ApiServices`, `AuthUser`, `ApiError`, schemas (T1).
+- Produces in `trader.api.auth`:
+  - `COOKIE_NAME = "trader_session"`, `CSRF_HEADER = "X-CSRF-Token"`, `MIN_PASSWORD_CHARS = 12`.
+  - `hash_password(pw: str) -> str`, `verify_password(stored: str, pw: str) -> tuple[bool, str | None]` (ok, new hash when a rehash is due).
+  - `SessionSigner(secret: bytes)` with `derive(session_secret: str) -> SessionSigner` (key = HMAC-SHA256(secret, `"trader.web.session.v1"`)), `issue() -> tuple[str, str]` (cookie value `<token>.<mac>`, SHA-256 hex of the token), `parse(cookie: str) -> str | None` (token hash, or None when malformed or the MAC is wrong; `hmac.compare_digest`).
+  - `LoginLimiter(clock, per_minute: Callable[[], int])` with `allow(ip: str) -> float | None` (seconds to wait, or None).
+  - `login(services, username, password, totp, ip, user_agent) -> tuple[SessionOut, str]` (the cookie value); `logout(services, user: AuthUser) -> None`; `authenticate(request, services) -> AuthUser`; `check_csrf(request, user) -> AuthUser`; `change_password(services, user, current, new, totp) -> None`; `totp_setup(services, user, password) -> TotpSetupOut`; `totp_confirm(services, user, code) -> None`; `totp_disable(services, user, password, code) -> None`.
+  - `ensure_admin(factory, clock, username: str | None, password: SecretStr | None) -> Literal["created", "exists", "not_configured", "rejected"]` (for `trader create-admin`, T18).
+- Produces in `trader.api.routers.auth`: `POST /api/auth/login` (public) → `SessionOut` + cookie; `POST /api/auth/logout` → `OkOut` + cookie cleared; `GET /api/auth/me` → `SessionOut`; `PUT /api/auth/password` → `OkOut`; `POST /api/auth/totp/setup` → `TotpSetupOut`; `POST /api/auth/totp/confirm` → `OkOut`; `POST /api/auth/totp/disable` → `OkOut`.
+
+**Behaviour and decisions:**
+- **Passwords:** Argon2id with argon2-cffi's defaults; a successful login with outdated parameters stores the rehash. An unknown username is checked against a fixed dummy hash, so both paths take the same time. New passwords need at least 12 characters and must differ from the current one.
+- **Sessions:** login creates a `web_sessions` row (`token_hash`, `csrf_token` = 32 random URL-safe bytes, `expires_at = now + web.session_max_days`, `ip`, `user_agent` cut to 200) and sets the cookie `trader_session=<token>.<mac>; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=<max days>`. `authenticate` accepts a cookie only when the MAC is valid, the row exists, is not revoked, `now < expires_at` and `now - last_seen_at < web.session_idle_hours`; it moves `last_seen_at` forward at most once a minute. Anything else → `ApiError(401, "unauthorized", "Please log in")` and the response clears the cookie.
+- **CSRF:** `check_csrf` requires `X-CSRF-Token` equal to the session's token (`compare_digest`) on `POST`/`PUT`/`DELETE`; missing or wrong → 403 `csrf`. When an `Origin` header is present it must equal the origin of `PUBLIC_BASE_URL` or of the request's own host (so the local smoke stack works), else 403. Login needs a JSON body (a form post is a 422) and passes the same `Origin` check.
+- **Rate limit and lockout:** `LoginLimiter` allows `web.login_rate_per_minute` attempts per client IP per sliding minute (memory; the IP is the first `X-Forwarded-For` hop that uvicorn's proxy headers give, see Open question 4); beyond it → 429 with `Retry-After`. Each wrong password (or wrong or missing TOTP code when TOTP is on) increments `users.failed_logins`; reaching `web.login_max_failures` sets `locked_until = now + web.lockout_minutes`; a locked account → 429 "Too many failed attempts. Try again in N minutes." even with the right password; a successful login resets the counter. Every other failure is a generic 401 "Invalid username or password" (no hint whether the name, the password or the code was wrong). The login form always offers an optional code field.
+- **TOTP (optional):** `totp_setup` (password required) stores a new base32 secret encrypted in `totp_pending_enc` and returns it with an `otpauth://totp/Trader%20(<env>):<username>?secret=...&issuer=Trader` URI; `totp_confirm` with a valid code moves it to `totp_secret_enc`; `totp_disable` needs the password and a valid code. Codes are checked with a ±1 step window, and a step at or below `totp_last_step` is refused (no replay).
+- **Password change** revokes every other session of the user and keeps the current one; logout revokes the current one.
+- **Audit** (`audit_log`, actor `web:<username>`): `auth.login` (after: ip), `auth.login_failed` (after: ip, reason code, never the password), `auth.lockout`, `auth.logout`, `auth.password_change`, `auth.totp_enable`, `auth.totp_disable`, `auth.admin_created` (actor `system`). No secret values in `before`/`after`.
+- **Admin bootstrap:** `ensure_admin` creates the user only when the `users` table is empty and both env values are set and the password has at least 12 characters (`created`); a non-empty table → `exists` (never overwrites a changed password); a missing value → `not_configured`; a short password → `rejected` (logged `critical`, nothing created).
+- Responses never contain the password hash, the TOTP secret (except the one-time setup response) or the session token (only the cookie).
+
+**Acceptance tests (real DB; `TestClient` on `https://testserver` with the auth router plus a test-only protected route):**
+- [ ] 1. Login with the right password → 200, `SessionOut` with a CSRF token, a `Set-Cookie` with `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`; the DB row stores the SHA-256 of the token, not the token.
+- [ ] 2. A protected route without a cookie, with a cookie whose MAC is changed by one character, with a revoked session, past `expires_at` and past the idle limit → 401 each, and the response clears the cookie.
+- [ ] 3. A wrong password and an unknown username give the same 401 body; both call Argon2 verification once (spy).
+- [ ] 4. Five wrong passwords → the sixth attempt with the RIGHT password gets 429 with `Retry-After`; after `web.lockout_minutes` of fake time it succeeds and `failed_logins` is 0.
+- [ ] 5. Eleven attempts from one IP within a minute (`web.login_rate_per_minute = 10`) → the eleventh gets 429 without touching the DB; another IP is unaffected.
+- [ ] 6. TOTP: setup (password) → confirm with a valid code → login without a code gets 401, with the code 200; the same code again (same step) → 401; disable with password and code → login without a code works.
+- [ ] 7. Password change: shorter than 12 → 422 (no password in the body); valid → other sessions get 401, the current one still works; the audit row has no password.
+- [ ] 8. `POST` to a protected route without `X-CSRF-Token`, or with another session's token → 403 `csrf`; with the right token → 200; a `GET` needs none.
+- [ ] 9. An `Origin: https://evil.example` header on login or on a protected `POST` → 403; the configured origin and the request host → accepted.
+- [ ] 10. Logout revokes the session (the same cookie then gets 401) and clears the cookie.
+- [ ] 11. `ensure_admin`: empty table + env → `created` (Argon2 hash stored, audit row); called again → `exists`; with a 10-character password → `rejected` and no row; without env → `not_configured`.
+- [ ] 12. No response body or captured log line (structlog and stdlib) contains the password, the TOTP secret after setup, a code, or the raw session token, across tests 1–11.
+- [ ] 13. A login with outdated Argon2 parameters (hash made with `time_cost=1`) succeeds and the stored hash is replaced.
+- [ ] 14. Gate and commit `P4-T4: ...`.
+
+---
+
+### Task P4-T5: Dashboard and trading reads: dashboard, candidates, orders, fills, positions and position detail, trades, quote cache
+
+**Goal:** Everything the Dashboard, Candidates and Trades pages read, with the same numbers `/status`, `/positions` and `/pnl` show on Telegram. BR-50, BR-51 (trade history), BR-13 and O2 (the signal → proposal → decision → order → fill chain), BR-33 (unprotected time); SPEC §11 (`/dashboard`, `/candidates`, `/orders`, `/fills`, `/positions`, `/trades`), §12 (Dashboard, Candidates, Trades).
+
+**Files:** `trader/api/routers/dashboard.py`, `trader/api/routers/trading.py`, `trader/api/quotes.py`, `tests/api/test_dashboard.py`, `tests/api/test_trading.py`, `tests/api/test_quotes.py`.
+
+**Interfaces:**
+- Consumes: `ApiServices` (`plan`, `fired`, `quotes`, `candles`, `killswitches`, `credentials`, `telegram_configured`), `live_run_id`, `resolve_run`, `views.*`, schemas and `from_view`/`from_line` (T1); `trader.notify.views.status_view/position_lines/proposal_view/next_event`; `current_session`, `session_phase`; `fired_keys`, `event_job`, `MISSED_PREFIX`; `JobRun`, `Proposal`, `Position`, `Order`, `Fill`, `Trade`, `Signal`, `StrategyConfig`, `Candidate`, `Catalyst`, `Symbol`, `EventLog`, `EquitySnapshot`, `SimAccount`, `IntradayCandle`, `CandleArchive` models.
+- Produces in `trader.api.quotes`: `CachedQuotes(fetch: Quotes, clock, ttl_seconds: Callable[[], float])` with `async __call__(symbol_ids: Sequence[int]) -> Mapping[int, QtQuote]` (satisfies `Quotes`).
+- Produces in `trader.api.routers.dashboard`: `GET /api/dashboard -> DashboardOut`; `DAY_JOBS: tuple[DayJob, ...]` (`DayJob(key, label, job_name, et_time: time)`, the crontab's day-level lines: premarket 08:00, preopen 09:20, check-ins 11:30 and 13:30, postclose 16:15; plus `nightly` shown as done/failed for the session it prepared); `build_timeline(...) -> list[TimelineItemOut]`.
+- Produces in `trader.api.routers.trading`: `GET /api/candidates?date=` → `CandidatesOut`; `GET /api/orders?date=&status=&limit=` → `Items[OrderOut]`; `GET /api/fills?date=&limit=` → `Items[FillOut]`; `GET /api/positions?status=open|closed|all&date=` → `Items[PositionOut]`; `GET /api/positions/{id}` → `PositionDetailOut`; `GET /api/trades?run=live&from=&to=&limit=100&offset=0` → `Items[TradeOut]`.
+
+**Behaviour and decisions:**
+- All reads are for the live run unless `run` says otherwise; dates default to `current_session(calendar, now)`; `limit` is 1–500.
+- **Dashboard:** `session` from the calendar (`open_at`/`close_at` None on a non-session day); `approval_mode` from settings; `pending` = pending proposals of the live run, oldest first, as `ProposalOut.from_view(proposal_view(s, p), p)`; `positions` from `notify.views.position_lines(factory, clock, run_id, quotes)` mapped with `from_line` (quotes may be None or fail: `last` null); `pnl` computed exactly as `commands.pnl_view` (realized today, unrealized over positions with a quote, `unrealized_partial` when one has none, week to date from the ET Monday, equity and drawdown from the latest snapshot or the starting cash); `killswitches` from `views.killswitch_states`; `events` = the latest 20 `event_log` rows at level `info` or above, newest first; `token`, `worker` from `views`; `candidates_top` = the first 5 ranked candidates of the session (all strategies), `candidates_count`; `telegram_configured` from services.
+- **Timeline** (session days only; empty list otherwise), sorted by time: the day jobs above (status from their `job_runs` row for the session: `succeeded` → done, `failed` → failed, `running` → running, none → upcoming; the 13:30 check-in is left out when the session closes at or before 13:30) and the plan's events (`services.plan(session)`: status done when in `fired` and succeeded, `missed` when its `event:<key>` run failed with `missed:`, `failed` for other failures, else upcoming). The first `upcoming` item at or after `now` becomes `next`. Labels are short words ("Pre-market scan", "ORB entry (orb_open)", "Flatten"). Times are UTC datetimes built from the ET wall-clock times through the calendar's date and `ET`. A test asserts `DAY_JOBS` agree with `docker/crontab`.
+- **Candidates:** `ranking` = the live run's `candidates` for the date ordered by `rank` (nulls last), then id; `catalysts` = the date's `catalysts` rows joined to symbols, highest `quality` first, with headlines mapped from the stored JSON (`ts`, `title`, `source`, `url`); `brief` = the `premarket` job run's `detail["brief"]` for the date, if any.
+- **Position detail** (`/positions/{id}`, 404 for another run's or an unknown id): the position (`status` open or closed; `last` from quotes only while open), its trade (if closed), the entry signal (via the entry order's proposal's `signal_id`), every proposal whose `position_id` is the position or whose order is the entry order (created order), every order of the position (entry, stop, exit), their fills with `quote_snapshot`, and 5-minute candles for the session from `intraday_candles` (`5m`) then `candle_archive` (`5m`), else `services.candles` when set (errors give `chart_error` = the exception type, never a failed request).
+- **Quote cache:** one fetch per distinct symbol set per `web.quote_cache_seconds`; concurrent callers share one in-flight fetch; a failed fetch is not cached.
+- Symbols missing from the DB show ticker `?` (never a 500).
+
+**Acceptance tests (real DB with seeded rows; `make_client` with `fake_quotes` and a fixed plan):**
+- [ ] 1. A session day at 10:00 ET with `orb_open` fired, one pending entry proposal, one open position with a working stop: the dashboard shows phase `open`, approval mode `manual`, the pending proposal with `risk_usd` equal to `proposal_view`'s, the position with `stop_working` true, `next` on `entry_cancel`, premarket done, preopen done.
+- [ ] 2. The same seeded data gives the same position numbers as `notify.views.position_lines` and the same P&L as `commands.pnl_view` (built with fakes) — the web and Telegram cannot disagree.
+- [ ] 3. With the quote callable raising, the dashboard still returns 200 with `last` null and `unrealized_partial` true.
+- [ ] 4. On Saturday the dashboard has `is_session` false, an empty timeline and no error; on 2026-11-27 (13:00 close) the timeline has no 13:30 check-in and `flatten` at 17:50Z.
+- [ ] 5. A missed `orb_open` (`event:orb_open` failed with `missed: 295s late`) shows status `missed`.
+- [ ] 6. `DAY_JOBS` times and commands match the lines of `docker/crontab` (parsed).
+- [ ] 7. Candidates for a date: ranking ordered by rank with reject reasons, catalysts with headlines, the brief from the premarket job detail; another run's candidates are not included.
+- [ ] 8. Position detail for a closed seeded trade returns the signal (evidence), the entry and stop proposals, three orders, three fills with quote snapshots, the trade, and 5-minute candles from `candle_archive`; another run's position → 404.
+- [ ] 9. `/trades?from=&to=` filters by `session_date`; `limit` above 500 → 422; `/positions?status=closed` excludes open ones.
+- [ ] 10. `CachedQuotes`: two calls within the TTL fetch once; after the TTL, again; two concurrent calls share one fetch; a failed fetch is retried on the next call.
+- [ ] 11. Gate and commit `P4-T5: ...`.
+
+---
+
+### Task P4-T6: Decisions: proposals (list, get, approve, reject), kill switches (state, reset, pause, resume), decision time in Telegram
+
+**Goal:** Approve and reject from the web through exactly the same `ProposalService.decide` path as Telegram, with the kill-switch entry guard; show and control the kill switches (typed-reason reset, pause, resume). BR-30, BR-31, BR-34 (web pause), BR-41 (web re-enable); SPEC §4.4 ("both routes do exactly the same thing"), §6.2, §6.3, §11 (`/proposals`, `/killswitch`), §14 (audit).
+
+**Files:** `trader/api/routers/proposals.py`, `trader/api/routers/killswitch.py`, `trader/notify/messages.py` (decision time only), `tests/api/test_proposals.py`, `tests/api/test_killswitch.py`, `tests/notify/test_messages_decided_at.py`.
+
+**Interfaces:**
+- Consumes: `ApiServices.decider_for`, `killswitches`, `live_run_id`, `require_csrf`, `actor`, `views.killswitch_states`, schemas (T1); `trader.runtime.build_decider` (through `decider_for`, built in T18); `KillSwitches.reset/pause/resume`, `SWITCHES`; `proposal_view`; `current_session`.
+- Produces in `trader.api.routers.proposals`: `GET /api/proposals?status=pending|all&date=&limit=50` → `Items[ProposalOut]`; `GET /api/proposals/{id}` → `ProposalOut`; `POST /api/proposals/{id}/approve` → `DecisionOut`; `POST /api/proposals/{id}/reject` → `DecisionOut`.
+- Produces in `trader.api.routers.killswitch`: `GET /api/killswitch` → `KillSwitchesOut`; `POST /api/killswitch/{switch}/reset` (body `ResetIn`) → `KillSwitchesOut`; `POST /api/killswitch/pause` → `KillSwitchesOut`; `POST /api/killswitch/resume` → `KillSwitchesOut`.
+- Changes `trader.notify.messages.MessageRenderer.proposal_closed`: when `v.decided_at` is set, the final line for an approved or rejected proposal ends with ` at HH:MM MT` (the decision time in `TZ_DISPLAY`).
+
+**Behaviour and decisions:**
+- **Approve/reject** call `services.decider_for(live_run_id)(id, "approve" | "reject", "web", actor(user))` in the thread pool. `KeyError` → 404. The response re-reads the proposal and returns `DecisionOut` with `message`: `Approved` / `Rejected` / `Approved, but the order failed` (status `failed`) / `Entry blocked: <reason>` (when `blocked`) / `Already <status>` when `already_decided` (`auto_approved` shown as `auto-approved`). An already-decided proposal is a 200, not an error (the page shows the message). The audit row and the `event_log` line come from `ProposalService` (actor `web:<username>`).
+- **Safety (P3-T12 review, contract refinement 3):** no `ProposalService` is constructed in this module; `decider_for` is the only path, and T18 builds it from `trader.runtime.build_decider`, which passes `entry_blocked=KillSwitches.entry_guard()`.
+- The Telegram message of a proposal decided on the web is closed by the worker relay (`sync_closed`, P3-T8); nothing here calls Telegram.
+- **Kill switches:** `GET` returns `views.killswitch_states(...)` for the live run and the current session plus the last 50 `kill_switch_events` rows (newest first). `reset` accepts `daily_loss_pct`, `max_drawdown_pct`, `expectancy`; `manual_pause` → 400 "use Resume"; an unknown switch → 404; not tripped → 409; the reason is stripped and must be 3–500 characters; calls `KillSwitches.reset(run_id, switch, reason, actor(user))` (audited by P2). `pause` calls `KillSwitches.pause(run_id, current_session(...), actor)`; already paused → 409 "Already paused." `resume` calls `KillSwitches.resume(run_id, actor)`; not paused → 409 "Not paused." Resume never resets an automatic switch (BR-34).
+
+**Acceptance tests (real DB, real `ProposalService` through `trader.runtime.build_decider` on a test `Core`):**
+- [ ] 1. A pending entry proposal approved on the web → `submitted` (or `approved` then submitted per P2), `decided_via = "web"`, `decided_by = "web:stephen"`, one order, one audit row with that actor.
+- [ ] 2. **Safety:** with `manual_pause` active, approving a pending entry → `rejected`, `blocked` set, message `Entry blocked: kill switch manual_pause is tripped`, and no order; approving a pending **stop** proposal while paused → submitted with a working stop order. The same with `max_drawdown_pct` tripped.
+- [ ] 3. A web approve and then a Telegram `decide` (the bot's decider from `build_decider`) on the same proposal → the second is `already_decided`; exactly one order. Two concurrent web approvals (threads) → one `already_decided`, one order.
+- [ ] 4. Approving after `expires_at` (fake clock) → `already_decided` with status `expired` and message `Already expired`.
+- [ ] 5. An unknown id, and a proposal of another run → 404; a request without a session → 401 (conftest `user=None`).
+- [ ] 6. `GET /api/proposals?status=pending` lists only pending ones of the live run, oldest first; `GET /api/proposals/{id}` of a decided one has `decided_at` and `decided_by`.
+- [ ] 7. The decision route module constructs no `ProposalService` (a test asserts the router module does not import `ProposalService`, and that `decider_for` is called with the live run id).
+- [ ] 8. Kill switches: `max_drawdown_pct` tripped → reset with reason "  reviewed  " → cleared, audit `killswitch.reset:max_drawdown_pct` with reason `reviewed`; a reason of two characters → 422; `manual_pause` reset → 400; not tripped → 409; unknown → 404.
+- [ ] 9. Pause then resume: `KillSwitches.blocking` returns `manual_pause` then None; a second pause → 409; resume with `max_drawdown_pct` also tripped leaves it tripped (it stays in the response as tripped).
+- [ ] 10. `proposal_closed` of a view with `decided_at` 13:36:10Z on 2026-10-06 ends `Approved via web at 07:36 MT`; without `decided_at` the P3 wording is unchanged (the existing P3-T4 tests still pass).
+- [ ] 11. Gate and commit `P4-T6: ...`.
+
+---
+
+### Task P4-T7: Performance, journal and CSV export
+
+**Goal:** Metrics tiles, equity curve and drawdown, the R-multiple histogram, the journal (rules followed and notes) and the trades CSV. BR-51, BR-52, BR-60 (journal on the web), BR-62; SPEC §10 (`v_trade_metrics`, `v_daily_pnl`, `journal`), §11 (`/metrics`, `/equity`, `/journal`, `/export/trades.csv`), §12 (Performance, Journal).
+
+**Files:** `trader/api/routers/performance.py`, `trader/api/routers/journal.py`, `trader/reports/__init__.py`, `trader/reports/export.py`, `tests/api/test_performance.py`, `tests/api/test_journal.py`, `tests/reports/__init__.py`, `tests/reports/test_export.py`.
+
+**Interfaces:**
+- Consumes: `resolve_run`, `require_csrf`, `actor`, schemas (T1); `Trade`, `EquitySnapshot`, `Journal`, `Symbol`, `StrategyConfig`, `Position`, `AuditLog` models; `v_trade_metrics`, `v_daily_pnl`.
+- Produces in `trader.reports.export`: `TRADE_CSV_COLUMNS: tuple[str, ...]` = (`trade_id`, `session_date`, `ticker`, `strategy`, `qty`, `entry_price`, `exit_price`, `pnl`, `pnl_r`, `planned_risk`, `fees_total`, `slippage_total`, `exit_reason`, `opened_at`, `closed_at`); `trades_csv(factory, run_id: int, date_from: date | None, date_to: date | None) -> Iterator[str]` (CSV lines, header first, UTC ISO times, Decimals as stored).
+- Produces in `trader.api.routers.performance`: `GET /api/metrics?run=live&from=&to=` → `MetricsOut`; `GET /api/equity?run=live&from=&to=` → `EquityOut`; `GET /api/export/trades.csv?run=live&from=&to=` → `text/csv` streamed, `Content-Disposition: attachment; filename="trades-<run>-<from>-<to>.csv"`.
+- Produces in `trader.api.routers.journal`: `GET /api/journal?from=&to=` → `Items[JournalDayOut]`; `PUT /api/journal/{date}` (body `JournalIn`) → `JournalDayOut`.
+
+**Behaviour and decisions:**
+- **Metrics:** without `from`/`to`, the run's `v_trade_metrics` row plus `total_pnl` and the histogram. With a range, the same fields computed by one SQL query over the run's trades (and journal and snapshots) in the range, with the view's formulas (win rate = wins/trades, expectancy = mean `pnl_r`, profit factor = gross win / gross loss or null, adherence = followed / answered, max drawdown = max snapshot `drawdown_pct` in the range). `r_histogram`: bins of width 0.5 R from −3 to +5, plus open-ended first and last bins, counting trades with `pnl_r`. P5-T1 may replace these computations behind the same route.
+- **Equity:** the run's `equity_snapshots` in time order (range by `ts` ET date); at most 5,000 points (evenly thinned when over, keeping the first and last).
+- **Export:** streamed; only the requested run; a trader-controlled text field starting with `=`, `+`, `-` or `@` is prefixed with `'` (CSV injection guard for spreadsheets). P5-T6 extends `trader/reports/export.py`.
+- **Journal:** `GET` returns one row per session day in the range (default the last 30 sessions) that has a journal row or trades (`v_daily_pnl`), newest first. `PUT` upserts the live run's row for a date that is a session on or before today's session (else 422): only the fields sent change (`rules_followed` may be set to null to clear an answer), `answered_via = "web"` when `rules_followed` is sent, `updated_at = now`, and an `audit_log` row `journal.update` with before and after.
+
+**Acceptance tests:**
+- [ ] 1. With a hand-made set of trades (+2R, −1R, +0.5R, −1R; P&L 20, −10, 5, −10) metrics give trades 4, win rate 0.5, expectancy 0.125, profit factor 1.25, total P&L 5, matching `v_trade_metrics`.
+- [ ] 2. A date range that excludes the first trade gives the metrics of the other three; an empty range gives trades 0 and null ratios (no division error).
+- [ ] 3. The R histogram puts +2R in the [2.0, 2.5) bin and −1R in [−1.0, −0.5); a −7R trade lands in the open-ended first bin.
+- [ ] 4. `/equity` returns snapshots in order; 6,000 seeded points come back as at most 5,000 with the first and last kept.
+- [ ] 5. The CSV has the header `TRADE_CSV_COLUMNS`, one line per trade of the run in the range, `Content-Disposition` set, and an `exit_reason` of `=cmd()` is written as `'=cmd()`.
+- [ ] 6. `PUT /api/journal/2026-10-06` with `{"rules_followed": true}` then `{"notes": "late entry"}` keeps both, sets `answered_via = "web"`, and writes two audit rows; a future date or a holiday → 422; a note over 5,000 characters → 422.
+- [ ] 7. `GET /api/journal` lists days with trades even without a journal row (`rules_followed` null) and days answered on Telegram (`answered_via = "telegram"`).
+- [ ] 8. `run=<replay run id>` works for metrics; an unknown run → 404.
+- [ ] 9. Gate and commit `P4-T7: ...`.
+
+---
+
+### Task P4-T8: Settings and strategies (form descriptors)
+
+**Goal:** View and change every runtime setting (validated and audited) and every strategy plug-in's settings and on/off state, with form descriptors so the web renders forms without parsing JSON Schema quirks. BR-10, BR-22, BR-30 (the approval-mode toggle), BR-53; SPEC §6.2 (approval mode audited), §11 (`/settings`, `/strategies`), §13.
+
+**Files:** `trader/api/routers/settings.py`, `trader/api/routers/strategies.py`, `trader/api/forms.py`, `tests/api/test_settings.py`, `tests/api/test_strategies.py`, `tests/api/test_forms.py`.
+
+**Interfaces:**
+- Consumes: `SettingsStore.load/set`, `RuntimeSettings` (`model_fields`, `model_json_schema(by_alias=True)`), `StrategyRegistry.keys/plugin_class/json_schema/current/update`, `Setting`, `StrategyConfig`, `Position`, `Order` models, `require_csrf`, `actor`, schemas (T1).
+- Produces in `trader.api.forms`: `field_out(name: str, schema: Mapping[str, Any], annotation: Any, default: Any) -> FieldOut`; `model_fields_out(model: type[BaseModel], *, by_alias: bool) -> list[FieldOut]`; `SETTING_GROUPS: Mapping[str, str]` (DB key or key prefix → group: `approval_mode` → "Approvals"; `starting_cash`, `starting_cash_currency`, `account_currency`, `fx.*`, `cash_account_mode`, `markets_enabled` → "Account"; `risk_pct`, `slippage_buffer`, `no_entry_before_close_minutes` → "Risk"; `quote_poll_seconds`, `stale_quote_seconds`, `slippage_*`, `fees.*` → "Fill model"; `proposal_ttl_*`, `stop_escalation_seconds`, `auto_flatten_on_expiry` → "Proposals"; `killswitch.*` → "Kill switches"; `claude.*` → "Claude"; `premarket.*`, `universe.*`, `finviz.*`, `open_bar.*` → "Screening"; `worker.*`, `scheduler.*`, `telegram.*`, `preopen.*`, `postclose.*` → "Worker and Telegram"; `web.*` → "Web app"); `group_of(key) -> str`.
+- Produces in `trader.api.routers.settings`: `GET /api/settings` → `SettingsOut`; `PUT /api/settings/{key}` (body `SettingIn`) → `SettingOut`.
+- Produces in `trader.api.routers.strategies`: `GET /api/strategies` → `Items[StrategyOut]`; `PUT /api/strategies/{key}` (body `StrategyIn`) → `StrategyOut`.
+
+**Behaviour and decisions:**
+- **Field kinds:** `Decimal` → `decimal` (min/max as strings from the field's constraints); `int` → `integer`; `float` → `number`; `bool` → `boolean`; a `Literal` → `enum`; `str` → `string` (with `pattern`); `list[str]` → `string_list`; `list[Literal]` → `enum_list`; `X | None` → `nullable`. An annotation outside these (never in today's models) → `string` with the raw JSON Schema still in `StrategyOut.schema`.
+- **Settings GET:** every `RuntimeSettings` field, keyed by its DB key (alias), with the current value (JSON mode), the default, `is_default`, group, `FieldOut`, and `updated_at`/`updated_by` from its `settings` row (null when never stored). Items sorted by group, then key.
+- **Settings PUT:** unknown key → 404; `SettingsStore.set(key, value, actor(user))` (validates, writes the audit row); a `ValidationError` → 422 with the pydantic messages as `fields` (no input echo). Changing `approval_mode` is just this route (the store audits it, SPEC §6.2); pending proposals stay pending.
+- **Strategies GET:** for each registry key: current config (version, revision, params, enabled, created_at as `updated_at`, `created_by` as `updated_by`), `kind` from the plug-in class, `schema` = `registry.json_schema(key)`, `fields` = `model_fields_out(params_model, by_alias=False)`, `owns_open_positions` (an open position or working order whose `strategy_config_id` is one of the key's config ids).
+- **Strategies PUT:** `registry.update(key, params=..., enabled=..., actor=actor(user))` (a new versioned, audited revision); `ValidationError` → 422 with field messages; unknown key → 404; an empty body → 422. Disabling a strategy that owns positions is allowed (it runs exits-only, P2-REVIEW); the response's `owns_open_positions` lets the web warn.
+
+**Acceptance tests:**
+- [ ] 1. `GET /api/settings` lists every `RuntimeSettings` DB key once, with `approval_mode` as `enum` [`manual`, `auto`], `risk_pct` as `decimal` with maximum `"0.10"`, `quote_poll_seconds` as `number`, `scheduler.always_fire_late` as `string_list`, `markets_enabled` as `enum_list`, `cash_account_mode` as `boolean`, each in its group.
+- [ ] 2. `PUT /api/settings/approval_mode {"value": "auto"}` stores it, the audit row has actor `web:stephen` and before `manual`; `GET` then shows `is_default` false and `updated_by` `web:stephen`.
+- [ ] 3. `PUT /api/settings/risk_pct {"value": "0.5"}` → 422 with a field message and nothing stored; an unknown key → 404.
+- [ ] 4. `GET /api/strategies` returns `orb_sip` and `spy_overlay` with their versions, JSON Schemas and `fields` (`entry_cancel_at` nullable string, `stale_universe` enum [`skip`, `trade`]).
+- [ ] 5. `PUT /api/strategies/orb_sip {"params": {"top_n": 10}}` creates revision n+1 with the other params unchanged and an audit row; `{"params": {"top_n": -1}}` → 422, no new revision; `{"enabled": false}` with an open position of `orb_sip` → 200 with `owns_open_positions` true.
+- [ ] 6. `field_out` unit cases for each kind, including an `exclusive_minimum` (`gt=0`) and a nullable Literal.
+- [ ] 7. Gate and commit `P4-T8: ...`.
+
+---
+
+### Task P4-T9: System: status, events, job history and manual runs, Questrade token paste, Telegram test
+
+**Goal:** The System page's data and actions: job runs, token status with a paste-a-new-token form, worker heartbeat, errors and the event log, failed Telegram sends, Questrade rate-limit usage, a manual job trigger, and the Telegram test button. BR-55, R4 mitigation ("a screen to paste a new token"); SPEC §4.1 (initial setup), §11 (`/jobs`, `/events`, `/credentials/questrade`), §12 (System; Settings' Telegram test button), §14 (audit of credential changes).
+
+**Files:** `trader/api/routers/system.py`, `trader/api/routers/jobs.py`, `trader/api/routers/credentials.py`, `trader/api/launcher.py`, `tests/api/test_system.py`, `tests/api/test_jobs.py`, `tests/api/test_credentials.py`, `tests/api/test_launcher.py`.
+
+**Interfaces:**
+- Consumes: `ApiServices` (`credentials`, `jobs`, `notifier`, `telegram_configured`), `views.token_out/worker_out/event_out`, `require_csrf`, `actor`, schemas (T1); `JobRun`, `EventLog`, `Notification`, `WorkerHeartbeat`, `AuditLog` models; `trader.runtime.telegram_test_message`; `run_job` semantics (the launched CLI records its own `job_runs` row).
+- Produces in `trader.api.launcher`: `CLI_ARGS: Mapping[ManualJob, tuple[str, ...]]` (`nightly` → `("nightly",)`, `premarket` → `("premarket",)`, `preopen` → `("preopen",)`, `postclose` → `("postclose",)`, `token-refresh` → `("token-refresh",)`); `SubprocessJobLauncher(clock, calendar, *, executable: str = "trader", spawn=asyncio.create_subprocess_exec)` implementing `JobLauncher`.
+- Produces in `trader.api.routers.system`: `GET /api/system` → `SystemOut`; `GET /api/events?since=&before=&level=&source=&limit=100` → `Items[EventOut]`; `POST /api/system/telegram-test` → `TelegramTestOut`.
+- Produces in `trader.api.routers.jobs`: `GET /api/jobs?job=&limit=100` → `Items[JobRunOut]`; `POST /api/jobs/{job}/run` (body `JobRunIn`) → `JobLaunchOut` (202).
+- Produces in `trader.api.routers.credentials`: `POST /api/credentials/questrade` (body `CredentialIn`) → `TokenOut`.
+
+**Behaviour and decisions:**
+- **System:** `last_runs` = the newest `job_runs` row per job name (nightly, premarket, preopen, `event:*`, `checkin@*`, postclose, `session_end`, token-refresh when recorded) for the last 7 days; `errors` = the last 50 `event_log` rows at `error`/`critical`; `notifications_failed` = the last 20 `notifications` with status `failed` or `unknown` (no message text); `rate_limit` = `worker_heartbeats.detail["rate_limit"]` when present (T18 puts it there); `alembic_revision` from `trader.alembic_version`; `telegram_configured` from services; `manual_jobs` = the keys of `CLI_ARGS`.
+- **Events:** newest first; `since` returns ids greater than it (oldest first, for catch-up), `before` pages backwards; `level` filters at or above that level; `limit` 1–500.
+- **Manual job run:** only the `ManualJob` names (else 404). `date` must be a session (else 422); nightly without a date uses the CLI default (the next session). If a launched process for that job is still running → 409 "already running". The launcher spawns `trader <args> [--date YYYY-MM-DD] [--force]` as a child process with the API's environment, output inherited (it reaches `docker logs`), not awaited (a finished child is reaped by a done-callback task); returns 202 with `launched: true`. The job's own `run_job` lock and skip rules still apply. Audit `job.run_manual` (after: job, date, force).
+- **Token paste:** `CredentialIn.refresh_token` (a `SecretStr`, stripped) → `credentials.seed(token)` then `credentials.access()` in the thread pool, so a bad token is reported at once; a `QuestradeAuthError` → 422 with its message (it is written to be shown to Stephen and never contains the token). Always an audit row `credentials.questrade.seed` (after: `{"ok": bool}`) and an `info` or `error` event (source `questrade.token`, never the token). The response is `views.token_out(...)`. The token never appears in a response, a log line or an event.
+- **Telegram test:** when `telegram_configured` is false → 409 "Telegram is not configured"; else `services.notifier.send(telegram_test_message(<now in MT>, buttons=False))` with the text "Sent from the web app" appended, and `sent: true`. `Notifier.send` never raises; the result says "check your Telegram".
+
+**Acceptance tests:**
+- [ ] 1. `GET /api/system` on seeded data: the newest run per job, 50 errors newest first, failed and unknown notifications without text, `rate_limit` read from the heartbeat detail, `telegram_configured` from services, `alembic_revision` `0005`.
+- [ ] 2. `GET /api/events?since=10` returns ids 11.. oldest first; `?level=error` excludes `warning`; a message containing a bot token URL is masked.
+- [ ] 3. `POST /api/jobs/nightly/run {"force": true}` spawns `trader nightly --force` once (fake spawn records argv), returns 202 and writes the audit row; a second call while the fake child runs → 409; `POST /api/jobs/event/run` → 404; a holiday date → 422.
+- [ ] 4. `SubprocessJobLauncher` reaps a finished child (no zombie in its table) and `running()` turns false.
+- [ ] 5. Token paste with a fake store whose `access()` succeeds → 200 `TokenOut` ok, audit row `credentials.questrade.seed` without the token; with `access()` raising `QuestradeAuthError("The refresh token was rejected")` → 422 with that message; the token string appears in no response, captured log line, event or audit row.
+- [ ] 6. Telegram test with `telegram_configured` false → 409; true → one `RecordingNotifier` message of kind `reply`.
+- [ ] 7. Gate and commit `P4-T9: ...`.
+
+---
+
+### Task P4-T10: Watchlist CSV upload and the nightly manual source
+
+**Goal:** When FinViz fails, Stephen can upload a CSV of tickers for a session; the nightly job then builds that session's universe from it (source `manual`) instead of FinViz. SPEC §4.2 ("Manual fallback: the web app can upload a CSV watchlist"), BRD R3.
+
+**Files:** `trader/api/routers/watchlist.py`, `trader/market/watchlist.py`, `trader/jobs/nightly.py` (manual source only), `tests/api/test_watchlist.py`, `tests/market/test_watchlist.py`, `tests/jobs/test_nightly_manual.py`.
+
+**Interfaces:**
+- Consumes: `ManualWatchlist` model, `require_csrf`, `actor`, `ApiServices.jobs`, schemas (T1); `to_questrade_ticker`, `TICKER_PATTERN`, `target_session`; `NightlyDeps`, `run_nightly`, `UniverseRow`.
+- Produces in `trader.market.watchlist`: `MAX_TICKERS = 1000`, `MAX_BYTES = 262_144`; `ParsedWatchlist(tickers: tuple[str, ...], rejected: tuple[tuple[int, str, str], ...])`; `parse_watchlist_csv(data: bytes) -> ParsedWatchlist`; `store_watchlist(factory, clock, session_date, tickers, filename, actor) -> None` (upsert, audit `watchlist.upload`); `get_watchlist(factory, session_date) -> ManualWatchlist | None`; `delete_watchlist(factory, clock, session_date, actor) -> bool` (audit `watchlist.delete`).
+- Produces in `trader.api.routers.watchlist`: `GET /api/watchlist?date=` → `WatchlistOut` (404 when none); `POST /api/watchlist` (multipart: `file`, optional `date`, optional `run_nightly` bool) → `WatchlistUploadOut`; `DELETE /api/watchlist/{date}` → `OkOut`.
+- Changes `trader.jobs.nightly`: the universe step first checks `manual_watchlists` for the session (through `deps.factory`); when a row exists its tickers are the universe (source `manual`, no FinViz call); otherwise FinViz as today (with its fallback). The job detail's `source` shows `manual`.
+
+**Behaviour and decisions:**
+- **CSV rules:** UTF-8 (a BOM is ignored); the first row is a header when any cell is `ticker` or `symbol` (any case), and that column is used; otherwise the first column of every row. Each value is trimmed, upper-cased, mapped with `to_questrade_ticker` (`BF-B` → `BF.B`) and must match `TICKER_PATTERN`; bad values are listed in `rejected` with their 1-based row number and reason (`invalid ticker`, `duplicate`); empty rows are skipped. Zero valid tickers, more than `MAX_TICKERS`, or a file over `MAX_BYTES` → 422 with nothing stored.
+- `date` defaults to `target_session(calendar, clock)` (the session the next nightly prepares) and must be a session day not before today's session (else 422). A second upload for the date replaces the first.
+- `run_nightly=true` launches `nightly --date <date> --force` through `services.jobs` (T9's launcher) and returns its `JobLaunchOut`; the nightly job's degenerate-result rules still apply (more than 5% unresolved tickers fails the job, SPEC §4.2).
+- The manual list is used for that session only; SPY and `universe.extra_symbols` are still added by the nightly job as today. An explicit upload wins over FinViz for its session (Stephen asked for it).
+
+**Acceptance tests:**
+- [ ] 1. `parse_watchlist_csv` with a header `Symbol,Name` and rows `aapl`, `BF-B`, `aapl`, `$$$`, blank → tickers (`AAPL`, `BF.B`), rejected rows 4 (`duplicate`) and 5 (`invalid ticker`).
+- [ ] 2. A headerless single column works; a 300 KB file, 1,001 tickers and a file with no valid ticker → errors.
+- [ ] 3. Upload for the next session → stored with filename, uploader `web:stephen`, audit row; a second upload replaces it; `GET` returns it; `DELETE` removes it (audit); a past date → 422.
+- [ ] 4. `run_nightly=true` calls the fake launcher with `nightly`, the date and `force=True`.
+- [ ] 5. `run_nightly` (fakes as in the P1 nightly tests) for a session with a manual watchlist never calls FinViz, stores `universe_snapshots` with `source = "manual"` for exactly those tickers plus SPY, and reports `source: manual`; without a watchlist it behaves as before (the existing nightly tests pass).
+- [ ] 6. Gate and commit `P4-T10: ...`.
+
+---
+
+### Task P4-T11: Live updates: change feed and SSE stream
+
+**Goal:** A new proposal, fill or event reaches a connected browser within 2 s, through one polling change feed and `GET /api/stream` (SSE). SPEC §11 (`/stream`), §12 ("Live updates use SSE"); decision "SSE by polling" above.
+
+**Files:** `trader/api/routers/stream.py`, `trader/api/feed.py`, `tests/api/test_feed.py`, `tests/api/test_stream.py`.
+
+**Interfaces:**
+- Consumes: `ChangeFeed`, `FeedMessage`, `Topic`, `StreamHello`, `StreamInvalidate`, `StreamEvents`, `views.event_out`, `current_user` (T1); models for the watermarks.
+- Produces in `trader.api.feed`: `WATERMARK_TOPICS: tuple[Topic, ...]`; `PollingChangeFeed(factory, clock, settings: Callable[[], RuntimeSettings], *, sleep=asyncio.sleep, queue_size: int = 100)` implementing `ChangeFeed`; `watermarks(s: Session) -> dict[Topic, tuple[Any, ...]]` (one statement).
+- Produces in `trader.api.routers.stream`: `GET /api/stream` → `text/event-stream`; `MAX_STREAMS = 10`; `KEEPALIVE_SECONDS = 15`; `SESSION_RECHECK_SECONDS = 60`.
+
+**Behaviour and decisions:**
+- **Watermarks** (one SQL statement of scalar subqueries, every one index-friendly): `proposals` (max id, max `decided_at`, max `expired_at`, count pending), `orders` (max id, max `closed_at`), `fills` (max id), `positions` (max id, max `closed_at`, max `unprotected_since`), `trades` (max id), `candidates` (max id), `killswitch` (max id, max `reset_at`), `events` (max id), `journal` (max `updated_at`), `jobs` (max id, max `finished_at`), `settings` (max `updated_at`), `strategies` (max id), `system` (the worker heartbeat's `phase` and `beat_at`).
+- **Feed loop:** while at least one subscriber exists, every `web.sse_poll_seconds` it reads the watermarks (a DB error is logged once per failure streak and retried; the loop never dies); the first read after being idle only sets the baseline. Changed topics → one `invalidate` message to every subscriber; new `event_log` rows (id above the last seen, at most 50, level `info` or above) → one `events` message with `EventOut`s. With no subscribers it sleeps without querying.
+- **Subscriptions:** each has a bounded queue; a full queue drops the pending messages and queues one `invalidate` of every topic instead (the client resyncs). Leaving the `subscribe()` context always unsubscribes.
+- **Stream route:** needs a session (EventSource sends the cookie; no CSRF for GET). More than `MAX_STREAMS` open → 429. Headers `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `X-Accel-Buffering: no` (NPM/nginx must not buffer). It first sends `retry: 3000`, then `event: hello` (`StreamHello`) and `event: invalidate` with every topic (a reconnect always resyncs, so no `Last-Event-ID` handling is needed), then relays feed messages as `event: invalidate` / `event: events` with JSON data, a `: keepalive` comment every 15 s, and ends when the client disconnects, when the session is no longer valid (re-checked every 60 s), or when the app shuts down (the feed's stop event ends every stream at once, so uvicorn's graceful shutdown is not held up).
+
+**Acceptance tests (real DB, fake sleep driving the feed; the stream generator tested directly, and one test through a real uvicorn server on a random localhost port with httpx streaming):**
+- [ ] 1. With one subscriber, inserting a pending proposal between two polls produces exactly one `invalidate` containing `proposals` on the next poll (within one `web.sse_poll_seconds`).
+- [ ] 2. A decision (`decided_at` set), an expiry, a fill, a kill-switch reset, a journal update and a settings change each produce `invalidate` with their topic; a heartbeat update produces `system` only.
+- [ ] 3. Three new `info` events and one `debug` event → one `events` message with the three, oldest first.
+- [ ] 4. With no subscribers the feed runs no query (a counting factory); after the first subscribe the first poll sets the baseline and emits nothing.
+- [ ] 5. A subscriber that never reads: after 150 messages its queue holds at most `queue_size` and ends with one full `invalidate`; other subscribers get every message.
+- [ ] 6. The DB failing for three polls logs one failure line and the feed recovers on the fourth.
+- [ ] 7. The stream starts with `retry: 3000`, `hello` and a full `invalidate`, carries the `X-Accel-Buffering: no` header, sends `: keepalive` after 15 s of fake time, and unsubscribes when the client disconnects (`subscriber_count()` back to 0).
+- [ ] 8. The eleventh concurrent stream gets 429; a stream whose session is revoked ends within 60 s of fake time.
+- [ ] 9. Real server: a client streaming `/api/stream` sees `invalidate` with `proposals` less than 2 s (real time, poll 0.5 s) after a proposal row is inserted; stopping the server ends the stream within 5 s.
+- [ ] 10. Gate and commit `P4-T11: ...`.
+
+---
+
+### Task P4-T12: Web shell: HTTP client, login, layout and navigation, routes and deep links, live updates, time display
+
+**Goal:** The app frame: the real HTTP client (cookies, CSRF, errors), login and logout, the layout and navigation that work on a phone, every route including the Telegram deep links, the SSE hook that refreshes data, and the time-zone check. SPEC §12 (pages, phone layout, America/Edmonton, SSE), §14 (login); contract refinement 1.
+
+**Files:** `web/src/main.tsx`, `web/src/App.tsx`, `web/src/api/http.ts`, `web/src/live/useLiveUpdates.ts`, `web/src/pages/Login.tsx`, `web/src/layout/*`, `web/src/shell.test.tsx`, `web/src/api/http.test.ts`, `web/src/live/useLiveUpdates.test.ts`.
+
+**Interfaces:**
+- Consumes: T2 contracts (`ApiClient`, `ApiError`, `ApiProvider`, `qk`, `TOPIC_KEYS`, `format.ts`, `ui.tsx`, types, `FakeApiClient`, `renderWithProviders`); page components (default exports of the page modules).
+- Produces: `src/api/http.ts` `createHttpClient(opts)` (real); `src/App.tsx` `App()`; `src/main.tsx`; `src/layout/Layout.tsx` (header with environment badge, live-connection dot and logout; navigation); `src/layout/RequireAuth.tsx`; `src/layout/AuthContext.tsx` (`useAuth(): { user: UserOut | null; csrf: string | null; refresh(): Promise<void>; logout(): Promise<void> }`); `src/live/useLiveUpdates.ts` (real); `src/pages/Login.tsx` (real).
+
+**Behaviour and decisions:**
+- **HTTP client:** `fetch` with `credentials: "same-origin"`, JSON bodies, `X-CSRF-Token` from the auth context on `POST`/`PUT`/`DELETE`; an error body becomes `ApiError(status, code, message, fields, requestId)`; a network failure becomes `ApiError(0, "network", "Can't reach the server")`. A 401 calls `onUnauthorized` (auth cleared, navigate to `/login?next=<current path and query>`). A 403 `csrf` refreshes `/auth/me` once and retries the request once. `uploadWatchlist` sends `multipart/form-data`. `exportTradesUrl` and `streamUrl` build same-origin URLs.
+- **Routes:** `/` → `/dashboard`; `/dashboard`, `/candidates`, `/trades`, `/performance`, `/journal`, `/reports`, `/settings`, `/system` behind `RequireAuth`; `/login`; anything else → a "Not found" page with a link to the dashboard. Query strings are kept through the login redirect, so `/dashboard?proposal=12`, `/trades?position=3`, `/journal?date=2026-10-06`, `/reports?week=2026-10-09` and `/system` open the right thing after logging in.
+- **Login page:** username, password, an optional "Code (if two-step is on)" field; shows the server's message (401/429) and never keeps the password in state after submit; on success navigates to `next` (only a same-site path starting with `/`, else `/dashboard`).
+- **Layout:** header with "Trader", a `DEV` badge when `meta.app_env == "dev"`, the live dot (green connected, grey reconnecting) and Logout. Navigation: a bottom tab bar on narrow screens (Dashboard, Candidates, Trades, Journal, More → Performance, Settings, System) and a side list on wide screens; every page is at most two taps away.
+- **Live updates:** `useLiveUpdates` opens one `EventSource(streamUrl)` while logged in; `invalidate` → `queryClient.invalidateQueries` for each prefix in `TOPIC_KEYS[topic]`; `events` → invalidate `events` and `dashboard`; `hello` sets `connected`; on error `connected` false and the browser's own reconnect (server `retry: 3000`) resumes; on a failed reconnect it calls `/auth/me` and a 401 logs out. Closed on logout and unmount. While disconnected, the Dashboard also refetches every 15 s (query `refetchInterval` when not connected).
+- **Time display:** after login the shell fetches `/api/meta`, compares `zoneOffsetMinutes(meta.tz_display, meta.server_time)` with `meta.tz_offset_minutes`; equal → `setDisplayZone({ zone: meta.tz_display }, check)`; different → `setDisplayZone({ fixedOffsetMinutes: meta.tz_offset_minutes, label: "MT" }, check)`, where `check` carries both offsets, so `displayZoneInfo()` gives the System page its warning. The server clock skew (`server_time − Date.now()`) is kept for countdowns.
+
+**Acceptance tests (Vitest + Testing Library with `FakeApiClient`; the HTTP client against a mocked `fetch`):**
+- [ ] 1. `createHttpClient`: `approve(5)` sends `POST /api/proposals/5/approve` with the CSRF header and `credentials: "same-origin"`; a 422 body becomes an `ApiError` with `fields`; a network failure becomes code `network`.
+- [ ] 2. A 401 calls `onUnauthorized`; a 403 `csrf` refreshes `/auth/me` and retries once (two `fetch` calls for the request), and a second 403 surfaces as an error.
+- [ ] 3. Visiting `/dashboard?proposal=12` logged out redirects to `/login?next=%2Fdashboard%3Fproposal%3D12`; after a successful login it lands on `/dashboard?proposal=12`. A `next` of `https://evil.example` lands on `/dashboard`.
+- [ ] 4. Each deep link route (`/trades?position=3`, `/journal?date=2026-10-06`, `/reports?week=2026-10-09`, `/system`) renders its page component when logged in.
+- [ ] 5. Login shows the server's 429 message; the code field is sent only when filled.
+- [ ] 6. `useLiveUpdates` with a fake `EventSource`: `invalidate {topics: ["proposals"]}` invalidates the dashboard and proposal queries only; `hello` sets connected; an error sets not connected.
+- [ ] 7. On unmount and on logout the `EventSource` is closed.
+- [ ] 8. With `meta.tz_offset_minutes` −360 and the browser zone data giving −420 for the same instant (stubbed `zoneOffsetMinutes`), the shell switches to fixed-offset mode and `fmtTime` shows the −360 time.
+- [ ] 9. The header shows `DEV` for `app_env: "dev"` and not for `prod`; Logout calls `logout()` and returns to `/login`.
+- [ ] 10. Gate (`check.sh`, which runs `npm run check`) and commit `P4-T12: ...`.
+
+---
+
+### Task P4-T13: Web Dashboard and Candidates pages
+
+**Goal:** Today at a glance, and the one-tap approvals away from Telegram: session timeline, approval-mode badge, pending approvals with countdowns and Approve/Reject, the open position, today's P&L, kill-switch lights, latest events; and the Candidates page (catalyst cards and the 9:35 ranking). BR-30 (mode shown), BR-31 (web approvals), BR-33 (unprotected time), BR-50; SPEC §12 (Dashboard, Candidates).
+
+**Files:** `web/src/pages/Dashboard.tsx`, `web/src/pages/Candidates.tsx`, `web/src/pages/dashboard/*` (components and their `*.test.tsx`).
+
+**Interfaces:**
+- Consumes: T2 contracts (`useApi`, `qk`, types, `format.ts`, `ui.tsx`, fixtures, `FakeApiClient`).
+- Produces: `src/pages/Dashboard.tsx` (default export), `src/pages/Candidates.tsx` (default export), components under `src/pages/dashboard/` (`Timeline.tsx`, `PendingProposal.tsx`, `PositionCard.tsx`, `PnlTiles.tsx`, `KillSwitchLights.tsx`, `EventList.tsx`, `ProposalPanel.tsx`) with their tests.
+
+**Behaviour and decisions:**
+- **Dashboard** reads `api.dashboard()` (`qk.dashboard()`); shows a loading state, and `ErrorBox` with Retry on failure.
+- **Header row:** session date and phase ("Open", "Pre-market", "After close", "Market closed today"), the approval-mode badge (`MANUAL` info, `AUTO` warn), token and worker status dots with a link to `/system` when not OK, and a one-line notice "Telegram is not configured: approve here" when `telegram_configured` is false.
+- **Timeline:** one row per item with its MT time, label and status (done ✓, failed/missed in red, running, next highlighted); on a phone it is a vertical list.
+- **Pending approvals:** a card per proposal: headline by kind (`ENTRY`, `PROTECTIVE STOP`, `EXIT`, `CANCEL`), ticker, side, qty, order type and prices, stop loss, risk in dollars, strategy and reason, a countdown to `expires_at` using the server skew (turning red under 60 s), and Approve / Reject buttons. A tap disables both buttons, calls `api.approve`/`api.reject`, then shows the `DecisionOut.message` (for example `Entry blocked: kill switch manual_pause is tripped`, `Already expired`) and refetches the dashboard. When the countdown reaches zero the buttons are disabled with "Expired, waiting for the server". No extra confirmation step (as Telegram: one tap).
+- **Deep link `?proposal=<id>`:** the matching pending card is scrolled into view and highlighted; when it is not pending, a `ProposalPanel` shows `api.proposal(id)`: its final status, `decided_at` in MT, `decided_via`/`decided_by` and error.
+- **Position card** per open position: ticker, qty, entry, last (`n/a` when null), unrealized P&L, stop with "(no stop order)" when `stop_working` is false in red, unprotected time (`fmtDuration`), link to `/trades?position=<id>`.
+- **P&L tiles:** realized today, unrealized (with "partial" when `unrealized_partial`), week to date, equity, drawdown.
+- **Kill-switch lights:** one `Light` per switch (green off, red tripped, amber `manual_pause`) with the `clears` text; tripped automatic switches link to `/settings#killswitches`.
+- **Events:** the latest 20 with MT time, level colour, source and message.
+- **Candidates page** (`?date=` optional, a date picker defaulting to the current session): the pre-market brief (preformatted text), catalyst cards (ticker, type, direction, quality, confirmed, reason, gap %, earnings date, up to 5 headlines with links opening in a new tab with `rel="noopener noreferrer"`), and the ranking table (rank, ticker, rvol, passed ✓ or the reject reason, strategy), horizontally scrollable on a phone.
+
+**Acceptance tests (Vitest with `FakeApiClient` and fixtures):**
+- [ ] 1. The dashboard renders the session phase, `MANUAL` badge, timeline items in order with MT times (fixed −360 mode: 13:35:05Z → `07:35 MT`) and the `next` item highlighted.
+- [ ] 2. A pending entry card shows ticker, qty, buy stop, stop loss, risk dollars, reason and a countdown; tapping Approve calls `approve(id)` once, disables both buttons while busy, then shows the returned message.
+- [ ] 3. A `DecisionOut` with `blocked` shows `Entry blocked: ...`; an `ApiError` shows its message and re-enables the buttons.
+- [ ] 4. With fake timers, the countdown reaches zero and both buttons become disabled with the expired text.
+- [ ] 5. `/dashboard?proposal=<pending id>` highlights that card; `?proposal=<decided id>` renders the panel with status, `decided_at` in MT and `decided_via`.
+- [ ] 6. A position with `stop_working` false shows "(no stop order)" and the unprotected time; `last` null shows `n/a`.
+- [ ] 7. Kill-switch lights: `max_drawdown_pct` tripped shows red with its `clears` text; `telegram_configured` false shows the notice.
+- [ ] 8. Candidates: the brief, catalyst cards with headline links (`rel` set), and the ranking rows in rank order with reject reasons; changing the date refetches with that date.
+- [ ] 9. Gate and commit `P4-T13: ...`.
+
+---
+
+### Task P4-T14: Web Trades, Performance, Journal and Reports pages
+
+**Goal:** Trade history with the full audit chain and a 5-minute chart, the performance view (equity curve, drawdown, R histogram, metric tiles, run and date filters, CSV export), the journal editor, and the weekly Reports page the Telegram weekly link opens. BR-13, BR-23 (traceable), BR-51, BR-52, BR-60, BR-62; SPEC §12 (Trades, Performance, Journal); contract refinement 1 (`/reports?week=`).
+
+**Files:** `web/src/pages/Trades.tsx`, `web/src/pages/Performance.tsx`, `web/src/pages/Journal.tsx`, `web/src/pages/Reports.tsx`, `web/src/pages/trades/*`, `web/src/pages/performance/*` (components and tests).
+
+**Interfaces:**
+- Consumes: T2 contracts; Recharts.
+- Produces: `src/pages/Trades.tsx`, `src/pages/Performance.tsx`, `src/pages/Journal.tsx`, `src/pages/Reports.tsx` (default exports); components under `src/pages/trades/` (`TradeList.tsx`, `PositionDetail.tsx`, `TradeChart.tsx`) and `src/pages/performance/` (`EquityChart.tsx`, `DrawdownChart.tsx`, `RHistogram.tsx`, `MetricTiles.tsx`); their tests.
+
+**Behaviour and decisions:**
+- **Trades:** a list (newest first, 50 per page with Next/Previous) of date, ticker, qty, entry, exit, P&L, R, exit reason; date-range filter; a row opens the detail (URL `?position=<id>`). **Detail** (`api.position(id)`): the chain as a vertical list: signal (event, time, evidence key/values such as rvol, ATR, candle), each proposal (kind, status, created, decided at/via/by, latency), each order (purpose, type, prices, status, cancel reason), each fill (time, price, slippage, fees, and the quote snapshot bid/ask/last/time), the trade result; and `TradeChart`: 5-minute closes as a line with the high–low range as a band, horizontal reference lines for entry (fill price), stop (stop loss) and exit, and dots at the fill times; `chart_error` or no candles shows "Chart unavailable". An open position (from a Telegram entry-fill link) shows the same detail with "Open" and no trade block.
+- **Performance:** run selector (`live`, or a run id typed in, for P5 replays) and a from/to range (default: all); metric tiles (trades, win rate, expectancy R, profit factor, average slippage, max drawdown, adherence, total P&L); equity curve and drawdown (percentage) as two charts sharing the time axis; R histogram bars; "Export CSV" link using `exportTradesUrl` with the same filters. Empty data shows "No trades yet".
+- **Journal:** the last 30 session days (newest first) with trades count, realized P&L, the Rules-followed answer (Yes / No / not answered, and where it was answered) and notes; tapping a day opens an editor (Yes / No / clear, notes up to 5,000 characters with a counter, Save) that calls `putJournal`. `?date=YYYY-MM-DD` opens that day's editor directly (the daily-summary link).
+- **Reports** (`?week=YYYY-MM-DD`, default the current week): the Monday–Friday trading week containing that date: its metrics (`api.metrics({from, to})`), the week's trades, and each day's journal answer; a heading "Week of <Mon> to <Fri>"; previous/next week links. A note line says the Claude commentary arrives with the weekly report (P5-T6), without any other content in its place.
+
+**Acceptance tests:**
+- [ ] 1. The trade list renders fixture trades with `fmtMoney`/`fmtR`; Next requests `offset=50`.
+- [ ] 2. `/trades?position=3` renders the detail chain: signal evidence values, two proposals with decided-via, three orders, fills with the quote snapshot bid and ask.
+- [ ] 3. `TradeChart` receives the candles and draws reference lines for entry, stop and exit (asserted through rendered SVG elements or the component's props); `chart_error` shows "Chart unavailable".
+- [ ] 4. Performance renders the tiles from `MetricsOut` (win rate as a percentage, expectancy as R); changing the range calls `metrics` and `equity` with `from`/`to`; the Export link carries the same filters.
+- [ ] 5. Journal: `?date=2026-10-06` opens that editor; choosing Yes and typing a note then Save calls `putJournal("2026-10-06", {rules_followed: true, notes: "..."})`; the counter blocks more than 5,000 characters.
+- [ ] 6. Reports `?week=2026-10-09` requests metrics from 2026-10-05 to 2026-10-09 and shows "Week of 2026-10-05 to 2026-10-09"; previous week links to `?week=2026-10-02`.
+- [ ] 7. Empty metrics show "No trades yet" without errors.
+- [ ] 8. Gate and commit `P4-T14: ...`.
+
+---
+
+### Task P4-T15: Web Settings page
+
+**Goal:** Every setting Stephen controls: the approval-mode toggle, grouped runtime-settings forms and strategy forms generated from the form descriptors, the kill-switch panel (typed-reason reset, pause, resume), the Questrade token paste, the Telegram test button, and account security (password, two-step). BR-10, BR-22, BR-30, BR-34, BR-41, BR-53; SPEC §4.1 (paste a token), §6.3 (web reset with a typed reason), §12 (Settings).
+
+**Files:** `web/src/pages/Settings.tsx`, `web/src/pages/settings/*` (components and tests).
+
+**Interfaces:**
+- Consumes: T2 contracts (`settings`, `putSetting`, `strategies`, `putStrategy`, `killswitches`, `resetKillSwitch`, `pause`, `resume`, `putQuestradeToken`, `telegramTest`, `changePassword`, `totpSetup`, `totpConfirm`, `totpDisable`, `me`).
+- Produces: `src/pages/Settings.tsx` (default export) and components under `src/pages/settings/` (`ApprovalMode.tsx`, `FieldInput.tsx`, `SettingsGroups.tsx`, `StrategyForms.tsx`, `KillSwitchPanel.tsx`, `QuestradeToken.tsx`, `TelegramTest.tsx`, `Security.tsx`) with tests.
+
+**Behaviour and decisions:**
+- **Sections** in this order, each with an anchor: `#approval`, `#killswitches`, `#strategies`, `#settings`, `#questrade`, `#telegram`, `#security`.
+- **Approval mode:** a two-state toggle (Manual / Auto) with the current value; switching to Auto asks for confirmation ("Every order will be placed without asking you. Continue?"); saves with `putSetting("approval_mode", ...)`.
+- **`FieldInput`** renders a `FieldOut`: `decimal` → text input with `inputmode="decimal"` sending a string; `integer`/`number` → number input; `boolean` → checkbox; `enum` → select; `string` → text with the pattern; `string_list` → comma-separated text; `enum_list` → checkboxes; `nullable` adds a "none" checkbox. Client-side it checks min/max and pattern and shows the rule; the server is the authority, and its 422 `fields` messages show under the input.
+- **Settings groups:** collapsible groups (from `SettingOut.group`), each setting with its title, description, current value, a "default" marker, and Save per field (only changed fields enabled). `updated_by`/`updated_at` shown small.
+- **Strategies:** per strategy: key, version, revision, kind, an Enabled switch (disabling one with `owns_open_positions` warns "it keeps managing its open position until flat"), and its params form from `fields`; Save sends only changed params.
+- **Kill-switch panel:** each switch with state and `clears`; tripped automatic switches that `needs_web_reset` have a Reset button opening a form with a required reason (3–500 characters, the button enabled only then) and a confirm step; Pause (confirm "Block new entries? Exits and stops keep working.") and Resume buttons; server messages (409 "Already paused.") shown.
+- **Questrade token:** a password-type input (never echoed back, cleared after submit), Save calls `putQuestradeToken`; shows the resulting token status or the server's 422 message.
+- **Telegram test:** a button calling `telegramTest`; shows the result or "Telegram is not configured".
+- **Security:** change password (current, new twice, match and length ≥ 12 checked before sending); two-step: Set up (password) shows the secret and the `otpauth://` link (tap to open an authenticator on the phone) and a code field to confirm; Disable (password and code). Secrets are shown only in the setup step and cleared from state when leaving it.
+
+**Acceptance tests:**
+- [ ] 1. Approval mode Manual → Auto asks for confirmation; confirming calls `putSetting("approval_mode", "auto")`; cancelling calls nothing.
+- [ ] 2. `FieldInput` for each `FieldKind` in the fixtures renders the right control and produces the right value type (decimal as a string `"0.02"`, integer as a number, `string_list` as an array); a value above `maximum` shows the rule and disables Save.
+- [ ] 3. A server 422 with `fields` shows the message under the field.
+- [ ] 4. Strategy form: changing `top_n` and saving calls `putStrategy("orb_sip", {params: {top_n: 10}})` only; disabling a strategy with `owns_open_positions` shows the warning.
+- [ ] 5. Kill-switch reset: the button is disabled until the reason has 3 characters; confirming calls `resetKillSwitch("max_drawdown_pct", {reason})`; Pause asks for confirmation then calls `pause()`.
+- [ ] 6. Questrade token: the input is `type="password"`, is empty after submit, and the call carries the pasted value.
+- [ ] 7. Password change with mismatched or short passwords makes no call; valid input calls `changePassword`.
+- [ ] 8. Two-step setup shows the secret and the link after `totpSetup`, and confirm calls `totpConfirm` with the 6-digit code.
+- [ ] 9. Gate and commit `P4-T15: ...`.
+
+---
+
+### Task P4-T16: Web System page
+
+**Goal:** Operations at a glance: job runs, token status and last refresh, worker heartbeat, errors and the event log, failed Telegram sends, Questrade rate-limit usage, the Telegram-not-configured flag, the time-zone check, a manual job trigger, and the watchlist upload. BR-55, BR-02 fallback (SPEC §4.2 manual upload), R4 (token status with a link to paste); P3-T12 review point 3.
+
+**Files:** `web/src/pages/System.tsx`, `web/src/pages/system/*` (components and tests).
+
+**Interfaces:**
+- Consumes: T2 contracts (`system`, `events`, `jobs`, `runJob`, `watchlist`, `uploadWatchlist`, `deleteWatchlist`, `meta`); the time-zone state from `displayZoneInfo()` in `format.ts` (T2; set by the shell, T12).
+- Produces: `src/pages/System.tsx` (default export) and components under `src/pages/system/` (`StatusCards.tsx`, `JobRuns.tsx`, `EventLog.tsx`, `RunJob.tsx`, `WatchlistUpload.tsx`) with tests.
+
+**Behaviour and decisions:**
+- **Status cards:** Questrade token (OK or the error, age since the last refresh, expiry, a link to `/settings#questrade` when not OK); worker (phase, heartbeat age, pid/host; red when not OK: "worker not running: approvals and fills will not happen"); Telegram (configured or a red "Telegram not configured: nothing is relayed to your phone; approve on the Dashboard"); version, environment, Alembic revision, tz database version; time zone (green when the browser's zone data agrees, amber "Your browser's time-zone data differs from the server's; times use the server's offset (UTC−6)" in fixed mode).
+- **Rate limits:** the `rate_limit` numbers (remaining per category) when present, else "not reported yet".
+- **Job runs:** `last_runs` as a table (job, session, status, start time MT, duration, error first line); a job name filter loads `api.jobs({job})` history.
+- **Run a job:** a select of `manual_jobs`, an optional date and a Force checkbox; confirm, then `runJob`; shows `JobLaunchOut.message` or the 409/422 message.
+- **Errors and events:** the `errors` list, then the event log with a level filter and "Load older" (`before`), newest first.
+- **Failed Telegram sends:** `notifications_failed` with kind, status, time and error.
+- **Watchlist upload:** a file input (CSV), a date (default: next session hint "leave empty for the next nightly"), a "Run nightly now" checkbox, Upload; shows the stored tickers count, the rejected rows table and the launch message; the current watchlist for the date (if any) with Delete.
+
+**Acceptance tests:**
+- [ ] 1. With fixtures: token OK, worker OK and Telegram configured render green; `telegram_configured: false` renders the red Telegram notice; a worker with `ok: false` renders the "worker not running" text.
+- [ ] 2. Fixed time-zone mode renders the amber time-zone warning; zone mode renders green.
+- [ ] 3. The job-runs table shows MT start times and durations; filtering by `nightly` calls `jobs({job: "nightly"})`.
+- [ ] 4. Run a job: choosing `nightly`, Force and confirming calls `runJob("nightly", {force: true})`; a 409 shows "already running".
+- [ ] 5. Event log: the level filter calls `events({level: "error"})`; "Load older" calls `events({before: <oldest id>})`.
+- [ ] 6. Watchlist upload sends the file with `runNightly` when checked, then shows the count and the rejected rows; Delete calls `deleteWatchlist(date)`.
+- [ ] 7. `rate_limit` null shows "not reported yet".
+- [ ] 8. Gate and commit `P4-T16: ...`.
+
+---
+
+### Task P4-T17: Docker image, supervisord, entrypoint, compose files, deploy and smoke scripts
+
+**Goal:** One image that runs api, worker and cron safely on a read-only root filesystem, a dev compose file matching the existing NPM proxy host, and the build-ship-recreate deploy script. SPEC §1, §14 (container, network), §15, §15.1 (dev); master plan §7.4 notes; P3-T12 review point 1 (stopwaitsecs, `supercronic -test`, PATH, FinViz cache, tzdata); P3 open question 5.
+
+**Files:** `Trader/.dockerignore`, `docker/Dockerfile`, `docker/supervisord.conf`, `docker/entrypoint.sh`, `docker/run-worker.sh`, `docker/docker-compose.dev.yml`, `docker/docker-compose.prod.yml`, `docker/docker-compose.smoke.yml`, `docker/smoke/init.sql`, `docker/deploy.sh`, `docker/smoke.sh`, `tests/test_docker_files.py`, `tests/test_run_worker_sh.py`.
+
+**Interfaces:**
+- Consumes: `Trader/app` (package, `alembic.ini`, `uv.lock` with the `deploy` group), `Trader/web` (`npm run build`), `docker/crontab` (P3-T12), `trader create-admin` (T18), `python -m trader.api` (T3), `python -m trader.worker` (P3), `EnvSettings` keys (T1).
+- Produces:
+  - `Trader/.dockerignore`: excludes `docker/.env*`, `**/.env*`, `.git`, `app/.venv`, `app/tests`, `app/.mypy_cache`, `app/.pytest_cache`, `app/.ruff_cache`, `web/node_modules`, `web/dist`, `web/test-results`, `web/playwright-report`, `spikes`, `reports`, `docs`, `build`, `**/__pycache__`.
+  - `docker/Dockerfile` (build context `Trader/`): stage `web` (`node:22-alpine`: `npm ci`, `npm run build`); stage `build` (`python:3.12-slim-bookworm` with a pinned `uv` binary copied from its official image: `uv sync --frozen --no-dev --group deploy --compile-bytecode` into `/app/.venv`, the project installed from `/app`); stage `runtime` (`python:3.12-slim-bookworm`; apt `tzdata` and `ca-certificates` only; supercronic downloaded at a pinned version and verified against its published SHA-1 (the latest release at build time, recorded in `ARG SUPERCRONIC_VERSION` and `ARG SUPERCRONIC_SHA1SUM`); user `trader` uid/gid 10001; copies `/app` (venv, `trader/`, `alembic.ini`), `docker/crontab`, `docker/supervisord.conf`, `docker/entrypoint.sh`, `docker/run-worker.sh`, and the web `dist` to `/app/web/dist`). Runtime `ENV`: `PATH=/app/.venv/bin:$PATH`, `PYTHONTZPATH=` (empty), `PYTHONDONTWRITEBYTECODE=1`, `PYTHONUNBUFFERED=1`, `HOME=/tmp/home`, `TRADER_CACHE_DIR=/tmp/cache/trader`, `WEB_DIST_DIR=/app/web/dist`, `TZ=UTC`, `APP_VERSION` from a build arg. `USER trader`, `EXPOSE 8000` (documentation only), `ENTRYPOINT ["/app/docker/entrypoint.sh"]`, `CMD ["all"]`. `HEALTHCHECK` calling `http://127.0.0.1:8000/api/health` with Python's urllib.
+  - `docker/entrypoint.sh` (`set -eu`, never `set -x`): creates `$HOME` and `$TRADER_CACHE_DIR`; mode `$1` in `all` | `api` | `worker` | `cron` | `migrate`; for every mode except `worker` and `cron`: `alembic -c /app/alembic.ini upgrade head` (owner role from `MIGRATION_DATABASE_URL`; retried 5 times, 5 s apart, while the database is unreachable; then exit 1), then `trader create-admin`; then `unset MIGRATION_DATABASE_URL ADMIN_PASSWORD_INITIAL`; then `exec` supervisord (`all`), `python -m trader.api` (`api`), `run-worker.sh` (`worker`), `supercronic` (`cron`), or exit 0 (`migrate`). It prints the mode and the Alembic revision, never an env value.
+  - `docker/run-worker.sh`: starts `python -m trader.worker` as a child, forwards `TERM`/`INT` to it and waits; exits with the worker's code; after exit code 2 (another worker holds the lock) or 3 (the lock was lost) it first sleeps `WORKER_RESTART_DELAY` (default 30) seconds unless it is being stopped; after 4 (live run changed) it exits at once.
+  - `docker/supervisord.conf`: `nodaemon=true`, pidfile and socket under `/tmp`, `logfile=/app/logs/supervisord.log` (10 MB × 3); programs `api` (`python -m trader.api`, `stopwaitsecs=15`), `worker` (`/app/docker/run-worker.sh`, `stopsignal=TERM`, `stopwaitsecs=45`, `startsecs=5`, `startretries=1000`, `autorestart=true`), `cron` (`supercronic -passthrough-logs /app/docker/crontab`, `stopwaitsecs=30`, `autorestart=true`); each with `stdout_logfile=/dev/stdout`, `stdout_logfile_maxbytes=0`, `redirect_stderr=true`; a `[unix_http_server]` socket in `/tmp` and `[supervisorctl]` so `supervisorctl status` works inside the container.
+  - `docker/docker-compose.dev.yml`: project `trader-dev`; service `trader`, `image: trader:dev`, `container_name: trader-dev`, `env_file: .env.dev`, `environment: {APP_ENV: dev}`, `read_only: true`, `tmpfs: ["/tmp:size=256m,mode=1777"]`, `volumes: ["trader_dev_logs:/app/logs"]`, `networks: [trader_internal, proxy]`, no `ports`, `init: true`, `stop_grace_period: 120s`, `restart: unless-stopped`; `volumes: {trader_dev_logs: {}}`; `networks: {trader_internal: {driver: bridge}, proxy: {external: true}}`.
+  - `docker/docker-compose.prod.yml`: the same with SPEC §15.1's prod values (project and container `trader`, `.env.prod`, `trader_logs`, `APP_ENV: prod`, image `trader:${TRADER_TAG}`); used from P6.
+  - `docker/docker-compose.smoke.yml`: project `trader-smoke`; `db` (`postgres:14-alpine`, `docker/smoke/init.sql` mounted into the init directory, published only on `127.0.0.1:15432`), `trader` (`image: trader:smoke`, `command: ["api"]`, env from a file path given by `SMOKE_ENV_FILE`, published only on `127.0.0.1:18000:8000`, the same read-only/tmpfs settings).
+  - `docker/smoke/init.sql`: roles `trader_smoke_owner` and `trader_smoke_app` (throwaway passwords that protect nothing, since the database lives only for the smoke run and listens on localhost), schema `trader` owned by the owner, app role granted `USAGE` and `ALTER DEFAULT PRIVILEGES` for tables and sequences, as `trader_dev` is set up.
+  - `docker/deploy.sh` (`bash docker/deploy.sh dev|prod`, one command, FinanceTracker pattern): checks `docker/.env.<env>` exists and has the keys `DATABASE_URL`, `MIGRATION_DATABASE_URL`, `APP_ENCRYPTION_KEY`, `SESSION_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD_INITIAL` (names only, never values); `APP_VERSION=$(git describe --always --dirty)`; `DOCKER_DEFAULT_PLATFORM=linux/amd64 docker --context desktop-linux build -f docker/Dockerfile --build-arg APP_VERSION=... -t trader:<env tag> .` (from `Trader/`); `docker --context desktop-linux save trader:<tag> | ssh stephen@192.168.68.73 docker load`; `docker --context shared-docker-server compose -f docker/docker-compose.<env>.yml up -d --no-build --no-deps --force-recreate trader`; then polls `https://<host>/api/health` every 3 s up to 120 s and prints the final status code; exit 1 if it never returns 200. `prod` refuses to run unless `TRADER_TAG` is set and `.env.prod` exists.
+  - `docker/smoke.sh`: builds `trader:smoke` from the same Dockerfile (native platform is fine for the smoke; a separate tag so it never replaces the amd64 `trader:dev`), writes a temporary env file under `$TMPDIR` (a fresh Fernet key and session secret generated with Python, the smoke DB URLs, `ADMIN_USERNAME=smoke`, a random 20-character password), `docker compose -p trader-smoke -f docker/docker-compose.smoke.yml up -d`, waits for `http://127.0.0.1:18000/api/health` = 200 (60 s), runs the seed (`uv --directory app run python -m tests.e2e.seed_smoke --url <app db url>`), runs `npm --prefix web run e2e -- tests/smoke.spec.ts` with `SMOKE_MODE=local`, `SMOKE_BASE_URL`, `SMOKE_USER`, `SMOKE_PASSWORD`, and always tears down (`down -v`) and deletes the temp env file on exit (trap).
+- Produces `tests/test_docker_files.py` and `tests/test_run_worker_sh.py`.
+
+**Behaviour and decisions:**
+- **Read-only root:** only `/tmp` (tmpfs) and `/app/logs` (volume) are writable. Bytecode is compiled at build time; `HOME`, the FinViz cache (`TRADER_CACHE_DIR`, used by `runtime.finviz_cache_dir` after T18) and supervisord's pid and socket live under `/tmp`.
+- **tzdata:** zoneinfo reads the pip `tzdata` from the lock (`PYTHONTZPATH` empty), the same version as development; Debian `tzdata` is installed for supercronic's `CRON_TZ`.
+- **Secrets:** nothing from `docker/.env*` enters the build context (dockerignore) or an image layer; the compose file passes them at run time. The owner database URL and the initial admin password are unset before the long-running processes start.
+- **Worker shutdown:** `docker stop` → init → supervisord stops cron, worker and api; the worker gets up to 45 s (its last relay pump 15 s plus the bot's poll timeout 30 s, P3-T9), inside compose's 120 s grace, so its `stopped` heartbeat is written.
+- **Second worker:** exit 2 or 3 waits 30 s before supervisord restarts it, so a worker elsewhere (or a lock race during a recreate) never causes a tight restart loop.
+- The smoke stack publishes ports only on `127.0.0.1` of the Mac and is torn down after each run; `trader-dev` publishes none.
+
+**Acceptance tests (pytest, file-level; no Docker needed):**
+- [ ] 1. `.dockerignore` excludes `docker/.env*`, `**/.env*`, `app/.venv`, `web/node_modules`, `app/tests` and `.git`.
+- [ ] 2. The Dockerfile has the three stages from the named base images, `USER trader` (uid 10001) in the runtime stage, `ENV PYTHONTZPATH=` empty, `PATH` starting with `/app/.venv/bin`, `HOME` and `TRADER_CACHE_DIR` under `/tmp`, no `COPY` of any `.env` file, and a checksum-verified supercronic download.
+- [ ] 3. `supervisord.conf` parses (`configparser`): three programs; `worker` has `stopwaitsecs >= 40` and `stopsignal=TERM`; every program logs to `/dev/stdout` with `maxbytes=0`; pidfile and socket under `/tmp`.
+- [ ] 4. `docker-compose.dev.yml` (YAML): service `trader`, `container_name: trader-dev`, `read_only: true`, `/tmp` tmpfs, volume `trader_dev_logs`, networks `trader_internal` and external `proxy`, no `ports`, `env_file: .env.dev`, `stop_grace_period` ≥ 60 s, `init: true`.
+- [ ] 5. `entrypoint.sh`: `bash -n` passes; with stub `alembic`, `trader` and `supervisord` executables first on `PATH`, mode `migrate` calls alembic then `create-admin` and exits 0; mode `all` execs supervisord with `MIGRATION_DATABASE_URL` and `ADMIN_PASSWORD_INITIAL` unset in its environment; an alembic stub that always fails → exit 1 after 5 tries (sleep stubbed); the output contains no value of a stub env var.
+- [ ] 6. `run-worker.sh` with a stub worker: exit 0 → 0 at once; exit 2 → sleeps `WORKER_RESTART_DELAY` then 2; exit 4 → 4 at once; a `TERM` sent to the script reaches the stub (it records it) and the script exits with the stub's code without sleeping.
+- [ ] 7. `deploy.sh`: `bash -n`; with `docker`, `ssh` and `curl` stubbed on `PATH`, `deploy.sh dev` runs build (amd64), save|load to `stephen@192.168.68.73`, compose recreate on `shared-docker-server`, and health polling in that order; a missing env key → exit 1 naming the key, not its value; `deploy.sh prod` without `TRADER_TAG` → exit 1.
+- [ ] 8. `smoke.sh`: `bash -n`; it always runs `down -v` (the trap is set before `up`).
+- [ ] 9. Gate and commit `P4-T17: ...`.
+
+**LIVE steps (Docker Desktop on the Mac; no deploy yet):**
+1. `DOCKER_DEFAULT_PLATFORM=linux/amd64 docker --context desktop-linux build -f Trader/docker/Dockerfile -t trader:dev Trader` (the build context is the `Trader` folder; no `cd`) → builds. Record the image size.
+2. `docker --context desktop-linux run --rm --entrypoint sh trader:dev -c 'id -u; command -v trader; command -v supercronic; python -c "import tzdata,zoneinfo,datetime as d;print(tzdata.IANA_VERSION, zoneinfo.ZoneInfo(\"America/Edmonton\").utcoffset(d.datetime(2026,12,1)))"'` → `10001`, `/app/.venv/bin/trader`, a supercronic path, `2026d -1 day, 18:00:00` (UTC−6; the version as locked).
+3. `docker --context desktop-linux run --rm --entrypoint supercronic trader:dev -test /app/docker/crontab` → exit 0 (the crontab, `CRON_TZ` line included, parses). The ET schedule itself is confirmed from the running container in T19.
+4. `docker --context desktop-linux run --rm --read-only --tmpfs /tmp --entrypoint sh trader:dev -c 'find / -xdev \( -name ".env*" -o -name "*.env" \) 2>/dev/null | grep -v /proc'` → no output.
+
+---
+
+### Task P4-T18: Wiring: service composition, CLI commands, worker additions, route sweep, contract checks, §7.1 rows
+
+**Goal:** Put the real pieces together: build `ApiServices` from `Core`; add the CLI commands the image needs; the worker's rate-limit heartbeat detail and live-run guard; one FinViz cache location; and the cross-cutting checks (every route needs a session, CSRF on every change, the TypeScript types mirror the schemas). Update master plan §7.1. SPEC §1, §11, §13, §14.
+
+**Files:** `trader/api/services.py`, `trader/cli.py`, `trader/runtime.py`, `trader/worker.py`, `docs/plans/2026-09-26-build-master-plan.md` (§7.1), `tests/api/test_routes_sweep.py`, `tests/api/test_ts_contract.py`, `tests/test_runtime_phase4.py`, `tests/test_cli_phase4.py`.
+
+**Interfaces:**
+- Consumes: every T1–T17 production interface; `trader.runtime` (P3-T12); `KillSwitches`, `StrategyRegistry`, `MarketDataService`, `QuestradeClient`.
+- Produces in `trader.api.services`: `async build_services(core: Core, stack: AsyncExitStack) -> ApiServices`: `registry = StrategyRegistry(factory, clock)` (with `ensure_defaults()` once), `killswitches = KillSwitches(...)`, `credentials = runtime.questrade_auth(core)`, `decider_for = lambda run_id: runtime.build_decider(core, run_id)`, `telegram_configured = runtime.telegram_configured(core.env)`, `notifier = runtime.build_notifier(core, await runtime.open_telegram(core, stack))`, `quotes = CachedQuotes(MarketDataService(..., runtime.LazyQuestrade(core, stack)).quotes, clock, ttl)`, `candles` = a 5-minute candle callable over the same `MarketDataService`, `jobs = SubprocessJobLauncher(...)`, `feed = PollingChangeFeed(...)`, `plan = runtime.plan_builder(core)`, `fired = runtime.fired_for(core)`.
+- Changes `trader.cli`: new commands `create-admin` (calls `auth.ensure_admin` with the env values; prints `created`/`exists`/`not configured`; exit 1 only for `rejected`) and `user-password` (resets the single user's password from a hidden prompt entered twice; revokes all sessions; audit `auth.password_reset` actor `cli`); `nightly` and `premarket` use `runtime.finviz_cache_dir(core.env)`.
+- Changes `trader.runtime`: `finviz_cache_dir(env: EnvSettings | None = None) -> Path` = `<TRADER_CACHE_DIR or ~/.cache/trader>/finviz`; `EXIT_RUN_CHANGED = 4`; `run_worker` passes `heartbeat_extra` (the Questrade client's `rate_limit_remaining` as `{"rate_limit": {...}}` when the lazy client is open) and runs the live-run guard (see Key decisions).
+- Changes `trader.worker`: `WorkerDeps.heartbeat_extra: Callable[[], Mapping[str, Any]] | None = None`, merged into the heartbeat `detail` (a failing callable is logged once per streak and skipped).
+- Updates master plan §7.1: rows "Notifier"/"Event firing" unchanged; row "Proposals" notes the web path (`build_decider`, via `web`); new rows "Web API", "Web API types", "Users and sessions", "Manual watchlist"; the P3 web-links contract gains `/reports?week=`; `ProposalView.decided_at`; `WorkerDeps.heartbeat_extra` and exit code 4.
+
+**Behaviour and decisions:**
+- `build_services` opens nothing eagerly that needs the network: the Questrade client connects on first quote; Telegram's client is entered on the stack only when configured.
+- The live-run guard's check is one query every 60 s of the clock; a DB error just skips that check.
+- `create-admin` never prints the password; `user-password` refuses fewer than 12 characters.
+
+**Acceptance tests:**
+- [ ] 1. **Route sweep:** building the real app (`create_app` with `build_services` over a test `Core`, `FakeQuestrade` and `FakeTelegramApi` through monkeypatched `runtime` builders) and walking `app.routes`: every `/api` route except `POST /api/auth/login`, `GET /api/health` and `GET /api/meta` returns 401 without a cookie (path parameters filled with valid-looking values).
+- [ ] 2. **CSRF sweep:** with a real session, every `POST`/`PUT`/`DELETE` `/api` route except login returns 403 without `X-CSRF-Token`.
+- [ ] 3. **TypeScript mirror:** for every pydantic model in `trader.api.schemas`, `web/src/api/types.ts` declares a type of the same name whose field names equal the model's (parsed with a regex over `export type Name = {` / `export interface Name {` blocks); every `Topic`, `FieldKind`, `TimelineStatus` and `ManualJob` value appears in the TS union.
+- [ ] 4. The web approve path end to end in-process: log in, `POST /api/proposals/{id}/approve` with the CSRF header on a seeded pending entry → submitted; with `manual_pause` active → `blocked` (the real `build_decider` is used, Review Focus 1).
+- [ ] 5. `trader create-admin` (CliRunner, test DB): `created`, then `exists`; without env `not configured` and exit 0; a short password exit 1.
+- [ ] 6. `finviz_cache_dir` follows `TRADER_CACHE_DIR`; `nightly` and `premarket` pass it to the scraper (monkeypatched scraper records `cache_dir`).
+- [ ] 7. Heartbeat `detail` contains `rate_limit` when `heartbeat_extra` returns it, and still the P3 keys; a raising `heartbeat_extra` leaves the heartbeat written.
+- [ ] 8. Live-run guard: `run_worker(once=False)` with a fake worker whose run blocks; replacing the live run in the DB (mark the old run `completed`, create a new `active` live run) makes `run_worker` return 4 within 60 s of fake time with one `critical` event.
+- [ ] 9. The master plan §7.1 rows are updated as described.
+- [ ] 10. Gate and commit `P4-T18: ...`.
+
+---
+
+### Task P4-T19: End to end: local smoke stack with Playwright, deploy to `trader-dev`, LIVE checks
+
+**Goal:** Prove the image works end to end (login → dashboard → approve a seeded proposal) on a throwaway stack, then deploy to `trader-dev` and check it live: health through NPM, deep links, SSE latency through the proxy, worker and cron running with the right schedule, the first pre-open message, and one real Telegram tap. SPEC §15 (health wait), §15.1 (dev), §16 (Playwright smoke); BR-56; P3-T12 review point 4.
+
+**Files:** `web/playwright.config.ts`, `web/tests/smoke.spec.ts`, `tests/e2e/__init__.py`, `tests/e2e/seed_smoke.py`; LIVE changes to `Trader/docker/.env.dev` (git-ignored, never committed).
+
+**Interfaces:**
+- Consumes: everything; `docker/smoke.sh`, `docker/deploy.sh` (T17).
+- Produces: `web/playwright.config.ts` (Chromium only; viewport 390×844; `baseURL` from `SMOKE_BASE_URL`; retries 0; trace on failure), `web/tests/smoke.spec.ts`, `tests/e2e/__init__.py`, `tests/e2e/seed_smoke.py` (`python -m tests.e2e.seed_smoke --url <db url>`: via the P1–P3 services on the smoke DB, ensures the live run, strategy defaults, a symbol `AAA`, a signal and one pending entry proposal expiring in 10 minutes, one closed trade with its orders and fills, and a few events; idempotent).
+
+**Behaviour and decisions:**
+- `smoke.spec.ts` has two modes. `SMOKE_MODE=local`: login → dashboard shows the pending AAA proposal → tap Approve → the card shows `Approved` (or `Entry blocked` if a kill switch were active, which the seed avoids) and the proposal leaves the pending list → open `/trades?position=<seeded id>` and see the chain → `/system` renders → logout. `SMOKE_MODE=live`: login → dashboard renders (session phase shown) → `/candidates`, `/trades`, `/performance`, `/journal`, `/settings`, `/system`, `/reports?week=<this Friday>` each render without an error box → logout; it never clicks Approve, Reject, Save or Run. Both modes check at 390 px that `document.documentElement.scrollWidth <= window.innerWidth` on every page visited.
+- Credentials for LIVE come from `TRADER_WEB_USER`/`TRADER_WEB_PASSWORD` when set, else `ADMIN_USERNAME`/`ADMIN_PASSWORD_INITIAL` read from `Trader/docker/.env.dev` by the test runner command (never printed).
+
+**Acceptance tests:**
+- [ ] 1. `bash Trader/docker/smoke.sh` → the local Playwright run passes (login, approve, detail, system, logout; no horizontal scroll) and the stack is removed afterwards (`docker ps -a --filter name=trader-smoke` empty).
+- [ ] 2. `seed_smoke` run twice leaves one pending proposal (idempotent).
+- [ ] 3. Gate and commit `P4-T19: ...` (the LIVE results below go in the activity log and this file's LIVE notes).
+
+**LIVE steps** (dev only; Questrade read-only; no fake rows in `trader_dev`; never print a secret):
+1. **Admin credentials and env backup:** if `Trader/docker/.env.dev` lacks `ADMIN_USERNAME`/`ADMIN_PASSWORD_INITIAL`, append `ADMIN_USERNAME=stephen` and a random 24-character `ADMIN_PASSWORD_INITIAL` with one Python command that writes the file and prints only "added"; then copy the env file to `/Users/stephen/Documents/Code/Claude Code/Backup/Trader/env/.env.dev.<YYYY-MM-DD>` with mode 600 (master plan §7.4 note: a secure backup outside the repo folder). Tell Stephen in the report where the initial password is (the key name in `.env.dev`), not the password.
+2. **Deploy:** `bash Trader/docker/deploy.sh dev` → build, ship, recreate, and `200` from `https://trader-dev.sunspinner.ca/api/health` within 120 s (status may be `degraded` until the worker's first heartbeat; it must be `ok` within 60 s more).
+3. **Processes:** `docker --context shared-docker-server exec trader-dev supervisorctl -c /app/docker/supervisord.conf status` → `api`, `worker`, `cron` RUNNING; `docker --context shared-docker-server exec trader-dev id -u` → `10001`; `... exec trader-dev sh -c 'touch /app/x'` fails (read-only).
+4. **Worker and Telegram:** `worker_heartbeats` (query through `uv ... run python -c` with `build_core()`, printing process, phase and `beat_at` only) shows phase `idle` (or `session`) and a fresh `beat_at`; the bot now polls from the container, so no agent runs a polling worker anywhere else from here on.
+5. **Cron in ET:** supercronic prints each job's next run only at debug level, so check it with a harmless copy: `docker --context shared-docker-server exec trader-dev sh -c 'sed "s/trader .*/true/" /app/docker/crontab > /tmp/ct-check && timeout 3 supercronic -debug /tmp/ct-check; rm -f /tmp/ct-check'` (every command replaced by `true`, schedule and `CRON_TZ` kept) → the `20 9 * * 1-5` line's next run is 13:20Z on an EDT date (14:20Z from 2026-11-02), confirming `CRON_TZ=America/New_York` is honoured; `docker --context shared-docker-server exec trader-dev python -c '<tzdata check as in T17 LIVE 2>'` → UTC−6 for Edmonton.
+6. **Web through NPM:** `curl -s -o /dev/null -w "%{http_code}"` on `https://trader-dev.sunspinner.ca/dashboard?proposal=1`, `/trades?position=1`, `/journal?date=2026-09-25`, `/system`, `/reports?week=2026-10-02` → `200` each; `/api/dashboard` without a cookie → `401`. **SSE latency:** log in with curl (cookie jar in the scratch folder, deleted afterwards), open `curl -N` on `/api/stream` in the background with its output to a scratch file, then `PUT /api/settings/preopen.notify_when_ok` with its current value (a harmless, audited no-op change); the stream file shows `invalidate` with `settings` within 2 s of the PUT (compare timestamps). If it takes longer, check NPM buffering (the `X-Accel-Buffering: no` header) and escalate with the timings.
+7. **Playwright LIVE:** `SMOKE_MODE=live SMOKE_BASE_URL=https://trader-dev.sunspinner.ca npm --prefix Trader/web run e2e -- tests/smoke.spec.ts` (credentials as above) → passes.
+8. **Restart safety:** `docker --context shared-docker-server restart trader-dev` → comes back healthy; the heartbeat row went through `stopped` before the restart (its `detail` or the supervisord log shows the worker exited 0 within 45 s).
+9. **First trading day pre-open** (P3-T12 review point 4): on the first trading day after the deploy (Mon 2026-09-28 if deployed before then), before 09:20 ET (07:20 MT), confirm the container's cron runs `trader preopen` at 09:20 ET: a pre-open message arrives in Stephen's dev chat with the `worker` check OK, and `job_runs` has `preopen` succeeded for the session. If the phase ends after that time, record the check for the next trading morning (the orchestrator does it) instead of waiting.
+10. **One real Telegram tap** (Stephen's step, non-blocking): run `uv --directory Trader/app run --env-file ../../../../../Trader/docker/.env.dev trader telegram-test --buttons` and ask Stephen (Telegram progress message) to tap one test button; the containerised bot answers `Invalid button` and writes a `warning` event (source `telegram`), which proves the button round trip through the deployed worker. **Default if Stephen doesn't tap before the phase ends:** record it as open; the first real proposal of the soak (P6) proves the same round trip, and the build does not wait.
+
+---
+
+## Open questions for Stephen (defaults chosen; the build does not wait on them)
+
+1. **Web login name and first password:** the admin user is `stephen`, with a random 24-character initial password written to `ADMIN_PASSWORD_INITIAL` in `Trader/docker/.env.dev` (never shown in chat). Change it after your first login in Settings → Security. Two-step codes (TOTP) are optional and off until you set them up.
+2. **Sessions last** 30 days at most and end after 7 days without use (`web.session_max_days`, `web.session_idle_hours`), so your phone stays logged in at home. Five wrong passwords lock the login for 15 minutes.
+3. **Web approvals are one tap** (like Telegram), with no "are you sure?" step; switching to Auto mode, resetting a kill switch and pausing do ask for confirmation.
+4. **Rate limiting trusts `X-Forwarded-For`** from anything on the `proxy` Docker network (NPM sets it). Other containers on that network could fake it, which only affects the per-IP login limit; the per-account lockout still applies. Default: accept.
+5. **Watchlist upload wins over FinViz** for the session it is uploaded for (explicit beats automatic). Delete it on the System page to go back to FinViz.
+6. **Metrics and the CSV export** are simple SQL now; Phase 5 (P5-T1, P5-T6) may refine them behind the same pages.
+7. **Changing the live run** has no button in the web app (none is in the SPEC). If a later phase adds one, the worker restarts itself within a minute (exit code 4) and picks up the new run.
+8. **First live dev day:** once deployed, the container's worker and cron run the dev simulation every trading day (the soak Phase 6 counts). Pause dev with `/pause` or the web Pause button if you don't want approvals yet.
+
+## Notes for the P5 planner
+
+- `trader/reports/export.py` exists (T7): P5-T6 extends it rather than creating it. `/api/metrics` computes in SQL (T7): P5-T1 can move the computation into `trader/reports/metrics.py` behind the same route and `MetricsOut`.
+- The Settings page already has the kill-switch reset panel (T15) and the API reset route (T6): P5-T7 adds the realistic-trip tests and alerts, not a new panel.
+- The Reports page (`/reports?week=`) shows metrics, trades and journal answers; P5-T6 adds the Claude commentary to it.
+- The Replay page and `/api/replays` are P5-T4/T5; `resolve_run` already accepts a replay run id.
+
+## Self-review (done by the plan author)
+
+- **Coverage:** BR-30 (T8 toggle, T13 badge), BR-31 (T6, T13), BR-33 (T5, T13), BR-34 web side (T6, T15), BR-41 web reset (T6, T15), BR-50 (T5, T13), BR-51 (T5, T7, T14), BR-52 (T7, T14), BR-53 (T8, T15), BR-55 (T9, T16), BR-56 (T4, T17, T19), BR-62 route (T7); SPEC §4.2 manual upload (T10, T16), §11 every route except replays (T3–T11), §12 every page except Replay (T12–T16), §13 env and settings (T1), §14 (T3, T4, T17), §15/§15.1 dev (T17, T19), §16 UI tests (T2, T12–T16, T19). Master plan §7.4 notes: migration number (T1), tzdata (T1, T17), uvicorn logging (T3), web links (T3, T12), `decided_at` (T1, T6), web approvals with the entry guard (T6, T18), `stopwaitsecs` (T17), env backup (T19). P3-T12 review points 1–5: T17 (+T18 cache dir), Key decisions and T18 (live run), T13/T16 (web approvals, Telegram flag), T19 LIVE 9–10, T6/T18 (entry guard).
+- **Concurrency:** T3–T17 each depend only on T1/T2 and own disjoint files; `cli.py`, `runtime.py`, `worker.py`, `trader/api/services.py` and the master plan belong to T18 alone; `ROUTERS` is fixed in T1 so no task edits a shared registration point.
+- **No implementation code** in this plan: interfaces are signatures and data shapes; behaviour and tests are in words.

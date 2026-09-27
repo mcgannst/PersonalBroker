@@ -7,9 +7,9 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 1 |
-| Current task | T1 fix review, T2 B+S+C, T3 building, T4 fixing, T5 Breaker, T8 B+review |
+| Current task | T2/T5/T8 fixing, T3 B+review, T4 fix verify, T6 building |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-27T05:35:00Z |
+| Last updated (UTC) | 2026-09-27T06:05:00Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | `docker/.env.dev` (moves to `trader_dev.trader.api_credentials` in P1-T6) |
 | Token last refreshed (UTC) | 2026-09-27T03:36:53Z (spike S1) |
@@ -23,13 +23,13 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | ID | Title | Depends on | Status | Attempt | Stage results | Last commit |
 |---|---|---|---|---|---|---|
 | P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | accepted | 2 | V✅ B✅ S✅ C✅ (fix review ✅) | 3a3a50f |
-| P1-T2 | Database models, migration 0001, test database fixture | T1 | gauntlet | 1 | V✅ | 8cb3256 |
-| P1-T3 | Crypto and runtime settings store | T2 | building | 1 |  |  |
-| P1-T4 | Market types, clock and session calendar | T1 | fixing | 2 | V✅ B❌ S✅ C✅(should-fix) | c07c6a5 |
+| P1-T2 | Database models, migration 0001, test database fixture | T1 | fixing | 2 | V✅ B❌ S✅(should-fix) C✅(should-fix) | 50fe0e6 |
+| P1-T3 | Crypto and runtime settings store | T2 | gauntlet | 1 | V✅ | 58b15df |
+| P1-T4 | Market types, clock and session calendar | T1 | gauntlet | 2 | V✅ B❌ S✅ C✅ → fix 4af1355 (verify+review running) | 4af1355 |
 | P1-T5 | FinViz parser and scraper | T1 | fixing | 2 | V✅ B❌ S❌ C❌ | b058cdd |
-| P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | todo | 0 | | |
+| P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | building | 1 |  |  |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | todo | 0 | | |
-| P1-T8 | Indicators | T4 | gauntlet | 1 | V✅ | 02af350 |
+| P1-T8 | Indicators | T4 | fixing | 2 | V✅ B❌ S✅ C✅ | be57e1b |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | todo | 0 | | |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | todo | 0 | | |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | todo | 0 | | |
@@ -309,3 +309,63 @@ None open.
 - Gate: tests/db ran 4 passed on an exported copy of origin/trunk (1 DeprecationWarning from testcontainers.postgres)
 - Findings (should-fix): partition bounds are timezone-dependent (0001:111, confirmed shifted to 06:00Z when the DB timezone is America/Edmonton). Models and migration disagree on indexes (models.py:123 and 135 vs 0001:142 and 154). env.py has no include_object filter, so autogenerate would propose dropping all 34 intraday partitions
 - Notes: f-string SQL uses only module constants and metadata names, so it is safe
+
+### 2026-09-27T04:31:57Z · P1-T3 · Builder · attempt 1 · finished
+- Result: done, all 6 plan steps ticked
+- Commits: 58b15df
+- Gate: pre-commit check.sh green except the known P1-T4 breaker test_sessions_before_zero_is_empty (69 passed, 1 expected fail). After rebase, 7 new P1-T5 breaker tests also fail (P1-T5 gauntlet evidence, not P1-T3 code)
+- Notes: 8 new tests (2 crypto, 6 settings store). One small typing fix: markets_enabled uses a typed _default_markets() factory instead of a lambda, because mypy rejected list[str] for list[Literal]
+
+### 2026-09-27T04:32:18Z · P1-T4 · Builder · attempt 2 · finished
+- Result: done. All 4 findings fixed and the phase plan interfaces updated
+- Commits: 4af1355
+- Gate: check.sh lint/format/mypy clean. 80 passed, 7 failed, all 7 in tests/gauntlet/test_p1_t5_breaker.py (P1-T5, not this task). Before the rebase that brought in the T5 breaker: 67 passed
+- Notes: the wall-clock test flags calls only, so the scraper's bare reference wall=time.time is allowed. time.monotonic is not banned
+
+### 2026-09-27T04:32:36Z · P1-T8 · Breaker · attempt 1 · finished
+- Result: FAIL (7 of 8 new tests pass)
+- Commits: be57e1b
+- Gate: ruff check and ruff format clean on the new file
+- Findings: test_atr_unsorted_input_is_not_silently_wrong fails. atr() on newest-first bars returns 1.5000 instead of 2.1250, with no error. The interface does not say input must be sorted, so a wrong ATR feeds min_atr and stop_loss without any warning. Fix: sort by start, or raise ValueError on non-ascending starts.
+- Notes: gaps, Wilder smoothing vs exactly period+1 bars, early close at 13:00 ET, non-session ValueError, 09:31 first bar, stale previous-day 09:30 bar, rvol with 0.00, half-up rounding, 13-digit volumes and doji boundaries all pass
+
+### 2026-09-27T04:32:48Z · P1-T3 · Verifier · attempt 1 · started
+- Notes: synced worktree to trunk be57e1b
+
+### 2026-09-27T04:33:01Z · P1-T4 · Verifier+fix reviewer · attempt 2 · started
+- Notes: verifying trunk after fix commit 4af1355 and reviewing it against the attempt-1 findings
+
+### 2026-09-27T04:33:23Z · P1-T8 · Builder · attempt 2 · started
+- Fixing gauntlet findings: atr ordering/period validation, malformed-bar checks, docstrings, pairwise, HALF_UP test
+
+### 2026-09-27T04:34:03Z · P1-T2 · Breaker · attempt 1 · finished
+- Result: FAIL (6 of 8 new tests pass, 2 fail)
+- Commits: 50fe0e6
+- Gate: ruff, format and mypy pass. pytest has 3 failures: my 2, plus the known P1-T4 test_sessions_before_zero_is_empty
+- Findings: (1) test_partition_bounds_are_utc_months_whatever_the_server_timezone: migration 0001 writes partition bounds as bare dates, which PostgreSQL reads in the session TimeZone, so on a non-UTC server the monthly partitions are local months (2026-10-01T03:00Z goes to _202609). Fix idea: use explicit UTC literals like '2026-10-01 00:00:00+00', or SET LOCAL timezone = 'UTC' in the migration. (2) test_et_aware_datetimes_round_trip_as_utc: make_engine doesn't pin the session TimeZone, so timestamptz values come back in the server zone (for example -06:00 Edmonton) instead of UTC. Fix idea: connect_args options "-c timezone=UTC" in make_engine and in migrations/env.py.
+- Notes: passing tests cover partition edges and the default partition, 4 dp rounding and overflow, FKs and uniqueness, session_scope rollback, upgrade-at-head no-op, and a least-privilege app role (DML only, no DDL)
+
+### 2026-09-27T04:34:11Z · P1-T3 · Verifier · attempt 1 · finished
+- Result: FAIL (strict), not caused by P1-T3. The P1-T3 part is clean
+- Gate: check.sh has 8 failed and 87 passed. 7 failures are allowed (test_p1_t5_breaker). 1 is not on the ignore list: tests/gauntlet/test_p1_t8_breaker.py::test_atr_unsorted_input_is_not_silently_wrong (ATR 1.5000 vs 2.1250), added by be57e1b "P1-T8: gauntlet breaker tests"
+- Findings: tree is clean, all 6 P1-T3 checkboxes are ticked, the 4 P1-T3 files are on trunk, and the P1-T3 tests pass (8 passed). The markets_enabled typed default factory behaves the same (defaults to ["US"], each instance gets a fresh list, same list[Literal] type, rejects bad values)
+- Notes: to pass, the P1-T8 breaker test must be added to the ignore list
+
+### 2026-09-27T04:34:55Z · P1-T2 · Builder · attempt 2 · started
+- Result: fixing gauntlet findings (UTC sessions, index agreement, env.py filters, nits)
+
+### 2026-09-27T04:34:58Z · P1-T4 · Verifier+fix reviewer · attempt 2 · finished
+- Result: PASS
+- Commits: reviewed 4af1355 (trunk at be57e1b)
+- Gate: ruff, format, mypy clean. pytest 87 passed, 8 failed, none of them P1-T4. 7 in test_p1_t5_breaker.py (P1-T5 fix round). 1 in test_p1_t8_breaker.py (test_atr_unsorted_input_is_not_silently_wrong, P1-T8 breaker commit be57e1b, P1-T8 fix round). All 31 P1-T4 tests pass (tests/market, test_no_wall_clock, test_p1_t4_breaker)
+- Findings: all 4 attempt-1 findings fixed and tested. Plan Interfaces match the code. Plan steps all ticked. Nit: the guard misses no-arg time.localtime/gmtime/strftime/ctime and string forms pd.Timestamp("now") / pd.to_datetime("today"). None are used in trader/ today
+- Notes: out-of-range calls checked by hand (next_session 2030-12-31, previous_session 2020-01-02, session_open 2031) and all raise ValueError subclasses as documented
+
+### 2026-09-27T04:35:08Z · P1-T8 · Builder · attempt 2 · finished
+- Result: done, all gauntlet findings fixed
+- Commits: 358296f
+- Gate: check.sh 93 passed, 7 failed (all in tests/gauntlet/test_p1_t5_breaker.py, owned by the P1-T5 fix round). P1-T8 breaker suite now fully green.
+- Notes: atr raises ValueError for period < 1 and for non-strictly-ascending starts (checked before the length check, so a short unsorted list raises too). is_doji and is_bearish raise when high < low. Docstrings added, pairwise used, ROUND_HALF_UP pinned for rvol, atr and average_volume. Phase plan Interfaces updated.
+
+### 2026-09-27T04:35:26Z · P1-T3 · Spec+Code reviewer · attempt 1 · started
+- Notes: reviewing commit 58b15df against plan P1-T3, SPEC §13/§14, Global Constraints

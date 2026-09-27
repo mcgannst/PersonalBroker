@@ -1,4 +1,5 @@
-"""P3-T12: docker/crontab (SPEC §9 plus the 12:55 early-close flatten backup), read by supercronic in ET."""
+"""P3-T12: docker/crontab (SPEC §9 plus the 12:55 early-close flatten backup and the 12:32 / 15:32
+overlay-decision backups, fix round 1), read by supercronic in ET."""
 
 from datetime import UTC, date, datetime, time
 from pathlib import Path
@@ -23,17 +24,20 @@ EXPECTED = {
     ("20 9 * * 1-5", "trader preopen"),
     ("36 9 * * 1-5", "trader event orb_open"),
     ("30 11 * * 1-5", "trader checkin --at 11:30"),
+    ("32 12 * * 1-5", "trader event --due"),
     ("55 12 * * 1-5", "trader event flatten"),
     ("30 13 * * 1-5", "trader checkin --at 13:30"),
+    ("32 15 * * 1-5", "trader event --due"),
     ("55 15 * * 1-5", "trader event flatten"),
     ("15 16 * * 1-5", "trader postclose"),
 }
-# SPEC §9 times (ET) of the weekday jobs, plus the documented 12:55 backup.
+# SPEC §9 times (ET) of the weekday jobs, plus the documented 12:55 flatten and 12:32 / 15:32 overlay backups.
 WEEKDAY_ET = {
     "trader premarket": [time(8, 0)],
     "trader preopen": [time(9, 20)],
     "trader event orb_open": [time(9, 36)],
     "trader checkin --at 11:30": [time(11, 30)],
+    "trader event --due": [time(12, 32), time(15, 32)],
     "trader event flatten": [time(12, 55), time(15, 55)],
     "trader checkin --at 13:30": [time(13, 30)],
     "trader postclose": [time(16, 15)],
@@ -83,7 +87,7 @@ def test_every_line_has_five_valid_fields_and_a_command() -> None:
         assert parts[5] == "trader", line
 
 
-def test_the_schedule_is_spec_section_9_plus_the_early_close_flatten() -> None:
+def test_the_schedule_is_spec_section_9_plus_the_documented_backups() -> None:
     jobs = _jobs()
     assert len(jobs) == len(set(jobs)), "a duplicated line"
     assert set(jobs) == EXPECTED
@@ -102,7 +106,7 @@ def test_event_keys_are_planned_by_the_default_strategies() -> None:
     planned = {e.key for e in day_plan(strategies, cal, date(2026, 10, 6), RuntimeSettings()).events}
     for _, command in _jobs():
         words = command.split()
-        if words[1] == "event":
+        if words[1] == "event" and not words[2].startswith("--"):
             assert words[2] in planned, command
 
 
@@ -124,3 +128,28 @@ def test_times_are_eastern_on_both_sides_of_the_dst_change(day: date, utc_offset
     assert {k: sorted(v) for k, v in found.items()} == WEEKDAY_ET
     orb = datetime.combine(day, time(9, 36), tzinfo=ET).astimezone(UTC)
     assert orb.hour == 9 - utc_offset_hours and orb.minute == 36
+
+
+def _et_times(command: str, day: date) -> list[datetime]:
+    """When `command`'s weekday lines fire on `day` (ET wall clock, as supercronic reads them)."""
+    out = []
+    for schedule, cmd in _jobs():
+        minute, hour, _, _, dow = schedule.split()
+        if cmd == command and dow == "1-5" and day.weekday() < 5:
+            out.append(datetime.combine(day, time(int(hour), int(minute)), tzinfo=ET))
+    return sorted(out)
+
+
+@pytest.mark.parametrize(
+    "day",
+    [date(2026, 10, 6), date(2026, 11, 27), date(2026, 12, 24), date(2026, 12, 1)],  # normal, early x2, EST
+)
+def test_an_event_due_line_backs_up_the_overlay_decision_before_the_close(day: date) -> None:
+    """Fix round 1: overlay_decision (close - 30 min) has a cron backup on normal and early-close days."""
+    cal = SessionCalendar()
+    strategies = [OrbSip(OrbSipParams()), SpyOverlay(SpyOverlayParams())]
+    plan = day_plan(strategies, cal, day, RuntimeSettings())
+    [overlay] = [e.at for e in plan.events if e.key == "overlay_decision"]
+    close = cal.session_close(day)
+    backups = _et_times("trader event --due", day)
+    assert any(overlay <= t < close for t in backups), (day, overlay, close, backups)

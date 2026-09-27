@@ -192,3 +192,27 @@ async def test_status_and_checkin_build_the_same_view(db_factory: sessionmaker[S
     assert from_status.heartbeat_age_seconds == pytest.approx(7.0)
     [line] = from_status.positions
     assert line.unrealized_pnl == Decimal("10.0000") and line.unprotected_seconds == 45
+
+
+@pytest.mark.parametrize(("phase", "running"), [("session", True), ("stopping", False), ("stopped", False)])
+def test_a_stopping_worker_has_no_heartbeat_age_like_the_preopen_check(
+    db_factory: sessionmaker[Session], phase: str, running: bool
+) -> None:
+    """Fix round 1: `stopping` is a worker going away, as in the pre-open check (one shared rule)."""
+    from trader.jobs import preopen
+
+    assert preopen.STOPPED_PHASES is views.STOPPED_PHASES and preopen.WORKER_PROCESS == views.WORKER_PROCESS
+    with db_factory() as s:
+        s.add(
+            m.WorkerHeartbeat(
+                process=views.WORKER_PROCESS,
+                pid=1,
+                host="h",
+                started_at=NOW - timedelta(hours=1),
+                beat_at=NOW - timedelta(seconds=3),
+                phase=phase,
+            )
+        )
+        s.commit()
+    age = views.heartbeat_age(db_factory, NOW)
+    assert (age == pytest.approx(3.0)) if running else (age is None)

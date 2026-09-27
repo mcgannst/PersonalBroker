@@ -58,6 +58,7 @@ BOT_STOP_GRACE_SECONDS = 5.0  # on top of one Telegram poll timeout
 RELAY_STOP_SECONDS = 15.0  # the relay's last pump on stop may take this long (real time) at most
 MAX_ERROR_CHARS = 500
 EXIT_LOCK_LOST = 3  # `run` exits with this code when another worker took the lock
+EXIT_SETUP_FAILED = 1  # `main`: building the worker failed (one log line, no traceback)
 
 
 class WorkerEngine(Protocol):
@@ -607,9 +608,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return asyncio.run(runtime.run_worker(once=args.once))
     except SystemExit as exc:  # a refused second worker exits 2, one that lost its lock 3
-        if exc.code is None:
-            return 0
-        return exc.code if isinstance(exc.code, int) else 1
+        return runtime.exit_code(exc)
+    except Exception as exc:  # setup failed (configuration, database): one line, no traceback
+        log.error(
+            "worker.setup_failed",
+            error_type=type(exc).__name__,
+            error=logging_setup.redact_text(str(exc))[:MAX_ERROR_CHARS],
+        )
+        return EXIT_SETUP_FAILED
 
 
 if __name__ == "__main__":

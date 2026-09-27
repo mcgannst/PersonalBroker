@@ -21,11 +21,24 @@ every session's engine and with the /positions quotes (P2 `build_engine`: one cl
 access-token cache is shared); each session's engine stack (the catalyst service's FinViz scraper and
 Claude client) is closed before the next session's opens. A cron command opens one client, lazily, on its
 own stack.
+
+Fix round 1 (P3-T12 gauntlet):
+- Settings read at startup and by the message paths (the worker's own loops, the bot, the relay, the
+  commands, the pre-open, check-in and post-close jobs) go through `GuardedSettings`: an invalid or
+  unreadable settings row falls back to the last good settings (the defaults at startup), writes ONE
+  `error` event (source `settings`, relayed) per failure streak, and the process carries on. The trading
+  paths (day plans, event firing, the engine, decisions) keep reading the store directly and so keep
+  failing closed: no event fires on settings nobody chose.
+- A new live run needs a worker restart: the bot, the relay and the commands are bound to the run id they
+  were built with. `LiveRunWatch` re-reads the active live run at each session change and at most every
+  LIVE_RUN_CHECK_SECONDS otherwise; when it changed, the worker fires nothing more, stops cleanly and
+  `run_worker` returns EXIT_LIVE_RUN_CHANGED (4), so supervisord restarts it on the new run.
 """
 
 import asyncio
 import dataclasses
 import functools
+import os
 import socket
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
@@ -35,6 +48,9 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import structlog
+from pydantic import ValidationError
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
 
 from trader import bootstrap
 from trader.adapters.questrade.auth import QuestradeAuth
@@ -44,12 +60,13 @@ from trader.adapters.telegram.api import PtbTelegramApi
 from trader.adapters.telegram.bot import TelegramBot
 from trader.adapters.telegram.callbacks import CallbackSigner, DbCallbackIssuer
 from trader.adapters.telegram.commands import CommandDeps, Commands
-from trader.adapters.telegram.types import CommandHandler, TelegramApi
+from trader.adapters.telegram.types import CallbackKind, CommandHandler, TelegramApi
 from trader.bootstrap import Core
 from trader.broker.fill_model import FillParams, QuoteFillModel
 from trader.broker.ledger import Ledger
 from trader.broker.sim_broker import SimBroker
 from trader.config import EnvSettings
+from trader.db import models as m
 from trader.db.session import session_scope
 from trader.engine.killswitch import KillSwitches
 from trader.engine.orchestrator import Engine, build_engine
@@ -78,7 +95,8 @@ from trader.market.types import Candle, Interval
 from trader.notify.messages import MessageRenderer
 from trader.notify.notifier import NullNotifier, TelegramNotifier
 from trader.notify.relay import NotificationRelay
-from trader.notify.types import Button, Buttons, Notifier, OutboundMessage
+from trader.notify.types import Button, Buttons, Check, Notifier, OutboundMessage, PreopenView
+from trader.notify.views import WORKER_PROCESS as WORKER_PROCESS  # re-exported (one definition, in views)
 from trader.settings_store import RuntimeSettings
 from trader.strategies.base import CatalystSource
 from trader.strategies.registry import StrategyRegistry
@@ -87,15 +105,86 @@ from trader.worker import Worker, WorkerDeps, WorkerEngine
 log = structlog.get_logger("runtime")
 
 SESSION_END_JOB = "session_end"
-WORKER_PROCESS = "worker"
 TOKEN_SOURCE = "questrade.token"  # noqa: S105 (an event source name: the relay renders it as a token alert)
+SETTINGS_SOURCE = "settings"
 TEST_BUTTON_DATA = "test"  # unsigned: a running bot answers "Invalid button", as it should
 MAX_EVENT_MESSAGE = 500
+EXIT_LIVE_RUN_CHANGED = 4  # run_worker: the live run changed; supervisord restarts the worker on the new one
+LIVE_RUN_CHECK_SECONDS = 60.0  # the worker re-reads the live run at least this often (clock seconds)
+FINVIZ_CACHE_ENV = "TRADER_FINVIZ_CACHE_DIR"
 
 
 def finviz_cache_dir() -> Path:
-    # A private per-user cache (the scraper creates it 0o700 and refuses one it doesn't own).
-    return Path.home() / ".cache" / "trader" / "finviz"
+    """The FinViz cache of every process (the nightly and pre-market commands and the session engines):
+    $TRADER_FINVIZ_CACHE_DIR, else ~/.cache/trader/finviz. A private per-user cache (the scraper creates it
+    0o700 and refuses one it doesn't own), never a shared /tmp path."""
+    configured = os.environ.get(FINVIZ_CACHE_ENV, "").strip()
+    return Path(configured).expanduser() if configured else Path.home() / ".cache" / "trader" / "finviz"
+
+
+def exit_code(exc: SystemExit) -> int:
+    """A SystemExit as a process exit code (None is 0, a non-int is 1). Used by run_worker and
+    `trader.worker.main`."""
+    if exc.code is None:
+        return 0
+    return exc.code if isinstance(exc.code, int) else 1
+
+
+# --- settings -----------------------------------------------------------------------------------------------
+
+
+def settings_problem_text(exc: BaseException) -> str:
+    """Why the stored settings can't be used: the invalid keys (never their values), else the error type."""
+    if isinstance(exc, ValidationError):
+        keys = sorted({str(e["loc"][0]) for e in exc.errors() if e.get("loc")})
+        return f"invalid stored settings ({', '.join(keys) or 'unknown key'})"
+    return f"settings could not be read ({type(exc).__name__})"
+
+
+class GuardedSettings:
+    """`core.settings.load` for the paths that must keep going on a bad settings row (startup, messages,
+    the worker's own loops): on a failed read, the last good settings, else the defaults, and ONE `error`
+    event (source `settings`, relayed as an alert) per failure streak. `problem` says what is wrong while
+    the streak lasts."""
+
+    def __init__(self, core: Core) -> None:
+        self._core = core
+        self._last_good: RuntimeSettings | None = None
+        self.problem: str | None = None
+
+    def __call__(self) -> RuntimeSettings:
+        try:
+            settings = self._core.settings.load()
+        except Exception as exc:
+            if self.problem is None:
+                self.problem = settings_problem_text(exc)
+                fallback = "the last good settings" if self._last_good is not None else "the defaults"
+                log.error("runtime.settings_unusable", problem=self.problem)
+                _record_event(
+                    self._core,
+                    "error",
+                    SETTINGS_SOURCE,
+                    f"Runtime settings unusable: {self.problem}. Using {fallback} for status and messages; "
+                    "session events wait for valid settings. Fix the row on the Settings page.",
+                    {"problem": self.problem, "error_type": type(exc).__name__},
+                )
+            return self._last_good if self._last_good is not None else RuntimeSettings()
+        if self.problem is not None:
+            log.info("runtime.settings_recovered")
+            self.problem = None
+        self._last_good = settings
+        return settings
+
+
+def _record_event(
+    core: Core, level: str, source: str, message: str, data: dict[str, Any], run_id: int | None = None
+) -> None:
+    """Write one event_log row. Never raises (a failure is one log line)."""
+    try:
+        with session_scope(core.factory) as s:
+            log_event(s, core.clock, level, source, message[:MAX_EVENT_MESSAGE], data, run_id=run_id)
+    except Exception as exc:
+        log.error("runtime.event_not_recorded", source=source, error_type=type(exc).__name__)
 
 
 # --- Telegram -----------------------------------------------------------------------------------------------
@@ -122,15 +211,20 @@ async def _aclose_quietly(api: TelegramApi) -> None:
         log.warning("runtime.telegram_close_failed", error_type=type(exc).__name__)
 
 
-async def open_telegram(core: Core, stack: AsyncExitStack) -> TelegramApi | None:
-    """The Telegram API client, closed with `stack`; None when Telegram isn't configured."""
-    if not telegram_configured(core.env):
-        return None
-    api = build_telegram_api(core.env)
+async def _enter_telegram_api(env: EnvSettings, stack: AsyncExitStack) -> TelegramApi:
+    """Build the API client, register its (quiet) close on `stack`, and enter it when it is the PTB one."""
+    api = build_telegram_api(env)
     stack.push_async_callback(_aclose_quietly, api)
     if isinstance(api, PtbTelegramApi):
         await api.__aenter__()
     return api
+
+
+async def open_telegram(core: Core, stack: AsyncExitStack) -> TelegramApi | None:
+    """The Telegram API client, closed with `stack`; None when Telegram isn't configured."""
+    if not telegram_configured(core.env):
+        return None
+    return await _enter_telegram_api(core.env, stack)
 
 
 def build_notifier(core: Core, api: TelegramApi | None = None) -> Notifier:
@@ -168,22 +262,61 @@ def build_sim_broker(core: Core, run_id: int, settings: RuntimeSettings) -> SimB
     )
 
 
-def build_decider(core: Core, run_id: int) -> Callable[[int, Decision, Via, str], DecisionResult]:
+def build_decider(
+    core: Core, run_id: int, *, settings: Callable[[], RuntimeSettings] | None = None
+) -> Callable[[int, Decision, Via, str], DecisionResult]:
     """ProposalService.decide over its own SimBroker, so a tap works whether or not a session engine is
     open (the row lock in `decide` keeps it consistent with the engine's own service). SAFETY: built with
     the kill-switch entry guard, as `build_engine` is, so a tapped entry is refused while a kill switch or
-    /pause is active; stops, exits and cancels go through."""
-    settings = core.settings.load()
+    /pause is active; stops, exits and cancels go through. The build-time settings read (fill parameters,
+    currency) is guarded: `settings` (default: a new GuardedSettings) falls back to the defaults."""
+    loaded = (settings or GuardedSettings(core))()
     killswitches = KillSwitches(core.factory, core.clock)
     service = ProposalService(
         core.factory,
         core.clock,
         core.settings,
-        build_sim_broker(core, run_id, settings),
+        build_sim_broker(core, run_id, loaded),
         run_id,
         entry_blocked=killswitches.entry_guard(),
     )
     return service.decide
+
+
+class SettingsCheckRenderer(MessageRenderer):
+    """The MessageRenderer whose pre-open message also lists a failed `settings` check while `problem()`
+    reports one (the pre-open job's deps have no other place for it)."""
+
+    def __init__(self, core: Core, problem: Callable[[], str | None]) -> None:
+        super().__init__(core.env.public_base_url, ZoneInfo(core.env.tz_display), clock=core.clock)
+        self._problem = problem
+
+    def preopen(self, v: PreopenView) -> OutboundMessage:
+        problem = self._problem()
+        if problem is not None:
+            v = dataclasses.replace(v, checks=(*v.checks, settings_check(problem)))
+        return super().preopen(v)
+
+
+def settings_check(problem: str) -> Check:
+    return Check(SETTINGS_SOURCE, False, "error", f"{problem}: using the defaults")
+
+
+class NoTelegramIssuer:
+    """The CallbackIssuer of a process without Telegram: nothing can be tapped, so no nonce is stored."""
+
+    def issue(
+        self,
+        kind: CallbackKind,
+        ref: str,
+        actions: Sequence[str],
+        chat_id: int,
+        ttl_seconds: int | None,
+    ) -> tuple[str, dict[str, str]]:
+        return "", dict.fromkeys(actions, "")
+
+    def bind(self, nonce: str, message_id: int) -> None:
+        return None
 
 
 # --- Questrade and the engine -------------------------------------------------------------------------------
@@ -295,13 +428,84 @@ class LazyEngine:
         return await (await self.get()).end_of_session(session_date)
 
 
+def active_live_run_id(factory: sessionmaker[Session]) -> int | None:
+    """The id of the active live run, read without creating one (get_live_run would)."""
+    with factory() as s:
+        run_id: int | None = s.execute(
+            select(m.Run.id).where(m.Run.mode == "live", m.Run.status == "active")
+        ).scalar_one_or_none()
+    return run_id
+
+
+class LiveRunWatch:
+    """Notices that the active live run is no longer the one the worker was built for (the bot, the relay
+    and the commands are bound to a run id, so following a new run needs a restart). `check` re-reads the
+    run when forced (each session change) and at most every LIVE_RUN_CHECK_SECONDS otherwise; on a change
+    it writes one `warning` event and sets `stop`, and `changed` stays True."""
+
+    def __init__(self, core: Core, run_id: int, stop: asyncio.Event) -> None:
+        self._core = core
+        self.run_id = run_id
+        self._stop = stop
+        self._checked_at = core.clock.now()  # run_worker has just read it
+        self.changed = False
+        self.current: int | None = run_id
+
+    def check(self, *, force: bool = False) -> bool:
+        """True while the worker's run is still the active live run (and when it can't be read)."""
+        if self.changed:
+            return False
+        now = self._core.clock.now()
+        if not force and (now - self._checked_at).total_seconds() < LIVE_RUN_CHECK_SECONDS:
+            return True
+        self._checked_at = now
+        try:
+            current = active_live_run_id(self._core.factory)
+        except Exception as exc:  # the database is down: every other part reports that
+            log.warning("runtime.live_run_check_failed", error_type=type(exc).__name__)
+            return True
+        if current == self.run_id:
+            return True
+        self.changed, self.current = True, current
+        log.warning("worker.live_run_changed", run_id=self.run_id, current=current)
+        _record_event(
+            self._core,
+            "warning",
+            "worker",
+            f"The live run changed (worker built for run {self.run_id}, now {current}); "
+            "the worker stops and is restarted on the new run.",
+            {"run_id": self.run_id, "current": current},
+        )
+        self._stop.set()
+        return False
+
+
+class _IdleEngine:
+    """The engine handed out once the live run changed: it does nothing while the worker stops."""
+
+    async def run_event(self, event_key: str, session_date: date) -> Any:
+        return None
+
+    async def poll_quotes(self) -> Sequence[Any]:
+        return []
+
+    async def tick(self, now: datetime) -> None:
+        return None
+
+    async def end_of_session(self, session_date: date) -> Sequence[Any]:
+        return []
+
+
 class SessionEngines:
     """The worker's engines: one per session (rebuilt so settings changes apply, P2-T13); the previous
-    session's stack is closed before the next session's engine opens. All share `client`."""
+    session's stack is closed before the next session's engine opens. All share `client`. With a `watch`,
+    a session change first re-reads the live run: when it changed, no engine is built (an idle one is
+    returned while the worker stops)."""
 
-    def __init__(self, core: Core, client: QuoteClient) -> None:
+    def __init__(self, core: Core, client: QuoteClient, *, watch: LiveRunWatch | None = None) -> None:
         self._core = core
         self._client = client
+        self._watch = watch
         self._stack: AsyncExitStack | None = None
         self._engine: Engine | None = None
         self._day: date | None = None
@@ -312,6 +516,8 @@ class SessionEngines:
             if self._engine is not None and self._day == day:
                 return self._engine
             await self._close()
+            if self._watch is not None and not self._watch.check(force=True):
+                return _IdleEngine()  # type: ignore[return-value]
             stack = AsyncExitStack()
             try:
                 engine = await open_engine(self._core, stack, client=self._client)
@@ -408,27 +614,33 @@ class ForwardingCommands:
         return await self.target.confirm_pause(action)
 
 
-def _exit_code(exc: SystemExit) -> int:
-    if exc.code is None:
-        return 0
-    return exc.code if isinstance(exc.code, int) else 1
-
-
 async def run_worker(once: bool = False) -> int:
     """Build everything from `build_core()` and run the worker (`--once`: one step and one relay pump, no
-    bot). Returns the exit code: 0, 2 when another worker holds the lock, 3 when this one lost it.
-    The single-instance lock is taken by `Worker.run`, never here."""
+    bot). Returns the exit code: 0; 2 when another worker holds the lock; 3 when this one lost it; 4
+    (EXIT_LIVE_RUN_CHANGED) when the live run changed under it (a restart builds everything on the new
+    run). The single-instance lock is taken by `Worker.run`, never here. An invalid settings row does not
+    stop it: GuardedSettings falls back to the defaults with one relayed `error` event."""
     core = bootstrap.build_core()
     factory, clock = core.factory, core.clock
-    settings = core.settings.load
+    settings = GuardedSettings(core)
     run = get_live_run(factory, clock, settings())
     StrategyRegistry(factory, clock).ensure_defaults()
+    stop = asyncio.Event()
+    watch = LiveRunWatch(core, run.id, stop)
     async with AsyncExitStack() as stack:
-        client = LazyQuestrade(core, stack)
-        engines = SessionEngines(core, client)
+        # The shared Questrade client lives on its own inner stack, entered first, so at exit the last
+        # session's engine stack closes before the client it uses.
+        client = LazyQuestrade(core, await stack.enter_async_context(AsyncExitStack()))
+        engines = SessionEngines(core, client, watch=watch)
         stack.push_async_callback(engines.aclose)
         fdeps = fire_deps(core, engines.current)
-        fired = fired_for(core)
+        settled = fired_for(core)
+
+        def fired(session_date: date) -> set[str]:
+            # Read by every step in and after the session: the throttled live-run check rides on it.
+            watch.check()
+            return settled(session_date)
+
         data = MarketDataService(factory, clock, core.calendar, client)
         api = await open_telegram(core, stack)
         chat_id = core.env.telegram_chat_id
@@ -446,7 +658,7 @@ async def run_worker(once: bool = False) -> int:
                 clock,
                 issuer,
                 signer,
-                build_decider(core, run.id),
+                build_decider(core, run.id, settings=settings),
                 forward,
                 render,
                 run.id,
@@ -475,10 +687,26 @@ async def run_worker(once: bool = False) -> int:
             bot_run = bot.run
         else:
             log.warning("worker.telegram_not_configured")
+            _record_event(
+                core,
+                "warning",
+                "worker",
+                "Telegram not configured (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID): the worker runs "
+                "without the bot and the relay, so no approvals or alerts reach Telegram.",
+                {},
+            )
+        fire_now = bind_fire(fdeps)
+
+        async def fire(key: str, session_date: date) -> FireResult:
+            if not watch.check():
+                return FireResult(key, session_date, "skipped", {"reason": "live run changed; restarting"})
+            return await fire_now(key, session_date)
 
         async def end_session(
             session_date: date, body: Callable[[], Awaitable[dict[str, Any]]]
         ) -> JobOutcome:
+            if not watch.check(force=True):  # the restarted worker ends the session on the new run
+                return JobOutcome("skipped", {"reason": "live run changed; restarting"})
             return await run_job_async(factory, clock, SESSION_END_JOB, session_date, body)
 
         worker = Worker(
@@ -489,7 +717,7 @@ async def run_worker(once: bool = False) -> int:
                 settings=settings,
                 engine_for=engines.engine_for,
                 plan=fdeps.plan,
-                fire=bind_fire(fdeps),
+                fire=fire,
                 fired=fired,
                 relay=relay,
                 bot=bot_run,
@@ -499,10 +727,10 @@ async def run_worker(once: bool = False) -> int:
             )
         )
         try:
-            await worker.run(asyncio.Event(), once=once)
+            await worker.run(stop, once=once)
         except SystemExit as exc:  # 2: another worker runs; 3: this one lost its lock
-            return _exit_code(exc)
-    return 0
+            return exit_code(exc)
+    return EXIT_LIVE_RUN_CHANGED if watch.changed else 0
 
 
 # --- cron jobs ----------------------------------------------------------------------------------------------
@@ -521,12 +749,15 @@ async def run_cli_job(
 
 
 async def preopen_job(core: Core, session_date: date, *, force: bool) -> JobOutcome:
-    """The 09:20 pre-open check (sent directly, so it arrives even when the worker is down)."""
+    """The 09:20 pre-open check (sent directly, so it arrives even when the worker is down). An unusable
+    settings row never stops it: the defaults are used, one `error` event is written, and the message and
+    the job detail carry a failed `settings` check."""
     async with AsyncExitStack() as stack:
         client = LazyQuestrade(core, stack)
         api = await open_telegram(core, stack)
         auth = questrade_auth(core)
-        run = get_live_run(core.factory, core.clock, core.settings.load())
+        settings = GuardedSettings(core)
+        run = get_live_run(core.factory, core.clock, settings())
 
         async def token_check() -> None:
             await asyncio.to_thread(auth.access)
@@ -535,7 +766,7 @@ async def preopen_job(core: Core, session_date: date, *, force: bool) -> JobOutc
             factory=core.factory,
             clock=core.clock,
             calendar=core.calendar,
-            settings=core.settings.load,
+            settings=settings,
             token_check=token_check,
             universe_status=MarketDataService(
                 core.factory, core.clock, core.calendar, client
@@ -543,11 +774,17 @@ async def preopen_job(core: Core, session_date: date, *, force: bool) -> JobOutc
             killswitches=KillSwitches(core.factory, core.clock),
             run_id=run.id,
             notifier=build_notifier(core, api),
-            render=build_renderer(core),
+            render=SettingsCheckRenderer(core, lambda: settings.problem),
         )
-        return await run_cli_job(
-            core, "preopen", session_date, lambda: run_preopen(deps, session_date), force=force
-        )
+
+        async def body() -> dict[str, Any]:
+            detail = await run_preopen(deps, session_date)
+            if settings.problem is not None and "checks" in detail:
+                detail["checks"].append(dataclasses.asdict(settings_check(settings.problem)))
+                detail["ok"] = False
+            return detail
+
+        return await run_cli_job(core, "preopen", session_date, body, force=force)
 
 
 def checkin_job_name(at_label: str) -> str:
@@ -562,12 +799,15 @@ async def checkin_job(core: Core, session_date: date, at_label: str, *, force: b
         engine = LazyEngine(core, stack, client)
         api = await open_telegram(core, stack)
         fdeps = fire_deps(core, engine.get)
-        run = get_live_run(core.factory, core.clock, core.settings.load())
+        settings = GuardedSettings(
+            core
+        )  # the status message; the backup `fire` reads the store (fails closed)
+        run = get_live_run(core.factory, core.clock, settings())
         deps = CheckinDeps(
             factory=core.factory,
             clock=core.clock,
             calendar=core.calendar,
-            settings=core.settings.load,
+            settings=settings,
             run_id=run.id,
             notifier=build_notifier(core, api),
             render=build_renderer(core),
@@ -614,22 +854,29 @@ async def event_backup(
 
 
 async def postclose_job(core: Core, session_date: date, *, force: bool) -> JobOutcome:
-    """The 16:15 post-close job. The engine (and its Questrade client) is built only if the job body runs."""
+    """The 16:15 post-close job. The engine (and its Questrade client) is built only if the job body runs.
+    Without Telegram nothing can be tapped, so no journal nonce is issued (NoTelegramIssuer)."""
     async with AsyncExitStack() as stack:
         client = LazyQuestrade(core, stack)
         api = await open_telegram(core, stack)
-        run = get_live_run(core.factory, core.clock, core.settings.load())
+        settings = GuardedSettings(core)
+        run = get_live_run(core.factory, core.clock, settings())
         engine: WorkerEngine = LazyEngine(core, stack, client)
+        issuer = (
+            DbCallbackIssuer(core.factory, core.clock, build_signer(core))
+            if api is not None
+            else NoTelegramIssuer()
+        )
         deps = PostcloseDeps(
             factory=core.factory,
             clock=core.clock,
             calendar=core.calendar,
-            settings=core.settings.load,
+            settings=settings,
             engine=engine,
             data=MarketDataService(core.factory, core.clock, core.calendar, client),
             notifier=build_notifier(core, api),
             render=build_renderer(core),
-            issuer=DbCallbackIssuer(core.factory, core.clock, build_signer(core)),
+            issuer=issuer,
             chat_id=core.env.telegram_chat_id or 0,
             run_id=run.id,
         )
@@ -656,19 +903,14 @@ async def send_premarket_brief(core: Core, session_date: date, brief: str) -> No
 
 def record_token_failure(core: Core, error: BaseException) -> None:
     """An `error` event (source questrade.token) the relay turns into a token-failure alert. Never raises."""
-    text = redact_text(str(error))[:MAX_EVENT_MESSAGE]
-    try:
-        with session_scope(core.factory) as s:
-            log_event(
-                s,
-                core.clock,
-                "error",
-                TOKEN_SOURCE,
-                f"Questrade token refresh failed: {text}",
-                {"error": text, "error_type": type(error).__name__},
-            )
-    except Exception as exc:
-        log.error("runtime.token_failure_not_recorded", error_type=type(exc).__name__)
+    text = " ".join(redact_text(str(error)).split())[:MAX_EVENT_MESSAGE] or type(error).__name__
+    _record_event(
+        core,
+        "error",
+        TOKEN_SOURCE,
+        f"Questrade token refresh failed: {text}",
+        {"error": text, "error_type": type(error).__name__},
+    )
 
 
 # --- telegram-test ------------------------------------------------------------------------------------------
@@ -694,8 +936,5 @@ async def telegram_test(env: EnvSettings, now_label: str, *, buttons: bool = Fal
         raise RuntimeError("Telegram isn't configured")
     msg = telegram_test_message(now_label, buttons=buttons)
     async with AsyncExitStack() as stack:
-        api = build_telegram_api(env)
-        stack.push_async_callback(_aclose_quietly, api)
-        if isinstance(api, PtbTelegramApi):
-            await api.__aenter__()
+        api = await _enter_telegram_api(env, stack)
         return await api.send_message(chat_id, msg.text, msg.buttons, msg.silent)

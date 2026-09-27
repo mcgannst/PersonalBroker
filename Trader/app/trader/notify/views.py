@@ -32,7 +32,8 @@ log = structlog.get_logger("notify.views")
 
 Q4 = Decimal("0.0001")
 TOKEN_MAX_AGE_HOURS = 26.0  # the daily 02:00 refresh plus slack
-WORKER_PROCESS = "worker"
+WORKER_PROCESS = "worker"  # the worker's heartbeat row (the one definition: runtime and preopen import it)
+STOPPED_PHASES = frozenset({"stopping", "stopped"})  # heartbeat phases of a worker that is going away
 
 Quotes = Callable[[Sequence[int]], Awaitable[Mapping[int, QtQuote]]]
 
@@ -135,15 +136,16 @@ def token_state(
 
 
 def heartbeat_age(factory: sessionmaker[Session], now: datetime) -> float | None:
-    """Seconds since the worker's last beat; None when there is no row or the worker said it stopped
-    (phase `stopped`: a clean shutdown, so it is not running however recent the beat)."""
+    """Seconds since the worker's last beat; None when there is no row or the worker said it is going
+    away (phase `stopping` or `stopped`: a shutdown, so it is not running however recent the beat; the
+    same rule as the pre-open check)."""
     with factory() as s:
         row = s.execute(
             select(m.WorkerHeartbeat.beat_at, m.WorkerHeartbeat.phase).where(
                 m.WorkerHeartbeat.process == WORKER_PROCESS
             )
         ).one_or_none()
-    if row is None or row[1] == "stopped":
+    if row is None or row[1] in STOPPED_PHASES:
         return None
     beat_at: datetime = row[0]
     return (now - beat_at).total_seconds()

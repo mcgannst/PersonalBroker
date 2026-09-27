@@ -381,7 +381,8 @@ All times are **ET**, from supercronic with `CRON_TZ=America/New_York`. Every jo
 | 09:35:05 | 07:35 | **ORB event** (worker; cron backup at 09:36 if the event didn't fire) | `trader event orb_open` |
 | 11:30 / 13:30 | 09:30 / 11:30 | Check-ins: status push; entry-cancel event at 11:30 | `trader checkin` |
 | 15:30 | 13:30 | SPY overlay (worker) | — |
-| 15:50 | 13:50 | Flatten (worker); cron backup at 15:55 | `trader event flatten` |
+| 12:32 / 15:32 Mon–Fri | 10:32 / 13:32 | Backup of the overlay decision (close − 30 min: 12:30 on early-close days, 15:30 otherwise); fires only due, unsettled events, so on a normal day 12:32 does nothing | `trader event --due` |
+| 15:50 | 13:50 | Flatten (worker); cron backup at 15:55, and 12:55 for early-close days (on a normal day 12:55 is too early and does nothing) | `trader event flatten` |
 | 16:15 Mon–Fri | 14:15 | Post-close: end-of-day orders, journal, metrics, equity snapshot, **candle archive** (1-min RTH bars for the top 20 + SPY), daily summary | `trader postclose` |
 | Sat 09:00 | 07:00 | Weekly report + Claude commentary | `trader weekly` |
 

@@ -23,13 +23,12 @@ from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock
 from trader.market.types import UniverseStatus
 from trader.notify.types import Check, Notifier, PreopenView, Renderer
+from trader.notify.views import STOPPED_PHASES, WORKER_PROCESS
 from trader.settings_store import RuntimeSettings
 
 log = structlog.get_logger("jobs.preopen")
 
 NOT_A_SESSION = {"skipped": "not a session"}
-WORKER_PROCESS = "worker"
-STOPPED_PHASES = frozenset({"stopping", "stopped"})  # heartbeat phases of a worker that is going away
 MANUAL_PAUSE = "manual_pause"
 MAX_DETAIL_CHARS = 300
 

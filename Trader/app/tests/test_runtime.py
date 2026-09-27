@@ -2,6 +2,7 @@
 and FakeTelegramApi injected through the runtime's builders; no network, no real sleeping."""
 
 from collections.abc import Iterator
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -11,8 +12,10 @@ import pytest
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
 from sqlalchemy import Engine as SqlEngine
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
+from structlog.testing import capture_logs
 from typer.testing import CliRunner
 
 import trader.bootstrap
@@ -653,3 +656,333 @@ async def test_forwarding_commands_before_and_after_the_target() -> None:
     forward.target = Target()  # type: ignore[assignment]
     assert await forward.handle("/status") == ["/status"]
     assert await forward.confirm_pause("y") == "confirmed y"
+
+
+# --- 7. fix round 1 (P3-T12 gauntlet) -----------------------------------------------------------------------
+
+QT_SECRET = "QTSECRETVALUE0123456789"
+
+
+def command_lines(output: str) -> list[str]:
+    """What a command printed, without structlog's console lines (logging is not configured in tests)."""
+    return [ln for ln in output.splitlines() if ln.strip() and not ln[:4].isdigit()]
+
+
+def token_events(world: World) -> list[m.EventLog]:
+    with world.factory() as s:
+        return list(
+            s.execute(select(m.EventLog).where(m.EventLog.source == "questrade.token")).scalars().all()
+        )
+
+
+def test_token_refresh_decrypt_failure_is_one_line_exit_1_and_a_token_event(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def undecryptable(self: QuestradeAuth) -> None:
+        Fernet(Fernet.generate_key()).decrypt(b"not-a-fernet-token")
+
+    monkeypatch.setattr(QuestradeAuth, "keep_alive", undecryptable)
+    result = CliRunner().invoke(app, ["token-refresh"])
+    assert result.exit_code == 1 and isinstance(result.exception, SystemExit)
+    assert command_lines(result.output) == ["token refresh failed: InvalidToken"]
+    [row] = token_events(world)
+    assert row.level == "error" and row.data["error_type"] == "InvalidToken"
+
+
+def test_token_refresh_database_error_is_masked_and_still_recorded(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def db_down(self: QuestradeAuth) -> None:
+        raise OperationalError(
+            f"SELECT 1 -- access_token={QT_SECRET}\nline two", {}, Exception("server closed the connection")
+        )
+
+    monkeypatch.setattr(QuestradeAuth, "keep_alive", db_down)
+    result = CliRunner().invoke(app, ["token-refresh"])
+    assert result.exit_code == 1 and isinstance(result.exception, SystemExit)
+    [line] = command_lines(result.output)
+    assert line.startswith("token refresh failed: OperationalError") and QT_SECRET not in result.output
+    [row] = token_events(world)
+    assert QT_SECRET not in row.message and row.data["error_type"] == "OperationalError"
+
+
+def test_token_refresh_still_exits_1_when_the_event_cannot_be_written(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(self: QuestradeAuth) -> None:
+        raise QuestradeAuthError("refresh token already used or expired")
+
+    def no_db(*a: Any, **k: Any) -> Any:
+        raise OperationalError("INSERT", {}, Exception("database is down"))
+
+    monkeypatch.setattr(QuestradeAuth, "keep_alive", fail)
+    monkeypatch.setattr(rt, "session_scope", no_db)
+    result = CliRunner().invoke(app, ["token-refresh"])
+    assert result.exit_code == 1 and isinstance(result.exception, SystemExit)
+    assert command_lines(result.output) == ["token refresh failed: refresh token already used or expired"]
+
+
+class _FailingEnd(FakeRunner):
+    async def end_of_session(self, session_date: date) -> list[Any]:
+        raise RuntimeError(f"archive failed\nGET /v1/candles?access_token={QT_SECRET} refused")
+
+
+def test_a_failed_job_report_is_one_masked_line(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_open_engine(core: Core, stack: Any, *, client: Any = None) -> FakeRunner:
+        return _FailingEnd()
+
+    monkeypatch.setattr(rt, "open_engine", fake_open_engine)
+    world.clock.set(et(16, 15))
+    result = CliRunner().invoke(app, ["postclose"])
+    assert result.exit_code == 1 and isinstance(result.exception, SystemExit)
+    [line] = command_lines(result.output)
+    assert line.startswith("postclose 2026-10-06: failed:") and QT_SECRET not in result.output
+
+
+# settings: an invalid stored row never stops the worker or the pre-open message
+
+
+def store_invalid_setting(world: World) -> None:
+    with world.factory() as s:
+        s.add(m.Setting(key="approval_mode", value="sometimes", updated_by="test"))
+        s.commit()
+
+
+def settings_events(world: World) -> list[m.EventLog]:
+    with world.factory() as s:
+        return list(s.execute(select(m.EventLog).where(m.EventLog.source == "settings")).scalars().all())
+
+
+async def test_worker_once_run_with_an_invalid_settings_row_starts_and_writes_one_error_event(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_fake_engine(world, monkeypatch)
+    store_invalid_setting(world)
+    world.clock.set(et(10, 0))
+    assert await rt.run_worker(once=True) == 0
+    [event] = settings_events(world)
+    assert event.level == "error" and "approval_mode" in event.message and "sometimes" not in event.message
+    hb = heartbeat(world)
+    assert hb is not None and hb.phase == "stopped"
+    with world.factory() as s:
+        streams = set(s.execute(select(m.NotifyCursor.stream)).scalars())
+    assert {"proposals", "fills", "events"} <= streams  # the relay ran
+    assert job_runs(world, "event:") == []  # session events wait for valid settings (fail closed)
+
+
+async def test_preopen_with_an_invalid_settings_row_still_sends_and_flags_it(world: World) -> None:
+    store_invalid_setting(world)
+    world.clock.set(et(9, 20))
+    out = await rt.preopen_job(world.core, DAY, force=False)
+    assert out.status == "succeeded" and out.detail["ok"] is False
+    assert {"name": "settings", "ok": False, "level": "error"}.items() <= out.detail["checks"][-1].items()
+    [sent] = world.api.calls_of("send_message")
+    assert "Pre-open" in sent["text"]
+    assert "ERROR settings: invalid stored settings (approval_mode)" in sent["text"]
+    assert len(settings_events(world)) == 1
+
+
+def test_guarded_settings_writes_one_event_per_failure_streak(world: World) -> None:
+    guard = rt.GuardedSettings(world.core)
+    assert guard() == RuntimeSettings() and guard.problem is None
+    store_invalid_setting(world)
+    assert guard() == RuntimeSettings() and guard() == RuntimeSettings()  # the last good ones
+    assert guard.problem == "invalid stored settings (approval_mode)"
+    assert len(settings_events(world)) == 1
+    world.core.settings.set("approval_mode", "auto", "test")
+    assert guard().approval_mode == "auto" and guard.problem is None
+
+
+# the session rollover: per-session catalyst stacks, one Questrade client per process
+
+
+class _CountingQt(_QtContext):
+    def __init__(self, qt: FakeQuestrade, journal: list[str]) -> None:
+        super().__init__(qt)
+        self.journal = journal
+
+    async def __aenter__(self) -> FakeQuestrade:
+        self.journal.append("qt enter")
+        return await super().__aenter__()
+
+    async def __aexit__(self, *exc: object) -> None:
+        self.journal.append("qt exit")
+
+
+async def test_session_rollover_closes_each_catalyst_stack_before_the_next_and_the_client_at_exit(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal: list[str] = []
+    qt = _CountingQt(world.qt.qt, journal)
+    qt.qt.add_symbol("AAA", 11)
+    qt.qt.set_quote(11, "20.00", "20.01", "20.00", world.clock.now())
+    monkeypatch.setattr(rt, "questrade_client", lambda core: qt)
+    opened = 0
+
+    async def catalysts(core: Core, stack: AsyncExitStack) -> FakeCatalysts:
+        nonlocal opened
+        opened += 1
+        n = opened
+        journal.append(f"catalysts enter {n}")
+
+        async def closed() -> None:
+            journal.append(f"catalysts close {n}")
+
+        stack.push_async_callback(closed)
+        return FakeCatalysts()
+
+    clients: list[Any] = []
+
+    def fake_build_engine(core: Core, client: Any, catalyst_source: Any) -> FakeRunner:
+        clients.append(client)
+        return FakeRunner()
+
+    monkeypatch.setattr(rt, "open_catalysts", catalysts)
+    monkeypatch.setattr(rt, "build_engine", fake_build_engine)
+    day2 = CAL.next_session(DAY)
+
+    async def two_sessions(self: Worker, stop: Any, *, once: bool = False) -> None:
+        await self.deps.engine_for(DAY)
+        await clients[-1].quotes([11])
+        await self.deps.engine_for(DAY)  # the same session: no new engine
+        await self.deps.engine_for(day2)
+        await clients[-1].quotes([11])
+        journal.append("worker done")
+
+    monkeypatch.setattr(Worker, "run", two_sessions)
+    assert await rt.run_worker(once=True) == 0
+    assert len(clients) == 2 and clients[0] is clients[1]  # one shared LazyQuestrade
+    assert journal == [
+        "catalysts enter 1",
+        "qt enter",
+        "catalysts close 1",
+        "catalysts enter 2",
+        "worker done",
+        "catalysts close 2",  # the last session's stack, before the client it used
+        "qt exit",
+    ]
+
+
+# a new live run: the worker stops cleanly with exit 4 (supervisord restarts it on the new run)
+
+
+def replace_live_run(world: World) -> int:
+    with world.factory() as s:
+        s.execute(
+            update(m.Run).where(m.Run.mode == "live", m.Run.status == "active").values(status="completed")
+        )
+        s.commit()
+    return get_live_run(world.factory, world.clock, RuntimeSettings()).id
+
+
+def worker_warnings(world: World) -> list[str]:
+    with world.factory() as s:
+        return list(
+            s.execute(
+                select(m.EventLog.message).where(m.EventLog.source == "worker", m.EventLog.level == "warning")
+            ).scalars()
+        )
+
+
+async def test_a_new_live_run_at_a_session_change_stops_the_worker_with_exit_4(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_fake_engine(world, monkeypatch)
+    day2 = CAL.next_session(DAY)
+    seen: dict[str, Any] = {}
+
+    async def new_run_overnight(self: Worker, stop: Any, *, once: bool = False) -> None:
+        assert await self.deps.engine_for(DAY) is world.runner
+        seen["new"] = replace_live_run(world)
+        idle = await self.deps.engine_for(day2)
+        seen["idle"] = idle is not world.runner
+        seen["fire"] = await self.deps.fire("orb_open", day2)
+        seen["end"] = await self.deps.end_session(DAY, _ok)
+        seen["stop"] = stop.is_set()
+
+    monkeypatch.setattr(Worker, "run", new_run_overnight)
+    assert await rt.run_worker(once=True) == rt.EXIT_LIVE_RUN_CHANGED
+    assert seen["idle"] and seen["stop"]
+    assert seen["fire"].status == "skipped" and seen["end"].status == "skipped"
+    assert world.engines_opened == [1] and world.runner.events == []  # nothing ran for the stale run
+    assert job_runs(world) == []
+    [warning] = [w for w in worker_warnings(world) if "live run changed" in w]
+    assert str(seen["new"]) in warning
+
+
+async def test_a_new_live_run_mid_session_is_noticed_by_the_next_step_within_a_minute(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mid-session the worker's engine is cached, so the throttled check rides on `fired`, which every
+    step in and after the session reads. A real step then fires nothing for the stale run."""
+    use_fake_engine(world, monkeypatch)
+    world.clock.set(et(9, 30))
+    seen: dict[str, Any] = {}
+
+    async def new_run_mid_session(self: Worker, stop: Any, *, once: bool = False) -> None:
+        assert self.deps.relay is not None and hasattr(self.deps.relay, "__self__")  # the bound pump
+        await self.step()
+        replace_live_run(world)
+        world.clock.set(et(9, 30, 30))
+        self.deps.fired(DAY)
+        seen["early"] = stop.is_set()  # throttled: not re-read yet
+        world.clock.set(et(9, 36))
+        report = await self.step()
+        seen["later"] = stop.is_set()
+        seen["fired"] = [(f.key, f.status) for f in report.fired]
+
+    monkeypatch.setattr(Worker, "run", new_run_mid_session)
+    assert await rt.run_worker(once=True) == rt.EXIT_LIVE_RUN_CHANGED
+    assert seen == {"early": False, "later": True, "fired": [("orb_open", "skipped")]}
+    assert world.runner.events == [] and job_runs(world, "event:") == []
+
+
+# nits
+
+
+async def test_a_worker_without_telegram_writes_one_warning_event(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bare = Core(**{**world.core.__dict__, "env": make_env(telegram=False)})
+    monkeypatch.setattr(trader.bootstrap, "build_core", lambda *a, **k: bare)
+    world.clock.set(datetime(2026, 10, 3, 16, 0, tzinfo=UTC))  # Saturday
+    assert await rt.run_worker(once=True) == 0
+    [warning] = worker_warnings(world)
+    assert warning.startswith("Telegram not configured")
+
+
+async def test_postclose_without_telegram_issues_no_journal_nonce(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_fake_engine(world, monkeypatch)
+    bare = Core(**{**world.core.__dict__, "env": make_env(telegram=False)})
+    world.clock.set(et(16, 15))
+    out = await rt.postclose_job(bare, DAY, force=False)
+    assert out.status == "succeeded"
+    with world.factory() as s:
+        assert s.execute(select(m.TelegramCallback.nonce)).all() == []
+    assert world.api.calls == []
+
+
+def test_worker_main_setup_failure_is_one_log_line_and_exit_1(monkeypatch: pytest.MonkeyPatch) -> None:
+    import trader.worker
+
+    def broken() -> Core:
+        raise RuntimeError(f"cannot connect: postgresql://trader:{QT_SECRET}@db/trader\nsecond line")
+
+    monkeypatch.setattr(trader.bootstrap, "build_core", broken)
+    with capture_logs() as logs:
+        assert trader.worker.main(["--once"]) == 1
+    [entry] = [e for e in logs if e["event"] == "worker.setup_failed"]
+    assert entry["error_type"] == "RuntimeError" and "exc_info" not in entry
+
+
+def test_finviz_cache_dir_is_configurable(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    monkeypatch.delenv(rt.FINVIZ_CACHE_ENV, raising=False)
+    assert str(rt.finviz_cache_dir()).endswith(".cache/trader/finviz")
+    monkeypatch.setenv(rt.FINVIZ_CACHE_ENV, str(tmp_path / "fv"))
+    assert rt.finviz_cache_dir() == tmp_path / "fv"
+
+
+def test_exit_code_maps_system_exit() -> None:
+    assert [rt.exit_code(SystemExit(c)) for c in (None, 0, 2, 3, "boom")] == [0, 0, 2, 3, 1]

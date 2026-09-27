@@ -12,6 +12,7 @@ from trader import __version__
 if TYPE_CHECKING:
     from trader.bootstrap import Core
     from trader.jobs.runner import JobOutcome
+    from trader.settings_store import RuntimeSettings
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
@@ -69,21 +70,25 @@ def questrade_seed(
 def token_refresh() -> None:
     """Keep the Questrade refresh-token chain alive (daily job, SPEC §9)."""
     _setup_logging()
+    from trader import runtime
     from trader.adapters.questrade.auth import QuestradeAuth, QuestradeAuthError
-    from trader.bootstrap import build_core
 
-    core = build_core()
+    core = _core("token-refresh")
     auth = QuestradeAuth(core.factory, core.crypto, core.clock)
     try:
         auth.keep_alive()
     except QuestradeAuthError as exc:
-        from trader import runtime
-
-        runtime.record_token_failure(core, exc)  # the relay alerts; the 09:20 pre-open check alerts again
-        typer.echo(f"token refresh failed: {exc}", err=True)
-        raise typer.Exit(1) from None
+        # The relay alerts; the 09:20 pre-open check alerts again. record_token_failure never raises.
+        runtime.record_token_failure(core, exc)
+        _fail(f"token refresh failed: {_masked_line(str(exc))}")
+    except Exception as exc:  # an undecryptable chain (key changed), a database error, ...: same alert
+        runtime.record_token_failure(core, exc)
+        _fail(f"token refresh failed: {_one_line(exc)}")
     # keep_alive's access token may already be expired; the chain extension time is what matters.
-    extended = auth.health().last_refresh_at
+    try:
+        extended = auth.health().last_refresh_at
+    except Exception as exc:
+        _fail(f"token refresh: refreshed, but the chain state could not be read: {_one_line(exc)}")
     typer.echo(f"ok; chain last extended {extended.isoformat() if extended else 'never'}")
 
 
@@ -143,9 +148,9 @@ def nightly(
     _setup_logging()
     import asyncio
     from datetime import date as date_cls
-    from pathlib import Path
     from typing import Any
 
+    from trader import runtime
     from trader.adapters.finviz.scraper import FinvizScraper
     from trader.adapters.questrade.auth import QuestradeAuth
     from trader.adapters.questrade.client import QuestradeClient
@@ -154,7 +159,7 @@ def nightly(
     from trader.jobs.runner import run_job
 
     core = build_core()
-    settings = core.settings.load()
+    settings = _strict_settings(core, "nightly")
     if date_:
         try:
             session_date = date_cls.fromisoformat(date_)
@@ -175,9 +180,7 @@ def nightly(
         )
         raise typer.Exit(1)
     auth = QuestradeAuth(core.factory, core.crypto, core.clock)
-    # A private per-user cache (the scraper creates it 0o700 and refuses one it doesn't own), never a
-    # shared /tmp path.
-    cache_dir = Path.home() / ".cache" / "trader" / "finviz"
+    cache_dir = runtime.finviz_cache_dir()  # one private cache for every process
 
     with FinvizScraper(
         min_interval_s=settings.finviz_min_interval_seconds,
@@ -196,7 +199,7 @@ def nightly(
             return asyncio.run(go())
 
         out = run_job(core.factory, core.clock, "nightly", session_date, job, force=force)
-    typer.echo(f"nightly {session_date}: {out.status} {out.detail or out.error or ''}")
+    typer.echo(f"nightly {session_date}: {out.status} {_masked_line(str(out.detail or out.error or ''))}")
     if out.status == "failed":
         raise typer.Exit(1)
 
@@ -218,11 +221,11 @@ def premarket(
     _setup_logging()
     import asyncio
     from datetime import date as date_cls
-    from pathlib import Path
     from typing import Any
 
     import anthropic
 
+    from trader import runtime
     from trader.adapters.claude.catalyst import CatalystClassifier, CatalystService, CatalystStore
     from trader.adapters.finviz.scraper import FinvizScraper
     from trader.adapters.questrade.auth import QuestradeAuth
@@ -234,7 +237,7 @@ def premarket(
     from trader.market.data_service import MarketDataService
 
     core = build_core()
-    settings = core.settings.load()
+    settings = _strict_settings(core, "premarket")
     now = core.clock.now()
     today = et_date(now)
     if date_:
@@ -273,7 +276,7 @@ def premarket(
         typer.echo(warnings[-1], err=True)
     auth = QuestradeAuth(core.factory, core.crypto, core.clock)
     api_key = core.env.anthropic_api_key
-    cache_dir = Path.home() / ".cache" / "trader" / "finviz"
+    cache_dir = runtime.finviz_cache_dir()  # one private cache for every process
 
     # Screens are never read from the cache (a run must see this morning's news and earnings); the
     # quote pages behind the headlines are cached per ET day by the scraper itself.
@@ -314,15 +317,15 @@ def premarket(
 
         out = run_job(core.factory, core.clock, "premarket", session_date, job, force=force)
     if out.status == "succeeded":
-        from trader import runtime
-
         typer.echo(out.detail["brief"])
         # Once per session (dedupe premarket:<date>); a Telegram failure never fails the job.
         asyncio.run(runtime.send_premarket_brief(core, session_date, out.detail["brief"]))
     elif out.status == "skipped":
         typer.echo(f"premarket {session_date}: skipped ({out.detail.get('reason', 'no reason given')})")
     else:
-        typer.echo(f"premarket {session_date}: failed: {out.error or 'unknown error'}", err=True)
+        typer.echo(
+            f"premarket {session_date}: failed: {_masked_line(out.error or 'unknown error')}", err=True
+        )
         raise typer.Exit(1)
 
 
@@ -374,12 +377,18 @@ def _fail(message: str, code: int = 1) -> NoReturn:
     raise typer.Exit(code)
 
 
-def _one_line(exc: BaseException) -> str:
-    """An exception as one masked line: its type and message, no traceback, no secrets."""
+def _masked_line(text: str) -> str:
+    """Any text as one masked line: secrets redacted, whitespace collapsed, length capped."""
     from trader.logging_setup import redact_text
 
-    text = " ".join(redact_text(f"{type(exc).__name__}: {exc}").split())
+    text = " ".join(redact_text(text).split())
     return text if len(text) <= MAX_LINE else text[: MAX_LINE - 1] + "…"
+
+
+def _one_line(exc: BaseException) -> str:
+    """An exception as one masked line: its type and message, no traceback, no secrets."""
+    message = str(exc).strip()
+    return _masked_line(f"{type(exc).__name__}: {message}" if message else type(exc).__name__)
 
 
 def _detail(detail: Mapping[str, Any]) -> str:
@@ -389,6 +398,17 @@ def _detail(detail: Mapping[str, Any]) -> str:
 
     text = redact_text(json.dumps(dict(detail), default=str))
     return text if len(text) <= MAX_LINE else text[: MAX_LINE - 1] + "…"
+
+
+def _strict_settings(core: "Core", name: str) -> "RuntimeSettings":
+    """The stored settings for a job that acts on them (nightly, premarket): an unusable row is one line
+    and exit 1, never a traceback and never the defaults."""
+    try:
+        return core.settings.load()
+    except Exception as exc:
+        from trader import runtime
+
+        _fail(f"{name}: failed: {runtime.settings_problem_text(exc)}; fix the row on the Settings page")
 
 
 def _core(name: str) -> "Core":
@@ -435,9 +455,11 @@ def _report(name: str, day: date, out: "JobOutcome") -> None:
     if out.status == "succeeded":
         typer.echo(f"{name} {day}: succeeded {_detail(out.detail)}")
     elif out.status == "skipped":
-        typer.echo(f"{name} {day}: skipped ({out.detail.get('reason', 'no reason given')})")
+        typer.echo(
+            f"{name} {day}: skipped ({_masked_line(str(out.detail.get('reason', 'no reason given')))})"
+        )
     else:
-        _fail(f"{name} {day}: failed: {out.error or 'unknown error'}")
+        _fail(f"{name} {day}: failed: {_masked_line(out.error or 'unknown error')}")
 
 
 DATE_OPTION = typer.Option(None, "--date", help="Session YYYY-MM-DD (default: today in ET)")

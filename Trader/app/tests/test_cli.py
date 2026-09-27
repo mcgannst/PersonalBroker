@@ -136,6 +136,39 @@ def test_premarket_failure_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 1 and "failed: RuntimeError: no universe" in result.output
 
 
+def test_premarket_failure_is_one_masked_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fix round 1: the job error goes through redact_text and is collapsed to one line."""
+    secret = "QTSECRETVALUE0123456789"
+    error = f"QuestradeApiError: HTTP 401\nGET /v1/markets?access_token={secret} refused"
+    _premarket(monkeypatch, PRE_OPEN, JobOutcome("failed", error=error))
+    result = CliRunner().invoke(app, ["premarket"])
+    assert result.exit_code == 1 and secret not in result.output
+    assert result.output.count("\n") == 1 and "failed: QuestradeApiError: HTTP 401 GET" in result.output
+
+
+def test_premarket_with_an_invalid_settings_row_is_one_line_and_exit_1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pydantic import ValidationError
+
+    calls = _premarket(monkeypatch, PRE_OPEN)
+    import trader.bootstrap
+
+    def invalid() -> RuntimeSettings:
+        return RuntimeSettings.model_validate({"approval_mode": "sometimes"})
+
+    core = trader.bootstrap.build_core()
+    core.settings.load = invalid
+    with pytest.raises(ValidationError):
+        invalid()
+    result = CliRunner().invoke(app, ["premarket"])
+    assert result.exit_code == 1 and isinstance(result.exception, SystemExit)
+    assert result.output == (
+        "premarket: failed: invalid stored settings (approval_mode); fix the row on the Settings page\n"
+    )
+    assert calls == []
+
+
 # --- P3-T12: the cron commands, telegram-test, logging first ---------------------------------------------
 
 SESSION = date(2026, 10, 6)  # Tue

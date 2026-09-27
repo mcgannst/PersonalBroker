@@ -576,11 +576,14 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
   20 9 * * 1-5   trader preopen
   36 9 * * 1-5   trader event orb_open
   30 11 * * 1-5  trader checkin --at 11:30
+  32 12 * * 1-5  trader event --due
   55 12 * * 1-5  trader event flatten
   30 13 * * 1-5  trader checkin --at 13:30
+  32 15 * * 1-5  trader event --due
   55 15 * * 1-5  trader event flatten
   15 16 * * 1-5  trader postclose
   ```
+  The two `event --due` lines (added in fix round 1, documented additions to SPEC §9 like the 12:55 line) back up `overlay_decision` (close − 30 min: 12:30 on early-close days, 15:30 otherwise); `--due` fires only events that are due and not yet settled, so on a normal day the 12:32 run finds nothing new.
 - Updates the master plan §7.1 rows "Notifier" and "Event firing" to the refined shapes (contract refinements 1 and 2 above) and adds a row "Telegram callbacks" (`CallbackSigner`/`telegram_callbacks`, used by P4's web app only to read).
 
 **Behaviour and decisions:**
@@ -609,7 +612,7 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 - [x] 2. `run_worker(once=True)` with a test `Core` (testcontainers DB, `FakeQuestrade`, `FakeTelegramApi` injected through monkeypatched builders) completes one step, writes a heartbeat and returns 0.
 - [x] 3. CLI smoke tests (Typer `CliRunner`, builders monkeypatched to fakes): `preopen`, `checkin --at 11:30`, `event orb_open`, `event --due`, `postclose` each run on a session date and print their result; on a holiday they print "not a trading session" and exit 0; `event` with a `missed` result exits 1 with one line.
 - [x] 4. `premarket` success sends the brief once, a second run sends nothing; `token-refresh` failure writes the `questrade.token` error event.
-- [x] 5. `tests/test_crontab.py`: the file's first non-comment line is `CRON_TZ=America/New_York`; every other line has five valid cron fields and a command; the set of (schedule, command) pairs equals the table above (which matches SPEC §9 plus the documented 12:55 line); every command's first word after `trader` is a registered Typer command (checked against `cli.app`).
+- [x] 5. `tests/test_crontab.py`: the file's first non-comment line is `CRON_TZ=America/New_York`; every other line has five valid cron fields and a command; the set of (schedule, command) pairs equals the table above (which matches SPEC §9 plus the documented 12:55, 12:32 and 15:32 lines); an `event --due` line falls between `overlay_decision` and the close on normal and early-close days; every command's first word after `trader` is a registered Typer command (checked against `cli.app`).
 - [x] 6. The crontab's times, read in ET, are the SPEC §9 times on a date in EDT (2026-10-06) and in EST (2026-12-01): 09:36 stays 09:36 ET on both (a check that the file has no UTC conversion baked in).
 - [x] 7. The master plan §7.1 rows are updated as described.
 - [x] 8. Gate and commit `P3-T12: ...`.
@@ -627,6 +630,15 @@ Record each result in the activity log. Do not run a long-polling worker against
 - `TELEGRAM_LIMIT` is defined once in `notify/messages.py` (re-exported by `notify/notifier.py`).
 - `tests/conftest.py` gains an autouse fixture that makes `trader.logging_setup.configure_logging` a no-op in tests: the CLI and the worker now call it through the module attribute, and a real call would leave a root handler on a closed CliRunner stream for every later test (and break `tests/test_logging_setup.py`, which imports the function by name and is unaffected).
 - LIVE (Sunday 2026-09-27): `telegram-test` → `sent message 38`; `--buttons` → `sent message 39`; `python -m trader.worker --once` → exit 0, heartbeat `worker stopped` at 18:11:42Z, relay cursors created at the current maximum ids; `preopen`, `checkin --at 11:30`, `event --due`, `event flatten`, `postclose` → "not a trading session", exit 0; `event --due --force` refused (exit 2). Step 4's pre-open message on a trading day is still to be seen (first weekday run).
+
+**Fix round 1 (P3-T12 builder attempt 2, gauntlet findings):**
+- **Masked one-line failures:** every job failure line (`_report`, `premarket`, `nightly`) passes the job error through `redact_text` and collapses it to one line, as `event` already did. `token-refresh` catches any exception (an undecryptable chain after a key change, a database error), writes the `questrade.token` error event through `record_token_failure` (which never raises), prints one masked line and exits 1. `nightly` and `premarket` read the settings strictly (they act on them): an invalid row is one line and exit 1.
+- **Settings (should-fix 3):** `GuardedSettings(core)` replaces the startup reads (`run_worker`, `build_decider`, the pre-open, check-in and post-close jobs) and is the `settings` callable of the worker, the bot, the relay, the commands and those jobs: on an invalid or unreadable row it returns the last good settings (the defaults at startup), writes ONE `error` event (source `settings`, relayed; invalid keys only, never values) per failure streak, and the process carries on (heartbeat, bot, relay). The trading paths (plans, `fire_event`, the engine, `ProposalService.decide`) still read the store directly, so no session event fires on settings nobody chose (fail closed). The pre-open message lists a failed `settings` check (`SettingsCheckRenderer`) and its job detail has it with `ok: false`.
+- **Session rollover (should-fix 4):** the shared `LazyQuestrade` now lives on its own inner stack entered first, so at exit the last session's engine stack closes before the client it used. Test: two sessions in one worker: catalysts enter 1, qt enter, catalysts close 1, catalysts enter 2, …, catalysts close 2, qt exit (one client for the process).
+- **Stale run id (should-fix 5), decision: a new live run requires a worker restart.** `TelegramBot`, `NotificationRelay`, `CommandDeps` and the bot's `ProposalService` take a fixed `run_id` in their constructors (T6/T7/T8/P2 contracts); following a new run in place would change four contracts owned by other tasks, while a new live run is a rare, deliberate act (SPEC §15.1). So `LiveRunWatch` re-reads the active live run (without creating one) at each session change (`engine_for`, `end_session`, forced) and at most every 60 s from `fired` (read by every step in and after the session) and `fire` (throttled); `WorkerDeps.relay` stays the relay's bound `pump` (T13 relies on it). On a change it writes one `warning` event, fires and ends nothing more (an idle engine, `fire` → `skipped`, `end_session` → `skipped`, so no `job_runs` row is spent for the new run), sets `stop`, and `run_worker` returns `EXIT_LIVE_RUN_CHANGED = 4`; supervisord (P4-T10: `autorestart=true`, exit 4 not in `exitcodes`) restarts it on the new run. Until then (≤ 60 s mid-session) a tap decides on the old run's proposals only.
+- **Overlay backup (should-fix 6):** crontab lines `32 12 * * 1-5 trader event --due` and `32 15 * * 1-5 trader event --due` (see the listing above and SPEC §9).
+- **Nits:** `views.heartbeat_age` treats `stopping` like `stopped` (the shared `STOPPED_PHASES`); `WORKER_PROCESS` and `STOPPED_PHASES` are defined once in `trader/notify/views.py` (runtime re-exports, preopen imports); one `exit_code(SystemExit)` in runtime, used by `worker.main`; one `_enter_telegram_api` for `open_telegram` and `telegram_test`; one `finviz_cache_dir()` (`$TRADER_FINVIZ_CACHE_DIR`, else `~/.cache/trader/finviz`) for the engines, `nightly` and `premarket`; without Telegram the post-close job uses `NoTelegramIssuer` (no journal nonce) and the worker writes one `warning` event "Telegram not configured"; `worker.main` turns a setup exception into one structlog line (`worker.setup_failed`, masked) and exit 1.
+- Public functions and signatures unchanged; additions only: `GuardedSettings`, `settings_problem_text`, `settings_check`, `SettingsCheckRenderer`, `NoTelegramIssuer`, `LiveRunWatch`, `active_live_run_id`, `exit_code`, `EXIT_LIVE_RUN_CHANGED`, `LIVE_RUN_CHECK_SECONDS`, `FINVIZ_CACHE_ENV`, and the keyword-only `build_decider(..., settings=)` and `SessionEngines(..., watch=)`.
 
 ---
 
@@ -691,3 +703,7 @@ Changes made by the combined Verifier and Spec reviewer, checked against the Pha
 - **Delivery rules:** retry only surely-unsent failures (connect phase, 429, 5xx); `unknown` for possibly delivered ones, never re-sent; `failed` keys may be re-claimed, 3 sends at most (T5).
 - **Nits:** `scheduler.due_events` used in the worker; `stopping` heartbeat on shutdown; heartbeat DB failures logged once per streak; `aclose` errors carry no `__context__`; 5xx text reads `Telegram server error 502: Bad Gateway` (T5, T9).
 - Public contracts unchanged; additions only: `TelegramNotSentError`, `still_holds_lock`, `EXIT_LOCK_LOST` and the notification status `unknown`.
+
+## Fix round 1: P3-T12 (gauntlet findings)
+
+Details in the T12 section ("Fix round 1"). In short: every cron failure line is masked and one line; `token-refresh` records a `questrade.token` event for any failure; startup and message-path settings reads fall back to the defaults with one relayed `error` event (trading paths still fail closed); a new live run makes the worker exit 4 so supervisord restarts it on the new run (P4-T10: exit 4 must restart); the crontab gains `event --due` at 12:32 and 15:32 as the overlay-decision backup (SPEC §9 updated); plus the listed nits.

@@ -407,18 +407,43 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - The engine is built fresh per run (not per day); kill switches, the ledger and equity snapshots carry across days as in live.
 
 **Acceptance tests (real DB for create/cancel/abandon/snapshot; the loop with `FakeReplayEngine` and `FakeReplayMarket`):**
-- [ ] 1. `create_replay` writes a `queued` replay with the params shape, `approval_mode = "auto"` in its settings, the overrides applied, the live strategy rows pinned, one `replay.start` audit row; the global `approval_mode` setting and the live strategy revisions are unchanged.
-- [ ] 2. An override of `orb_sip.top_n` pins a `replay`-scoped row through `config_writer` with `created_by = "replay:<id>"`; the live `current("orb_sip")` still returns the old revision.
-- [ ] 3. Validation: from after to, a future `to`, today before 16:15 ET, an empty range (a holiday weekend), more than `replay.max_sessions`, an unknown override key, an invalid override value, an unknown strategy, invalid plug-in params and no enabled entry strategy each give `ReplayInvalid` naming the field; nothing is written.
-- [ ] 4. **Loop order** (fake engine): for a normal day with events at 09:35:05, 11:30:00, 15:30:00, 15:50:00 and an entry order working from 09:35:05 to 10:02, the recorded calls are: bars at each minute boundary 09:36–10:02 only, `run_event` at each event time after the bars of the same instant, `tick` at every visited time, `end_of_session` at the close; on 2026-11-27 (13:00 close) the events follow the early close.
-- [ ] 5. **Determinism** (fakes): two runs of the same request produce identical recorded call sequences (each call recorded with the `ReplayClock` time, which equals the visited time) and identical progress JSON.
-- [ ] 6. Progress is written after every session (`sessions_done` 1..n, `current_date`); a cancel requested during day 2 (fake engine flips it) ends with `cancelled` after day 2, `finished_at` set.
-- [ ] 7. A fake engine raising on day 2 → `failed`, `error` is one masked line, one `error` event with the replay's `run_id`, the lock is released (a new run can start).
-- [ ] 8. `SnapshotSettings.set` raises; `PinnedRegistry.update` and `ensure_defaults` raise; a plug-in whose params fail to build is reported with the replay's `run_id` (no `run_id`-less event).
-- [ ] 9. `ReplayBusy`: while one run holds the lock (a second connection), `create_replay` and `run_replay` of another refuse; `reconcile_abandoned` settles a `running` row whose lock is free and a `queued` row older than 2 minutes as `failed` (`abandoned`), and leaves a locked one alone.
-- [ ] 10. Data mode: created at 10:00 ET on a session day → `offline`; at 17:00 ET, or on a Saturday → `full`; `offline=True` → `offline`.
-- [ ] 11. Forced close: a position still open at `close − 1 minute` (fake market with no bars after 15:40) has its working orders cancelled and a market exit with reason `replay_forced_close` submitted, which the synthetic bar at the last close fills at the close; it is counted in `forced_closes`, and no position is open at the start of the next day.
-- [ ] 12. Gate and commit `P5-T6: ...`.
+- [x] 1. `create_replay` writes a `queued` replay with the params shape, `approval_mode = "auto"` in its settings, the overrides applied, the live strategy rows pinned, one `replay.start` audit row; the global `approval_mode` setting and the live strategy revisions are unchanged.
+- [x] 2. An override of `orb_sip.top_n` pins a `replay`-scoped row through `config_writer` with `created_by = "replay:<id>"`; the live `current("orb_sip")` still returns the old revision.
+- [x] 3. Validation: from after to, a future `to`, today before 16:15 ET, an empty range (a holiday weekend), more than `replay.max_sessions`, an unknown override key, an invalid override value, an unknown strategy, invalid plug-in params and no enabled entry strategy each give `ReplayInvalid` naming the field; nothing is written.
+- [x] 4. **Loop order** (fake engine): for a normal day with events at 09:35:05, 11:30:00, 15:30:00, 15:50:00 and an entry order working from 09:35:05 to 10:02, the recorded calls are: bars at each minute boundary 09:36–10:02 only, `run_event` at each event time after the bars of the same instant, `tick` at every visited time, `end_of_session` at the close; on 2026-11-27 (13:00 close) the events follow the early close.
+- [x] 5. **Determinism** (fakes): two runs of the same request produce identical recorded call sequences (each call recorded with the `ReplayClock` time, which equals the visited time) and identical progress JSON.
+- [x] 6. Progress is written after every session (`sessions_done` 1..n, `current_date`); a cancel requested during day 2 (fake engine flips it) ends with `cancelled` after day 2, `finished_at` set.
+- [x] 7. A fake engine raising on day 2 → `failed`, `error` is one masked line, one `error` event with the replay's `run_id`, the lock is released (a new run can start).
+- [x] 8. `SnapshotSettings.set` raises; `PinnedRegistry.update` and `ensure_defaults` raise; a plug-in whose params fail to build is reported with the replay's `run_id` (no `run_id`-less event).
+- [x] 9. `ReplayBusy`: while one run holds the lock (a second connection), `create_replay` and `run_replay` of another refuse; `reconcile_abandoned` settles a `running` row whose lock is free and a `queued` row older than 2 minutes as `failed` (`abandoned`), and leaves a locked one alone.
+- [x] 10. Data mode: created at 10:00 ET on a session day → `offline`; at 17:00 ET, or on a Saturday → `full`; `offline=True` → `offline`.
+- [x] 11. Forced close: a position still open at `close − 1 minute` (fake market with no bars after 15:40) has its working orders cancelled and a market exit with reason `replay_forced_close` submitted, which the synthetic bar at the last close fills at the close; it is counted in `forced_closes`, and no position is open at the start of the next day.
+- [x] 12. Gate and commit `P5-T6: ...`.
+
+**Build notes (P5-T6 builder, 2026-09-27; trunk 8ddff8e):**
+- `open_replay_deps` builds the Questrade auth as `QuestradeAuth(core.factory, core.crypto, core.clock)`, the
+  same object `runtime.questrade_auth` returns, instead of importing `trader.runtime`, which imports the Telegram
+  adapters (replay isolation). The client gets `RealClock()` and `market_rps = replay.questrade_rps`; the wall
+  clock of the deps is `core.clock`.
+- `ReplayDeps` keeps the six T1 fields; the day plans are built from the installed plug-ins (`load_all()`) with
+  the pinned params, because the `ReplayEngine` protocol exposes no registry. Extra real names: `REPLAY_LOCK_KEY`
+  (the signed 64-bit key of `REPLAY_LOCK`, blake2b like the worker's) and
+  `trader.replay.setup.pinned_views(factory, run)` (the pinned `StrategyConfigView`s; the pinned params and
+  enabled flag win over the row's).
+- Busy: `create_replay` refuses when `REPLAY_LOCK` is held (after `reconcile_abandoned`) or any replay row is
+  `queued`/`running` (checked under a transaction-level `trader.replay.create` lock). A strategy override writes its
+  `replay` row through `config_writer` on its own connection before the run row commits (the T4 signature has no
+  session), so "one transaction" holds for the run row, its params and the audit row; an orphan `replay` row
+  after a failure is invisible to the live run. An `enabled`-only override that differs from the live flag also
+  gets its own `replay` row, so the pinned row always matches what runs.
+- `run_replay` of a run that is no longer `queued` (for example cancelled before it started) returns it unchanged.
+  Cancel is checked before each session, so a cancel during the last session lets it complete.
+- Forced close: the check runs at the first visited time at or after `close - 1 minute` (visited whenever a position
+  is open); the synthetic bar's price is `market.last_close(sid, close)`, else the position's `avg_price`.
+- The failure event (source `replay`, level `error`) is stamped by the replay clock once it exists.
+- Tests use a stand-in monotonic clock only while P5-T3's `ReplayClock` is still a stub (autouse fixture), and
+  check `registry.current` after an override only once P5-T4's `create_replay_config` is on trunk (the live row
+  is also checked by query, so the test is meaningful before T4).
 
 ---
 

@@ -345,6 +345,14 @@ class LazyQuestrade:
     def opened(self) -> bool:
         return self._client is not None
 
+    def rate_limit_remaining(self) -> dict[str, int] | None:
+        """The open client's remaining Questrade requests per category (`market_data`, `account`), as its
+        last responses reported them; None until the client is open (P4-T18: the worker's heartbeat)."""
+        if self._client is None:
+            return None
+        remaining = getattr(self._client, "rate_limit_remaining", None) or {}
+        return {str(category): int(n) for category, n in dict(remaining).items()}
+
     async def client(self) -> QuoteClient:
         async with self._lock:
             if self._client is None:
@@ -709,6 +717,11 @@ async def run_worker(once: bool = False) -> int:
                 return JobOutcome("skipped", {"reason": "live run changed; restarting"})
             return await run_job_async(factory, clock, SESSION_END_JOB, session_date, body)
 
+        def heartbeat_extra() -> dict[str, Any]:
+            # The Questrade rate-limit numbers the System page shows (P4-T18), once the client is open.
+            rate_limit = client.rate_limit_remaining()
+            return {"rate_limit": rate_limit} if rate_limit is not None else {}
+
         worker = Worker(
             WorkerDeps(
                 factory=factory,
@@ -724,6 +737,7 @@ async def run_worker(once: bool = False) -> int:
                 end_session=end_session,
                 process=WORKER_PROCESS,
                 host=socket.gethostname(),
+                heartbeat_extra=heartbeat_extra,
             )
         )
         try:

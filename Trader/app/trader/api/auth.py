@@ -45,7 +45,9 @@ log = structlog.get_logger("api.auth")
 COOKIE_NAME = "trader_session"
 CSRF_HEADER = "X-CSRF-Token"
 MIN_PASSWORD_CHARS = 8  # Stephen, 2026-09-27: 7 is rejected, 8 accepted
-USERNAME_PATTERN = r"^[a-z][a-z0-9_.-]{2,49}$"
+# At most 46 characters, so the audit actor `web:<username>` fits `audit_log.actor` and
+# `manual_watchlists.uploaded_by` (varchar(50), P4-T18).
+USERNAME_PATTERN = r"^[a-z][a-z0-9_.-]{2,45}$"
 
 AdminResult = Literal["created", "exists", "not_configured", "rejected"]
 
@@ -714,7 +716,7 @@ def ensure_admin(
             return "exists"
     if not re.fullmatch(USERNAME_PATTERN, username):
         return _reject(
-            factory, clock, "ADMIN_USERNAME must be 3-50 lowercase letters, digits, '_', '.' or '-'"
+            factory, clock, "ADMIN_USERNAME must be 3-46 lowercase letters, digits, '_', '.' or '-'"
         )
     pw = password.get_secret_value()
     if len(pw) < MIN_PASSWORD_CHARS:
@@ -743,3 +745,53 @@ def ensure_admin(
         return "exists"
     log.info("auth.admin_created", username=username)
     return "created"
+
+
+# --- a password reset from the command line -----------------------------------------------------------------
+
+
+class ResetRefused(ValueError):
+    """`reset_password` changed nothing. The message is safe to print (never a password)."""
+
+
+def reset_password(
+    factory: sessionmaker[Session],
+    clock: Clock,
+    new_password: str,
+    *,
+    username: str | None = None,
+    who: str = "cli",
+) -> tuple[str, int]:
+    """Set a user's password (`trader user-password`, P4-T18): the only user, or `username` when there are
+    several. Signs out EVERY session of that user (a web password change keeps the current one, but here
+    there is none), clears the login lockout, and audits `auth.password_reset` (never the password).
+    Returns (username, sessions signed out). Raises ResetRefused when nothing was changed."""
+    if len(new_password) < MIN_PASSWORD_CHARS:
+        raise ResetRefused(f"Use at least {MIN_PASSWORD_CHARS} characters")
+    now = clock.now()
+    with session_scope(factory) as s:
+        query = select(m.User).order_by(m.User.id).with_for_update()
+        if username is not None:
+            query = query.where(m.User.username == username.strip().lower())
+        rows = list(s.execute(query).scalars())
+        if not rows:
+            raise ResetRefused(
+                "no user yet: run trader create-admin" if username is None else "no user with that name"
+            )
+        if len(rows) > 1:
+            raise ResetRefused("more than one user: pass --username")
+        row = rows[0]
+        row.password_hash = hash_password(new_password)
+        row.password_changed_at = row.updated_at = now
+        row.failed_logins = 0
+        row.locked_until = None
+        revoked = s.execute(
+            update(m.WebSession)
+            .where(m.WebSession.user_id == row.id, m.WebSession.revoked_at.is_(None))
+            .values(revoked_at=now)
+            .returning(m.WebSession.id)
+        ).all()
+        name = row.username
+        _audit(s, now, who, "auth.password_reset", {"username": name, "sessions_revoked": len(revoked)})
+    log.info("auth.password_reset", username=name, sessions_revoked=len(revoked))
+    return name, len(revoked)

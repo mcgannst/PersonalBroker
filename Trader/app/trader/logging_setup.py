@@ -21,7 +21,7 @@ from structlog.typing import EventDict, Processor, WrappedLogger
 # query string, and the Telegram bot token in every Bot API URL path (python-telegram-bot logs through
 # "telegram"), so these loggers must never log below WARNING. The Anthropic SDK logs its request
 # options (headers included) at DEBUG.
-HTTP_LOGGERS = ("httpx", "httpcore", "telegram", "anthropic")
+HTTP_LOGGERS = ("httpx", "httpx2", "httpcore", "telegram", "anthropic")
 
 # An echo=False SQLAlchemy engine logs every statement when its logger's effective level is INFO,
 # which a root logger at INFO would give it. Its warnings still come through.

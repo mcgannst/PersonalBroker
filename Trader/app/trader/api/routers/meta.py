@@ -1,16 +1,19 @@
 """GET /api/health -> HealthOut and GET /api/meta -> MetaOut, both public (no session).
 
-- **Health** (SPEC §11, §15: the container health check): the database (`SELECT 1` under a 2 s statement
-  timeout), the Questrade token chain (its DB row only: no token value is read or decrypted) and the
-  worker's heartbeat. `down` (HTTP 503) when the database check fails; `degraded` (200) when the token or the
-  worker is not OK; else `ok`. The body never carries error text.
+- **Health** (SPEC §11, §15: the container health check): the database (`SELECT 1` on a fresh connection
+  with a 2 s connect timeout and a 2 s statement timeout), the Questrade token chain (its DB row only: no
+  token value is read or decrypted) and the worker's heartbeat. `down` (HTTP 503) when the database check
+  fails; `degraded` (200) when the token or the worker is not OK; else `ok`. The body never carries error
+  text.
 - **Meta:** the server's time, version and display zone, with the zone's current UTC offset from this
   process's zoneinfo, so the web can detect a browser whose time-zone data disagrees (Key decisions).
 
 Registered under `/api` by `trader.api.routers.ROUTERS`.
 """
 
+import threading
 import time
+import weakref
 import zoneinfo
 from pathlib import Path
 from typing import Literal
@@ -18,12 +21,14 @@ from typing import Literal
 import structlog
 import tzdata
 from fastapi import APIRouter, Response
-from sqlalchemy import text
+from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from trader.api import views
 from trader.api.deps import Services
 from trader.api.schemas import HealthOut, MetaOut, WorkerOut
+from trader.db.session import UTC_SESSION
 from trader.notify.views import db_token_health
 from trader.settings_store import RuntimeSettings
 
@@ -32,14 +37,42 @@ log = structlog.get_logger("api.meta")
 router = APIRouter(tags=["meta"])
 
 DB_TIMEOUT_MS = 2000
+DB_CONNECT_TIMEOUT_S = 2  # libpq connect_timeout of the health check's own connection (P4-T18)
+
+_health_engines: "weakref.WeakKeyDictionary[Engine, Engine]" = weakref.WeakKeyDictionary()
+_health_lock = threading.Lock()
+
+
+def health_engine(bind: Engine) -> Engine:
+    """The health check's engine for `bind`'s database: a fresh connection per check (NullPool) with a 2 s
+    connect timeout, so an unreachable or hung database fails the check at once instead of holding the
+    container health check (and a pooled connection to a dead host can't hang it either)."""
+    with _health_lock:
+        engine = _health_engines.get(bind)
+        if engine is None:
+            engine = create_engine(
+                bind.url,
+                poolclass=NullPool,
+                connect_args={**UTC_SESSION, "connect_timeout": DB_CONNECT_TIMEOUT_S},
+                hide_parameters=True,
+            )
+            _health_engines[bind] = engine
+        return engine
 
 
 def db_check(factory: sessionmaker[Session]) -> int:
-    """Milliseconds for `SELECT 1` under a 2 s statement timeout; raises when the database is unusable."""
+    """Milliseconds for `SELECT 1` under a 2 s connect and a 2 s statement timeout. Raises when the
+    database is unusable."""
+    bind = factory.kw.get("bind")
     t0 = time.perf_counter()
-    with factory() as s:
-        s.execute(text(f"SET LOCAL statement_timeout = {DB_TIMEOUT_MS}"))
-        s.execute(text("SELECT 1")).scalar_one()
+    if isinstance(bind, Engine):
+        with health_engine(bind).connect() as conn:
+            conn.execute(text(f"SET statement_timeout = {DB_TIMEOUT_MS}"))
+            conn.execute(text("SELECT 1")).scalar_one()
+    else:  # a factory without an engine (tests): its own session
+        with factory() as s:
+            s.execute(text(f"SET LOCAL statement_timeout = {DB_TIMEOUT_MS}"))
+            s.execute(text("SELECT 1")).scalar_one()
     return round((time.perf_counter() - t0) * 1000)
 
 

@@ -7,6 +7,7 @@ import { useApi } from "../../api/client";
 import { qk } from "../../api/queryKeys";
 import type { JobRunIn, ManualJob } from "../../api/types";
 import { Button, Card, errorMessage } from "../../components/ui";
+import { fmtDate } from "../../lib/format";
 import { Confirm } from "../settings/Confirm";
 
 /** `trader token-refresh` takes no options: the server refuses a date or force for it. */
@@ -85,7 +86,14 @@ export function RunJob({ jobs }: { jobs: ManualJob[] }) {
             </Button>
           </div>
         )}
-        {run.isSuccess && <p className="small">{run.data.message}</p>}
+        {run.isSuccess && (
+          <>
+            <p className="small">{run.data.message}</p>
+            <p className="small muted">
+              {run.data.session_date === null ? "Session: no date" : `Session: ${fmtDate(run.data.session_date)}`}
+            </p>
+          </>
+        )}
         {run.isError && (
           <p className="small tone-bad" role="alert">
             {errorMessage(run.error)}

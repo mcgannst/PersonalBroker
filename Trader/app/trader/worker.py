@@ -24,10 +24,11 @@ import argparse
 import asyncio
 import functools
 import hashlib
+import json
 import os
 import signal
 import socket
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Protocol
@@ -91,6 +92,9 @@ class WorkerDeps:
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     process: str = "worker"
     host: str = ""
+    # P4-T18: extra keys merged into the heartbeat `detail` (the Questrade rate-limit numbers the System page
+    # shows). The P3 keys win on a clash; a failing or unserialisable result is skipped (logged per streak).
+    heartbeat_extra: Callable[[], Mapping[str, Any]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +185,7 @@ class Worker:
         self._good_settings: RuntimeSettings | None = None
         self._settings_failing = False
         self._beat_failing = False
+        self._extra_failing = False
         self._started_at: datetime | None = None
         self._hb_phase = "idle"
         self._hb_session: date | None = None
@@ -385,7 +390,11 @@ class Worker:
             "beat_at": now,
             "session_date": self._hb_session,
             "phase": phase,
-            "detail": {"fills_today": self._fills_today, "last_event": self._last_event},
+            "detail": {
+                **self._heartbeat_extra(),
+                "fills_today": self._fills_today,
+                "last_event": self._last_event,
+            },
         }
         stmt = insert(WorkerHeartbeat).values(**values)
         stmt = stmt.on_conflict_do_update(
@@ -403,6 +412,25 @@ class Worker:
         if self._beat_failing:
             self._beat_failing = False
             log.info("worker.heartbeat_recovered", phase=phase)
+
+    def _heartbeat_extra(self) -> dict[str, Any]:
+        """`deps.heartbeat_extra()` as a JSON-safe dict; {} when there is none or it fails (one log line per
+        failure streak, never the heartbeat itself)."""
+        extra_fn = self.deps.heartbeat_extra
+        if extra_fn is None:
+            return {}
+        try:
+            extra = dict(extra_fn())
+            json.dumps(extra)  # the detail column is jsonb: an unserialisable value would lose the beat
+        except Exception as exc:
+            if not self._extra_failing:
+                self._extra_failing = True
+                log.warning("worker.heartbeat_extra_failed", error=_describe(exc))
+            return {}
+        if self._extra_failing:
+            self._extra_failing = False
+            log.info("worker.heartbeat_extra_recovered")
+        return extra
 
     def _check_lock(self, stop: asyncio.Event) -> bool:
         """True while this worker holds the single-instance lock. A dead lock connection is replaced by a

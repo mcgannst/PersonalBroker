@@ -598,7 +598,8 @@ export interface JobRunIn {
 
 export interface JobLaunchOut {
   job: string;
-  session_date: IsoDate;
+  /** null when the run has no date (token-refresh, or the command's own default session). */
+  session_date: IsoDate | null;
   launched: boolean;
   message: string;
 }

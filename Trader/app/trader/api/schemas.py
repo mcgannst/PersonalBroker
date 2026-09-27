@@ -524,8 +524,10 @@ class ResetIn(ApiModel):
 
 
 class HistogramBinOut(ApiModel):
-    lo: Decimal
-    hi: Decimal
+    # The open-ended first and last bins use the Decimal sentinels -Infinity / Infinity (JSON strings
+    # "-Infinity" / "Infinity"; P4-T7 wire format), so they validate and round-trip (P4-T18).
+    lo: Decimal = Field(allow_inf_nan=True)
+    hi: Decimal = Field(allow_inf_nan=True)
     count: int
 
 

@@ -13,9 +13,9 @@ bin (below -3 R), sixteen bins of 0.5 R covering [-3, 5), and an open-ended last
 closed bin is [lo, hi). `HistogramBinOut.lo`/`hi` are Decimals, so the open ends are the Decimal sentinels
 `-Infinity` (first bin's `lo`) and `Infinity` (last bin's `hi`), serialised as the JSON strings
 `"-Infinity"` and `"Infinity"`. The web (`pages/performance/RHistogram.tsx`, `histogramLabel`) parses a
-non-finite bound as open and labels those bins `< -3.0` and `≥ 5.0`. Pydantic refuses non-finite Decimals
-on validation, so these bins are built with `model_construct` and the metrics route returns its JSON
-itself (a returned `Response` is not re-validated); the documented response model stays `MetricsOut`.
+non-finite bound as open and labels those bins `< -3.0` and `≥ 5.0`. `HistogramBinOut.lo`/`hi` allow the
+two sentinels (`allow_inf_nan`, P4-T18), so the metrics route returns a normal `MetricsOut` and a client can
+validate it again from JSON.
 """
 
 from collections.abc import AsyncGenerator, Generator, Mapping, Sequence
@@ -25,7 +25,7 @@ from typing import Annotated, Any
 
 import anyio
 import anyio.to_thread
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import Date, bindparam, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -148,11 +148,11 @@ def _ranged(sql: str) -> Any:
 def histogram_bins(counts: Mapping[int, int]) -> list[HistogramBinOut]:
     """All 18 bins from `width_bucket` counts (bucket 0 = below -3 R, 1..16 the 0.5 R bins, 17 = 5 R and
     above). The open ends are the Decimal sentinels `-Infinity`/`Infinity` (see the module docstring)."""
-    bins = [HistogramBinOut.model_construct(lo=OPEN_LOW, hi=R_LOW, count=counts.get(0, 0))]
+    bins = [HistogramBinOut(lo=OPEN_LOW, hi=R_LOW, count=counts.get(0, 0))]
     for b in range(1, R_BINS + 1):
         lo = R_LOW + R_WIDTH * (b - 1)
         bins.append(HistogramBinOut(lo=lo, hi=lo + R_WIDTH, count=counts.get(b, 0)))
-    bins.append(HistogramBinOut.model_construct(lo=R_HIGH, hi=OPEN_HIGH, count=counts.get(R_BINS + 1, 0)))
+    bins.append(HistogramBinOut(lo=R_HIGH, hi=OPEN_HIGH, count=counts.get(R_BINS + 1, 0)))
     return bins
 
 
@@ -186,14 +186,12 @@ def thin[T](items: Sequence[T], limit: int) -> list[T]:
     return [items[(i * (n - 1) + (limit - 1) // 2) // (limit - 1)] for i in range(limit)]
 
 
-@router.get("/metrics", response_model=MetricsOut)
+@router.get("/metrics")
 def metrics(
     _user: CurrentUser, services: Services, run_id: RunId, date_from: DateFrom = None, date_to: DateTo = None
-) -> Response:
+) -> MetricsOut:
     check_range(date_from, date_to)
-    out = compute_metrics(services.core.factory, run_id, date_from, date_to)
-    # Returned as JSON directly: the open-ended histogram bins would fail response re-validation.
-    return Response(content=out.model_dump_json(), media_type="application/json")
+    return compute_metrics(services.core.factory, run_id, date_from, date_to)
 
 
 @router.get("/equity")

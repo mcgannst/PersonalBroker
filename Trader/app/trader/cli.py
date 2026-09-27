@@ -604,3 +604,54 @@ def telegram_test(
     except Exception as exc:  # the type only: a client error's text can carry the token in a URL
         _fail(f"telegram-test failed: {type(exc).__name__}")
     typer.echo(f"sent message {message_id}")
+
+
+# --- P4-T18: the web login's user ---------------------------------------------------------------------------
+
+ADMIN_RESULTS = {
+    "created": "created",
+    "exists": "exists",
+    "not_configured": "not configured",
+    "rejected": "rejected",
+}
+
+
+@app.command("create-admin")
+def create_admin() -> None:
+    """Create the web user from ADMIN_USERNAME and ADMIN_PASSWORD_INITIAL when there is no user yet (the
+    container entrypoint runs it on every start). Prints created, exists, not configured or rejected (exit 1,
+    the reason is logged); never prints the password."""
+    _setup_logging()
+    from trader.api.auth import ensure_admin
+
+    core = _core("create-admin")
+    try:
+        result = ensure_admin(
+            core.factory, core.clock, core.env.admin_username, core.env.admin_password_initial
+        )
+    except Exception as exc:
+        _fail(f"create-admin failed: {_one_line(exc)}")
+    typer.echo(ADMIN_RESULTS[result])
+    if result == "rejected":
+        raise typer.Exit(1)
+
+
+@app.command("user-password")
+def user_password(
+    username: str | None = typer.Option(None, "--username", help="Only needed when there are several users."),
+) -> None:
+    """Reset the web user's password from a hidden prompt (entered twice). Signs out every session."""
+    _setup_logging()
+    from trader.api.auth import MIN_PASSWORD_CHARS, ResetRefused, reset_password
+
+    core = _core("user-password")
+    password: str = typer.prompt(
+        f"New password (at least {MIN_PASSWORD_CHARS} characters)", hide_input=True, confirmation_prompt=True
+    )
+    try:
+        name, revoked = reset_password(core.factory, core.clock, password, username=username)
+    except ResetRefused as exc:
+        _fail(f"user-password: {exc}. Nothing was changed.")
+    except Exception as exc:
+        _fail(f"user-password failed: {_one_line(exc)}")
+    typer.echo(f"password changed for {name}; {revoked} sessions signed out")

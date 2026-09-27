@@ -43,6 +43,25 @@ describe("RunJob (acceptance test 4)", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("already running");
   });
 
+  it("shows the launched session, or 'no date' when the launch has none (P4-T18)", async () => {
+    const api = new FakeApiClient({
+      runJob: { job: "token-refresh", session_date: null, launched: true, message: "token-refresh launched" },
+    });
+    renderWithProviders(<RunJob jobs={fx.systemOut.manual_jobs} />, { api });
+    await userEvent.selectOptions(screen.getByLabelText("Job to run"), "token-refresh");
+    await userEvent.click(screen.getByRole("button", { name: "Run" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(await screen.findByText("token-refresh launched")).toBeInTheDocument();
+    expect(screen.getByText("Session: no date")).toBeInTheDocument();
+  });
+
+  it("shows the session date of a dated launch", async () => {
+    renderWithProviders(<RunJob jobs={fx.systemOut.manual_jobs} />);
+    await userEvent.click(screen.getByRole("button", { name: "Run" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(await screen.findByText("Session: 2026-10-07")).toBeInTheDocument();
+  });
+
   it("token-refresh takes no date or force", async () => {
     const { api } = renderWithProviders(<RunJob jobs={fx.systemOut.manual_jobs} />);
     await userEvent.click(screen.getByLabelText("Force"));

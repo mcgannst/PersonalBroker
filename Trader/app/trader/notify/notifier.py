@@ -19,6 +19,10 @@ Retry and delivery rules (fix round 1):
 
 Telegram never blocks trading: `send` catches every exception (API, network, database) and logs it.
 `asyncio.CancelledError` still propagates, so a worker can shut down mid-send.
+
+The database work of a send (the claim and the two record steps) runs in a worker thread
+(`asyncio.to_thread`, P4-T18), so the API's Telegram test route never runs synchronous queries on its
+event loop; the order of the steps is unchanged.
 """
 
 import asyncio
@@ -221,7 +225,7 @@ class TelegramNotifier:
 
     async def _send(self, msg: OutboundMessage) -> None:
         try:
-            claim = self._claim(msg)
+            claim = await asyncio.to_thread(self._claim, msg)
         except Exception as exc:
             log.error(
                 "notify.db_failed",
@@ -243,9 +247,9 @@ class TelegramNotifier:
             async with self._lock:
                 message_ids, calls = await self._deliver(msg)
         except _SendFailed as failed:
-            self._record_failure(msg, row_id, attempt, failed)
+            await asyncio.to_thread(self._record_failure, msg, row_id, attempt, failed)
             return
-        self._record_success(row_id, message_ids, calls)
+        await asyncio.to_thread(self._record_success, row_id, message_ids, calls)
 
     def _claim(self, msg: OutboundMessage) -> tuple[int, int] | None:
         """Insert the `sending` row, or take back a `failed` row of the same key that nothing of was

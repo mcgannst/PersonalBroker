@@ -32,7 +32,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 42bd500 |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | fixing | 2 | review ✅ (2 must-fix fixed 47aade8); should-fix round running | 47aade8 |
-| P2-T0 | Write the Phase 2 plan | P1-REVIEW | todo | 0 | | |
+| P2-T0 | Write the Phase 2 plan | P1-REVIEW | building | 1 |  |  |
 
 ## Escalations
 
@@ -630,3 +630,12 @@ None open.
 - Commits: 47aade8
 - Gate: check.sh passed (327 tests, 21 s)
 - Findings: should-fix: forced re-run with FinViz down downgrades the day's FinViz universe to an older fallback. Access token read from the DB per Questrade request. FinViz uses stdlib logging, the rest structlog, and structlog is never configured. Nits logged in the report. SPEC 4.2, 9, 10 and 13 synced.
+
+### 2026-09-27T05:57:28Z · P1-REVIEW · Builder · attempt 2 · started
+- Result: fixing should-fix 1 (keep finviz universe on forced re-run) and 2 (cache access token)
+
+### 2026-09-27T06:02:40Z · P1-REVIEW · Builder · attempt 2 · finished
+- Result: done. Should-fix 1 (forced re-run with FinViz failing keeps the day's finviz universe, logs error, raises, writes nothing) and 2 (QuestradeClient caches AccessToken under asyncio.Lock, reuse until expires_at - 120 s, 401 replaces cache) fixed with regression tests. Plan notes updated (P1-T7, P1-T9) and master plan 7.3 line added for should-fix 3 and 4.
+- Commits: ad82bfa
+- Gate: check.sh passed (333 tests, 6 new)
+- Notes: 401 refresh is skipped when another request already replaced the rejected token, so concurrent 401s force one refresh

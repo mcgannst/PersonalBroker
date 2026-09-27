@@ -72,13 +72,19 @@ class QuestradeAuth:
 
     # --- public -------------------------------------------------------------------
     def seed(self, refresh_token: str) -> None:
+        """Start a new chain from a manual token. A blank token is rejected, never stored, so it
+        can't overwrite (and so destroy) a live chain."""
+        token = refresh_token.strip()
+        if not token:
+            raise QuestradeAuthError("The refresh token is empty. Paste a manual token from Questrade.")
         now = self._clock.now()
         with self._factory() as s:
             row = s.get(ApiCredential, PROVIDER) or ApiCredential(provider=PROVIDER)
-            row.refresh_token_enc = self._crypto.encrypt(refresh_token.strip())
+            row.refresh_token_enc = self._crypto.encrypt(token)
             row.access_token_enc = None
             row.api_server = None
             row.expires_at = None
+            row.last_refresh_at = None
             row.last_error = None
             row.updated_at = now
             s.merge(row)
@@ -100,12 +106,14 @@ class QuestradeAuth:
         The chain's age is what matters here, not the access token's: min_age (1 h) is longer
         than an access token lives (30 min), so requiring a fresh access token would make every
         call exchange. The returned token may therefore be expired; callers that need a usable
-        access token call access().
+        access token call access(). A chain with a recorded error never counts as recently
+        extended, so a dead chain never reports ok.
         """
         with self._factory() as s:
             row = s.get(ApiCredential, PROVIDER)
             if (
                 row is not None
+                and not row.last_error
                 and row.last_refresh_at is not None
                 and self._crypto.decrypt(row.access_token_enc)
                 and row.api_server
@@ -170,24 +178,32 @@ class QuestradeAuth:
                     TOKEN_URL, params={"grant_type": "refresh_token", "refresh_token": refresh}
                 )
             except httpx.HTTPError as exc:
-                raise QuestradeAuthError(f"Could not reach Questrade: {exc}") from exc
+                # The exception text can include the request URL, and the refresh token is in
+                # its query string, so only the exception type is reported.
+                raise self._fail(
+                    s,
+                    row,
+                    now,
+                    f"Could not reach Questrade ({type(exc).__name__}). The chain is probably "
+                    "still valid; the refresh will be retried.",
+                ) from None
             if resp.status_code != 200:
-                detail = (
-                    "the refresh token has already been used or has expired"
-                    if resp.status_code == 400
-                    else f"HTTP {resp.status_code}"
+                raise self._fail(s, row, now, _status_error(resp.status_code))
+            parsed = _parse_token_response(resp)
+            if isinstance(parsed, str):
+                raise self._fail(
+                    s,
+                    row,
+                    now,
+                    f"Questrade returned an unusable token response ({parsed}). The old refresh "
+                    "token may already be spent. If the next refresh fails, generate a new manual "
+                    "token in Questrade.",
                 )
-                row.last_error = f"Token refresh failed ({detail}). Generate a new manual token in Questrade."
-                row.updated_at = now
-                s.commit()
-                raise QuestradeAuthError(row.last_error)
-            data = resp.json()
-            if not data.get("refresh_token") or not data.get("access_token"):
-                raise QuestradeAuthError("Questrade's response was missing a token.")
-            row.refresh_token_enc = self._crypto.encrypt(data["refresh_token"])
-            row.access_token_enc = self._crypto.encrypt(data["access_token"])
-            row.api_server = data.get("api_server")
-            row.expires_at = now + timedelta(seconds=int(data.get("expires_in", 1800)))
+            new_refresh, new_access, server, expires_in = parsed
+            row.refresh_token_enc = self._crypto.encrypt(new_refresh)
+            row.access_token_enc = self._crypto.encrypt(new_access)
+            row.api_server = server
+            row.expires_at = now + timedelta(seconds=expires_in)
             row.last_refresh_at = now
             row.last_error = None
             row.updated_at = now
@@ -195,9 +211,60 @@ class QuestradeAuth:
                 s.commit()
             except Exception as exc:
                 s.rollback()
-                log.critical("questrade_rotated_token_not_saved", error=str(exc))
+                # Never str(exc): a DB error's text can carry the statement's parameters,
+                # which here are the encrypted new tokens.
+                log.critical("questrade_rotated_token_not_saved", error=type(exc).__name__)
                 raise QuestradeAuthError(
                     "The token was refreshed but couldn't be saved, so the connection is broken. "
                     "Paste a new manual token."
-                ) from exc
+                ) from None
             return self._token(row)
+
+    @staticmethod
+    def _fail(s: Session, row: ApiCredential, now: datetime, message: str) -> QuestradeAuthError:
+        """Record a failed refresh so FAILED_REFRESH_COOLDOWN throttles retries and health() shows it."""
+        row.last_error = message
+        row.updated_at = now
+        s.commit()
+        return QuestradeAuthError(message)
+
+
+def _status_error(status: int) -> str:
+    if status == 400:
+        return (
+            "Token refresh failed (the refresh token has already been used or has expired). "
+            "Generate a new manual token in Questrade."
+        )
+    if 500 <= status < 600:
+        return (
+            f"Questrade login service error (HTTP {status}); the chain is probably still valid. "
+            "The refresh will be retried."
+        )
+    return f"Token refresh failed (HTTP {status}). Generate a new manual token in Questrade."
+
+
+def _parse_token_response(resp: httpx.Response) -> tuple[str, str, str | None, int] | str:
+    """(refresh_token, access_token, api_server, expires_in), or a short reason it is unusable.
+    The reason never includes the body, which may contain tokens."""
+    try:
+        data = resp.json()
+    except ValueError:
+        return "body is not JSON"
+    if not isinstance(data, dict):
+        return "body is not a JSON object"
+    refresh, access = data.get("refresh_token"), data.get("access_token")
+    if not isinstance(refresh, str) or not refresh:
+        return "missing refresh_token"
+    if not isinstance(access, str) or not access:
+        return "missing access_token"
+    raw_expires = data.get("expires_in", 1800)
+    if isinstance(raw_expires, bool):
+        return "expires_in is not an integer"
+    try:
+        expires_in = int(raw_expires)
+    except (TypeError, ValueError):
+        return "expires_in is not an integer"
+    if isinstance(raw_expires, float) and raw_expires != expires_in:
+        return "expires_in is not an integer"
+    server = data.get("api_server")
+    return refresh, access, server if isinstance(server, str) else None, expires_in

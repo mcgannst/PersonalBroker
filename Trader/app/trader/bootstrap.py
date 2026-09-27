@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from trader.config import EnvSettings, get_env
 from trader.crypto import Crypto
 from trader.db.session import make_engine, make_session_factory
+from trader.logging_setup import quiet_http_loggers
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock, RealClock
 from trader.settings_store import SettingsStore
@@ -25,6 +26,7 @@ class Core:
 
 
 def build_core(env: EnvSettings | None = None) -> Core:
+    quiet_http_loggers()
     env = env or get_env()
     engine = make_engine(env.database_url.get_secret_value())
     factory = make_session_factory(engine)

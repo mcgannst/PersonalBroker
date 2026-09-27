@@ -553,8 +553,11 @@ UTC_SESSION = {"options": "-c timezone=UTC"}
 
 def make_engine(url: str) -> Engine:
     """Every session runs with TimeZone=UTC, whatever the server's default, so timestamptz values
-    come back in UTC and bare timestamp literals are read as UTC."""
-    return create_engine(url, pool_pre_ping=True, connect_args=UTC_SESSION)
+    come back in UTC and bare timestamp literals are read as UTC.
+
+    hide_parameters keeps bound values (encrypted tokens, API keys) out of DB error messages
+    and SQL logs."""
+    return create_engine(url, pool_pre_ping=True, connect_args=UTC_SESSION, hide_parameters=True)
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:
@@ -2092,8 +2095,8 @@ git pull --rebase && git push
 ### Task P1-T6: Questrade auth (token owner), bootstrap, seed and keep-alive CLI
 
 **Files:**
-- Create: `Trader/app/trader/adapters/questrade/__init__.py`, `Trader/app/trader/adapters/questrade/auth.py`, `Trader/app/trader/bootstrap.py`, `Trader/app/tests/adapters/test_questrade_auth.py`
-- Modify: `Trader/app/trader/cli.py` (add `questrade-seed`, `token-refresh`)
+- Create: `Trader/app/trader/adapters/questrade/__init__.py`, `Trader/app/trader/adapters/questrade/auth.py`, `Trader/app/trader/bootstrap.py`, `Trader/app/trader/logging_setup.py`, `Trader/app/tests/adapters/test_questrade_auth.py`, `Trader/app/tests/test_cli_questrade.py`, `Trader/app/tests/test_logging_setup.py`
+- Modify: `Trader/app/trader/cli.py` (add `questrade-seed`, `token-refresh`), `Trader/app/trader/db/session.py` (`make_engine` passes `hide_parameters=True`)
 
 **Interfaces:**
 - Consumes: `ApiCredential` (T2), `session_scope` (T2), `Crypto` (T3), `Clock`/`FixedClock` (T4), `db_factory` fixture.
@@ -2104,8 +2107,14 @@ git pull --rebase && git push
   - `TokenHealth` (frozen dataclass): `seeded: bool`, `expires_at: datetime | None`, `last_refresh_at: datetime | None`, `last_error: str | None`.
   - `TokenSource` protocol: `access() -> AccessToken`, `force_refresh() -> AccessToken`.
   - `QuestradeAuth(factory: sessionmaker[Session], crypto: Crypto, clock: Clock, http: httpx.Client | None = None)` implementing `TokenSource`, plus `seed(refresh_token: str) -> None`, `keep_alive(min_age: timedelta = timedelta(hours=1)) -> AccessToken`, `health() -> TokenHealth`.
-- Produces (`trader.bootstrap`): `Core` dataclass (`env`, `engine`, `factory`, `crypto`, `clock`, `calendar`, `settings: SettingsStore`) and `build_core(env: EnvSettings | None = None) -> Core`.
-- CLI: `trader questrade-seed` (reads `QUESTRADE_REFRESH_TOKEN`), `trader token-refresh`.
+  - `seed` strips surrounding whitespace, raises `QuestradeAuthError` on a blank token (the stored chain is left unchanged), and resets `last_refresh_at` to `None`.
+  - Every failed exchange (HTTP 400, 5xx, other non-200, network error, or a 200 whose body is not JSON, lacks `refresh_token`/`access_token`, or has a non-integer `expires_in`) records `last_error` and `updated_at`, commits, and raises `QuestradeAuthError`, so `FAILED_REFRESH_COOLDOWN` throttles retries. Messages: 400 = token used or expired, generate a new manual token; 5xx = "Questrade login service error (HTTP 5xx); the chain is probably still valid"; network = "Could not reach Questrade (<ExceptionType>)"; malformed 200 = the old token may already be spent. Only 400 and other 4xx advise a new token. No message contains token material.
+  - `keep_alive` returns early only when there is no `last_error`, so a dead chain never reports ok.
+  - If the rotated token can't be committed, it logs critical with `error=type(exc).__name__` (never `str(exc)`) and raises `QuestradeAuthError` `from None`.
+- Produces (`trader.logging_setup`): `quiet_http_loggers() -> None` sets the `httpx` and `httpcore` loggers to WARNING (the refresh token travels in the token URL's query string, which httpx logs at INFO).
+- Produces (`trader.bootstrap`): `Core` dataclass (`env`, `engine`, `factory`, `crypto`, `clock`, `calendar`, `settings: SettingsStore`) and `build_core(env: EnvSettings | None = None) -> Core`, which calls `quiet_http_loggers()` first.
+- Changes (`trader.db.session`): `make_engine` passes `hide_parameters=True`, so SQL parameters never appear in DB errors or logs.
+- CLI: `trader questrade-seed [--force]` (reads `QUESTRADE_REFRESH_TOKEN`; refuses to replace a seeded chain with no `last_error` unless `--force`), `trader token-refresh` (prints `ok; chain last extended <last_refresh_at>`).
 
 - [x] **Step 1: Write the failing tests**
 
@@ -2293,7 +2302,7 @@ from trader.market.clock import Clock
 
 log = structlog.get_logger("questrade.auth")
 
-TOKEN_URL = "https://login.questrade.com/oauth2/token"
+TOKEN_URL = "https://login.questrade.com/oauth2/token"  # noqa: S105 (a URL, not a secret)
 TIMEOUT = 20.0
 EXPIRY_SKEW = timedelta(seconds=120)
 FORCED_REFRESH_COOLDOWN = timedelta(seconds=90)
@@ -2345,13 +2354,19 @@ class QuestradeAuth:
 
     # --- public -------------------------------------------------------------------
     def seed(self, refresh_token: str) -> None:
+        """Start a new chain from a manual token. A blank token is rejected, never stored, so it
+        can't overwrite (and so destroy) a live chain."""
+        token = refresh_token.strip()
+        if not token:
+            raise QuestradeAuthError("The refresh token is empty. Paste a manual token from Questrade.")
         now = self._clock.now()
         with self._factory() as s:
             row = s.get(ApiCredential, PROVIDER) or ApiCredential(provider=PROVIDER)
-            row.refresh_token_enc = self._crypto.encrypt(refresh_token.strip())
+            row.refresh_token_enc = self._crypto.encrypt(token)
             row.access_token_enc = None
             row.api_server = None
             row.expires_at = None
+            row.last_refresh_at = None
             row.last_error = None
             row.updated_at = now
             s.merge(row)
@@ -2368,11 +2383,24 @@ class QuestradeAuth:
         return self._refresh(forced=True)
 
     def keep_alive(self, min_age: timedelta = timedelta(hours=1)) -> AccessToken:
-        """Daily job: extend the refresh-token chain unless it was extended recently."""
+        """Daily job: extend the refresh-token chain unless it was extended recently.
+
+        The chain's age is what matters here, not the access token's: min_age (1 h) is longer
+        than an access token lives (30 min), so requiring a fresh access token would make every
+        call exchange. The returned token may therefore be expired; callers that need a usable
+        access token call access(). A chain with a recorded error never counts as recently
+        extended, so a dead chain never reports ok.
+        """
         with self._factory() as s:
             row = s.get(ApiCredential, PROVIDER)
-            if row is not None and row.last_refresh_at is not None and self._is_fresh(row) \
-                    and self._clock.now() - row.last_refresh_at < min_age:
+            if (
+                row is not None
+                and not row.last_error
+                and row.last_refresh_at is not None
+                and self._crypto.decrypt(row.access_token_enc)
+                and row.api_server
+                and self._clock.now() - row.last_refresh_at < min_age
+            ):
                 return self._token(row)
         return self._refresh(forced=True, cooldown=timedelta(0))
 
@@ -2381,7 +2409,9 @@ class QuestradeAuth:
             row = s.get(ApiCredential, PROVIDER)
             if row is None:
                 return TokenHealth(False, None, None, None)
-            return TokenHealth(bool(row.refresh_token_enc), row.expires_at, row.last_refresh_at, row.last_error)
+            return TokenHealth(
+                bool(row.refresh_token_enc), row.expires_at, row.last_refresh_at, row.last_error
+            )
 
     # --- internals ------------------------------------------------------------------
     def _is_fresh(self, row: ApiCredential) -> bool:
@@ -2413,8 +2443,12 @@ class QuestradeAuth:
                 raise QuestradeAuthError("Questrade isn't set up. Paste a refresh token in Settings.")
             if not forced and self._is_fresh(row):
                 return self._token(row)
-            if forced and row.last_refresh_at is not None and now - row.last_refresh_at < cooldown \
-                    and self._is_fresh(row):
+            if (
+                forced
+                and row.last_refresh_at is not None
+                and now - row.last_refresh_at < cooldown
+                and self._is_fresh(row)
+            ):
                 return self._token(row)
             if row.last_error and row.updated_at and now - row.updated_at < FAILED_REFRESH_COOLDOWN:
                 raise QuestradeAuthError(row.last_error)
@@ -2422,23 +2456,36 @@ class QuestradeAuth:
             if not refresh:
                 raise QuestradeAuthError("No usable refresh token stored. Paste a new one from Questrade.")
             try:
-                resp = self._http.get(TOKEN_URL, params={"grant_type": "refresh_token", "refresh_token": refresh})
+                resp = self._http.get(
+                    TOKEN_URL, params={"grant_type": "refresh_token", "refresh_token": refresh}
+                )
             except httpx.HTTPError as exc:
-                raise QuestradeAuthError(f"Could not reach Questrade: {exc}") from exc
+                # The exception text can include the request URL, and the refresh token is in
+                # its query string, so only the exception type is reported.
+                raise self._fail(
+                    s,
+                    row,
+                    now,
+                    f"Could not reach Questrade ({type(exc).__name__}). The chain is probably "
+                    "still valid; the refresh will be retried.",
+                ) from None
             if resp.status_code != 200:
-                detail = ("the refresh token has already been used or has expired"
-                          if resp.status_code == 400 else f"HTTP {resp.status_code}")
-                row.last_error = f"Token refresh failed ({detail}). Generate a new manual token in Questrade."
-                row.updated_at = now
-                s.commit()
-                raise QuestradeAuthError(row.last_error)
-            data = resp.json()
-            if not data.get("refresh_token") or not data.get("access_token"):
-                raise QuestradeAuthError("Questrade's response was missing a token.")
-            row.refresh_token_enc = self._crypto.encrypt(data["refresh_token"])
-            row.access_token_enc = self._crypto.encrypt(data["access_token"])
-            row.api_server = data.get("api_server")
-            row.expires_at = now + timedelta(seconds=int(data.get("expires_in", 1800)))
+                raise self._fail(s, row, now, _status_error(resp.status_code))
+            parsed = _parse_token_response(resp)
+            if isinstance(parsed, str):
+                raise self._fail(
+                    s,
+                    row,
+                    now,
+                    f"Questrade returned an unusable token response ({parsed}). The old refresh "
+                    "token may already be spent. If the next refresh fails, generate a new manual "
+                    "token in Questrade.",
+                )
+            new_refresh, new_access, server, expires_in = parsed
+            row.refresh_token_enc = self._crypto.encrypt(new_refresh)
+            row.access_token_enc = self._crypto.encrypt(new_access)
+            row.api_server = server
+            row.expires_at = now + timedelta(seconds=expires_in)
             row.last_refresh_at = now
             row.last_error = None
             row.updated_at = now
@@ -2446,12 +2493,63 @@ class QuestradeAuth:
                 s.commit()
             except Exception as exc:
                 s.rollback()
-                log.critical("questrade_rotated_token_not_saved", error=str(exc))
+                # Never str(exc): a DB error's text can carry the statement's parameters,
+                # which here are the encrypted new tokens.
+                log.critical("questrade_rotated_token_not_saved", error=type(exc).__name__)
                 raise QuestradeAuthError(
                     "The token was refreshed but couldn't be saved, so the connection is broken. "
                     "Paste a new manual token."
-                ) from exc
+                ) from None
             return self._token(row)
+
+    @staticmethod
+    def _fail(s: Session, row: ApiCredential, now: datetime, message: str) -> QuestradeAuthError:
+        """Record a failed refresh so FAILED_REFRESH_COOLDOWN throttles retries and health() shows it."""
+        row.last_error = message
+        row.updated_at = now
+        s.commit()
+        return QuestradeAuthError(message)
+
+
+def _status_error(status: int) -> str:
+    if status == 400:
+        return (
+            "Token refresh failed (the refresh token has already been used or has expired). "
+            "Generate a new manual token in Questrade."
+        )
+    if 500 <= status < 600:
+        return (
+            f"Questrade login service error (HTTP {status}); the chain is probably still valid. "
+            "The refresh will be retried."
+        )
+    return f"Token refresh failed (HTTP {status}). Generate a new manual token in Questrade."
+
+
+def _parse_token_response(resp: httpx.Response) -> tuple[str, str, str | None, int] | str:
+    """(refresh_token, access_token, api_server, expires_in), or a short reason it is unusable.
+    The reason never includes the body, which may contain tokens."""
+    try:
+        data = resp.json()
+    except ValueError:
+        return "body is not JSON"
+    if not isinstance(data, dict):
+        return "body is not a JSON object"
+    refresh, access = data.get("refresh_token"), data.get("access_token")
+    if not isinstance(refresh, str) or not refresh:
+        return "missing refresh_token"
+    if not isinstance(access, str) or not access:
+        return "missing access_token"
+    raw_expires = data.get("expires_in", 1800)
+    if isinstance(raw_expires, bool):
+        return "expires_in is not an integer"
+    try:
+        expires_in = int(raw_expires)
+    except (TypeError, ValueError):
+        return "expires_in is not an integer"
+    if isinstance(raw_expires, float) and raw_expires != expires_in:
+        return "expires_in is not an integer"
+    server = data.get("api_server")
+    return refresh, access, server if isinstance(server, str) else None, expires_in
 ```
 
 - [x] **Step 4: Run the auth tests**
@@ -2460,6 +2558,8 @@ Run: `uv run pytest tests/adapters/test_questrade_auth.py -q`
 Expected: `8 passed`.
 
 Builder note (P1-T6 attempt 1): as written, `keep_alive`'s early return also required `_is_fresh(row)`. An access token lives 30 min (fresh for 28 with the skew), so at +30 min it always exchanged and `test_keep_alive_exchanges_only_when_older_than_min_age` failed. The early return now requires a *stored* access token and `api_server` instead of a fresh one, so the chain is extended only when `last_refresh_at` is older than `min_age`.
+
+Fix round (P1-T6 attempt 2, gauntlet findings): malformed 200s, network errors and 5xx now record `last_error` and are throttled by `FAILED_REFRESH_COOLDOWN`; `seed` rejects blank tokens and resets `last_refresh_at`; `keep_alive` never reports ok with a `last_error`; the commit-failure path logs only the exception type and raises `from None`; `make_engine` hides SQL parameters; `build_core` quiets the httpx/httpcore loggers; `questrade-seed` needs `--force` to replace a healthy chain; `token-refresh` prints the chain extension time. The code blocks below and in Step 3 show the fixed code. Regression tests: `tests/adapters/test_questrade_auth.py` (`test_non_integer_expires_in_is_recorded_as_possibly_spent`, `test_network_error_is_recorded_without_new_token_advice`, `test_5xx_says_chain_probably_valid`, `test_seed_resets_last_refresh_and_rejects_blank`, `test_keep_alive_never_reports_ok_on_a_dead_chain`, `test_commit_failure_leaks_no_token_material`, `test_engine_errors_hide_sql_parameters`), `tests/test_logging_setup.py`, `tests/test_cli_questrade.py`, plus the Breaker's `tests/gauntlet/test_p1_t6_breaker.py`.
 
 - [x] **Step 5: Implement `trader/bootstrap.py` and the CLI commands**
 
@@ -2475,6 +2575,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from trader.config import EnvSettings, get_env
 from trader.crypto import Crypto
 from trader.db.session import make_engine, make_session_factory
+from trader.logging_setup import quiet_http_loggers
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock, RealClock
 from trader.settings_store import SettingsStore
@@ -2492,6 +2593,7 @@ class Core:
 
 
 def build_core(env: EnvSettings | None = None) -> Core:
+    quiet_http_loggers()
     env = env or get_env()
     engine = make_engine(env.database_url.get_secret_value())
     factory = make_session_factory(engine)
@@ -2510,16 +2612,30 @@ def build_core(env: EnvSettings | None = None) -> Core:
 Add to `Trader/app/trader/cli.py` (below `version`):
 ```python
 @app.command("questrade-seed")
-def questrade_seed() -> None:
+def questrade_seed(
+    force: bool = typer.Option(False, "--force", help="Replace an existing healthy chain."),
+) -> None:
     """Store QUESTRADE_REFRESH_TOKEN (from the environment) as the start of the token chain."""
-    from trader.adapters.questrade.auth import QuestradeAuth
+    from trader.adapters.questrade.auth import QuestradeAuth, QuestradeAuthError
     from trader.bootstrap import build_core
 
     core = build_core()
     if core.env.questrade_refresh_token is None:
         typer.echo("QUESTRADE_REFRESH_TOKEN is not set", err=True)
         raise typer.Exit(1)
-    QuestradeAuth(core.factory, core.crypto, core.clock).seed(core.env.questrade_refresh_token.get_secret_value())
+    auth = QuestradeAuth(core.factory, core.crypto, core.clock)
+    health = auth.health()
+    if health.seeded and not health.last_error and not force:
+        typer.echo(
+            "a healthy token chain is already stored; seeding would replace it. Use --force to overwrite.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    try:
+        auth.seed(core.env.questrade_refresh_token.get_secret_value())
+    except QuestradeAuthError as exc:
+        typer.echo(f"seed failed: {exc}", err=True)
+        raise typer.Exit(1) from None
     typer.echo("seeded")
 
 
@@ -2530,12 +2646,15 @@ def token_refresh() -> None:
     from trader.bootstrap import build_core
 
     core = build_core()
+    auth = QuestradeAuth(core.factory, core.crypto, core.clock)
     try:
-        token = QuestradeAuth(core.factory, core.crypto, core.clock).keep_alive()
+        auth.keep_alive()
     except QuestradeAuthError as exc:
         typer.echo(f"token refresh failed: {exc}", err=True)
-        raise typer.Exit(1) from exc
-    typer.echo(f"ok; access token valid until {token.expires_at.isoformat()}")
+        raise typer.Exit(1) from None
+    # keep_alive's access token may already be expired; the chain extension time is what matters.
+    extended = auth.health().last_refresh_at
+    typer.echo(f"ok; chain last extended {extended.isoformat() if extended else 'never'}")
 ```
 
 - [x] **Step 6: Run the gate, commit and push**
@@ -2556,7 +2675,7 @@ git pull --rebase && git push
 This is the one-time ownership transfer in the Global Constraints. Do these three commands in order, without running anything else that uses Questrade in between:
 ```bash
 bash scripts/trader-dev.sh questrade-seed      # expected: seeded
-bash scripts/trader-dev.sh token-refresh       # expected: ok; access token valid until ...
+bash scripts/trader-dev.sh token-refresh       # expected: ok; chain last extended ...
 python3 - <<'PY'
 import re, os, tempfile
 p = "../docker/.env.dev"

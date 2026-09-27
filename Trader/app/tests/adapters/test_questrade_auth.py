@@ -6,7 +6,10 @@ import httpx
 import pytest
 import respx
 from cryptography.fernet import Fernet
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
+from structlog.testing import capture_logs
 
 from trader.adapters.questrade.auth import TOKEN_URL, QuestradeAuth, QuestradeAuthError
 from trader.crypto import Crypto
@@ -152,3 +155,131 @@ def test_concurrent_refresh_exchanges_once(db_factory: sessionmaker[Session]) ->
         t.join()
     assert results == ["access-1", "access-1"]
     assert route.call_count == 1
+
+
+# --- fix round (attempt 2) regression tests ---------------------------------------------------
+
+
+@respx.mock
+def test_non_integer_expires_in_is_recorded_as_possibly_spent(db_factory: sessionmaker[Session]) -> None:
+    bad = httpx.Response(
+        200,
+        json={
+            "access_token": "access-1",
+            "refresh_token": "refresh-1",
+            "expires_in": "soon",
+            "api_server": "https://api05.iq.questrade.com/",
+        },
+    )
+    route = respx.get(TOKEN_URL).mock(return_value=bad)
+    clock = FixedClock(T0)
+    auth = make(db_factory, clock)
+    with pytest.raises(QuestradeAuthError, match="may already be spent") as exc:
+        auth.access()
+    assert "refresh-1" not in str(exc.value)
+    assert "access-1" not in str(exc.value)
+    assert auth.health().last_error == str(exc.value)
+    clock.advance(timedelta(seconds=30))
+    with pytest.raises(QuestradeAuthError):
+        auth.access()
+    assert route.call_count == 1
+    assert stored_refresh(db_factory) == "refresh-0"
+
+
+@respx.mock
+def test_network_error_is_recorded_without_new_token_advice(db_factory: sessionmaker[Session]) -> None:
+    respx.get(TOKEN_URL).mock(side_effect=httpx.ConnectError("boom refresh-0"))
+    auth = make(db_factory, FixedClock(T0))
+    with pytest.raises(QuestradeAuthError, match="Could not reach Questrade") as exc:
+        auth.access()
+    message = str(exc.value)
+    assert "refresh-0" not in message
+    assert "new manual token" not in message.lower()
+    assert exc.value.__cause__ is None
+    assert auth.health().last_error == message
+
+
+@respx.mock
+@pytest.mark.parametrize("status", [500, 502, 503])
+def test_5xx_says_chain_probably_valid(db_factory: sessionmaker[Session], status: int) -> None:
+    route = respx.get(TOKEN_URL).mock(return_value=httpx.Response(status))
+    clock = FixedClock(T0)
+    auth = make(db_factory, clock)
+    with pytest.raises(QuestradeAuthError) as exc:
+        auth.access()
+    message = str(exc.value)
+    assert f"Questrade login service error (HTTP {status}); the chain is probably still valid" in message
+    assert "new manual token" not in message.lower()
+    assert auth.health().last_error == message
+    clock.advance(timedelta(seconds=30))
+    with pytest.raises(QuestradeAuthError):
+        auth.access()
+    assert route.call_count == 1
+    route.return_value = ok(1)
+    clock.advance(timedelta(seconds=31))
+    assert auth.access().token == "access-1"
+    assert auth.health().last_error is None
+
+
+@respx.mock
+def test_seed_resets_last_refresh_and_rejects_blank(db_factory: sessionmaker[Session]) -> None:
+    respx.get(TOKEN_URL).mock(return_value=ok(1))
+    auth = make(db_factory, FixedClock(T0))
+    auth.access()
+    assert auth.health().last_refresh_at == T0
+    with pytest.raises(QuestradeAuthError):
+        auth.seed("  \n")
+    assert stored_refresh(db_factory) == "refresh-1"
+    assert auth.health().last_refresh_at == T0
+    auth.seed("  refresh-new\n")
+    assert stored_refresh(db_factory) == "refresh-new"
+    assert auth.health().last_refresh_at is None
+
+
+@respx.mock
+def test_keep_alive_never_reports_ok_on_a_dead_chain(db_factory: sessionmaker[Session]) -> None:
+    route = respx.get(TOKEN_URL).mock(side_effect=[ok(1), httpx.Response(400), httpx.Response(400)])
+    clock = FixedClock(T0)
+    auth = make(db_factory, clock)
+    auth.keep_alive()
+    clock.advance(timedelta(minutes=2))
+    with pytest.raises(QuestradeAuthError, match="already been used"):
+        auth.force_refresh()
+    # last_refresh_at is only 2 minutes old, but the chain is dead: keep_alive must not say ok.
+    with pytest.raises(QuestradeAuthError, match="already been used"):
+        auth.keep_alive()
+    assert route.call_count == 2  # inside FAILED_REFRESH_COOLDOWN: no new exchange
+    clock.advance(timedelta(seconds=61))
+    with pytest.raises(QuestradeAuthError):
+        auth.keep_alive()
+    assert route.call_count == 3
+
+
+@respx.mock
+def test_commit_failure_leaks_no_token_material(db_factory: sessionmaker[Session]) -> None:
+    class CommitFails(Session):
+        def commit(self) -> None:
+            raise OperationalError(
+                "UPDATE trader.api_credentials SET refresh_token_enc=%(r)s",
+                {"r": "refresh-1", "a": "access-1"},
+                Exception("server closed the connection (refresh-1 access-1)"),
+            )
+
+    respx.get(TOKEN_URL).mock(return_value=ok(1))
+    clock = FixedClock(T0)
+    make(db_factory, clock)
+    failing = sessionmaker(db_factory.kw["bind"], class_=CommitFails, expire_on_commit=False)
+    with capture_logs() as logs, pytest.raises(QuestradeAuthError) as exc:
+        QuestradeAuth(failing, CRYPTO, clock).access()
+    assert any(e["log_level"] == "critical" for e in logs)
+    shown = repr(logs) + str(exc.value) + repr(exc.value)
+    for secret in ("refresh-0", "refresh-1", "access-1"):
+        assert secret not in shown
+    assert exc.value.__cause__ is None
+    assert exc.value.__suppress_context__
+
+
+def test_engine_errors_hide_sql_parameters(db_factory: sessionmaker[Session]) -> None:
+    with db_factory() as s, pytest.raises(DBAPIError) as exc:
+        s.execute(text("SELECT :secret FROM no_such_table"), {"secret": "token-material-xyz"})
+    assert "token-material-xyz" not in str(exc.value)

@@ -30,7 +30,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 0607f11 |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | f14f4fa |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
-| P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | fixing | 2 | V✅ B❌ S+C❌ | 3f47eb8 |
+| P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | gauntlet | 2 | V✅ B❌ S+C❌ → fix 42bd500 (verify+review running) | 42bd500 |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | todo | 0 | | |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | todo | 0 | | |
 
@@ -602,3 +602,13 @@ None open.
 - Gate: full pytest 286 passed, 4 failed (all in test_p1_t9_breaker.py), ruff clean on the new file
 - Findings: (1) run_job has no lock or unique constraint, so two concurrent runs for one (job, session_date) both run the body (Review Focus 5). (2) upsert_symbols keys ON CONFLICT on questrade_id only, so a ticker taken over by a new questrade_id (FB to META case) raises UniqueViolation on (ticker, exchange) and aborts the whole nightly. (3) two requested names resolving to one QtSymbol raise KeyError in run_nightly (ids keyed by QtSymbol.symbol, looked up by requested name). (4) notify with TELEGRAM_CHAT_ID set but blank crashes with a pydantic ValidationError instead of a clean exit 1
 - Notes: passing cases cover crash-halfway re-run, Friday and Thanksgiving targets and lookback, ATR NULL with 10 bars, SPY from FinViz not duplicated, 31-day-old fallback reported with its real date. SPEC sets no maximum age for the fallback universe
+
+### 2026-09-27T05:30:15Z · P1-T9 · Builder · attempt 2 · started
+- Result: fix round started (12 orchestrator decisions + breaker tests)
+
+### 2026-09-27T05:58:00Z · P1-T9 · Builder · attempt 2 · finished
+- Result: all 12 decisions implemented. Orchestrator ruling B applied (stale fallback still used and flagged, setting universe.fallback_stale_after_sessions)
+- Commits: 42bd500
+- Gate: check.sh passed (316 tests). Breaker file unchanged, all 9 of its tests pass
+- LIVE: nightly --date 2026-09-28 --force succeeded, universe 543, source finviz, unresolved none, candle_errors 0. Read-only check: 543 snapshot rows match 543 stats rows, all finviz, 0 STALE symbols
+- Notes: min opening bars is min(10, lookback length), since a lookback setting of 5 to 9 could never reach 10

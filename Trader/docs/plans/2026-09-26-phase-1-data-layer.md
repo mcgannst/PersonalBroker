@@ -3494,6 +3494,25 @@ async def test_nightly_falls_back_to_previous_universe(db_factory: sessionmaker[
     assert sources == {"fallback"}
 
 
+async def test_daily_candles_unsorted_or_duplicated_are_normalised(db_factory: sessionmaker[Session]) -> None:
+    """A reversed, duplicated daily list from the API must not abort the job (P1-T8 contract)."""
+
+    class MessyMarket(FakeMarket):
+        async def candles_many(self, reqs: Sequence[CandleRequest]) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
+            out = await super().candles_many(reqs)
+            for r, v in out.items():
+                if r.interval == "OneDay" and isinstance(v, list):
+                    out[r] = list(reversed(v)) + v[:2]  # newest-first plus two duplicates
+            return out
+
+    detail = await run_nightly(deps(db_factory, FakeFinviz(["AAPL"]), MessyMarket()), TARGET)
+    assert detail["universe"] == 2
+    assert count(db_factory, DailyCandle) == 40
+    with db_factory() as s:
+        atrs = set(s.execute(select(OpenBarStat.atr14)).scalars())
+    assert atrs == {Decimal("1.0000")}
+
+
 async def test_nightly_without_any_universe_raises(db_factory: sessionmaker[Session]) -> None:
     with pytest.raises(FinvizBlocked):
         await run_nightly(deps(db_factory, FakeFinviz(None, FinvizBlocked("HTTP 403"))), TARGET)
@@ -3720,7 +3739,10 @@ async def run_nightly(deps: NightlyDeps, session_date: date) -> dict[str, Any]:
             sid = ids[ticker]
             daily = results[daily_reqs[sym.symbol_id]]
             bars = results[bar_reqs[sym.symbol_id]]
-            daily_ok = daily if isinstance(daily, list) else []
+            # atr() requires strictly ascending, unique starts (P1-T8), and ON CONFLICT can't
+            # touch one row twice: normalise so one bad symbol never aborts the whole job.
+            daily_ok = sorted({c.start: c for c in daily}.values(), key=lambda c: c.start) \
+                if isinstance(daily, list) else []
             opening = [b for d in lookback if (b := opening_bar(bars, deps.calendar, d))] \
                 if isinstance(bars, list) else []
             repo.upsert_daily_candles(s, sid, daily_ok)
@@ -3748,7 +3770,7 @@ async def run_nightly(deps: NightlyDeps, session_date: date) -> dict[str, Any]:
 - [ ] **Step 9: Run the nightly tests**
 
 Run: `uv run pytest tests/jobs -q`
-Expected: `9 passed`. If `test_nightly_builds_universe_stats_and_candles` shows a different `atr14`, check the fake: every daily bar has high−low = 1 and close = open = 10, so every true range is 1 and ATR must be exactly `1.0000`.
+Expected: `10 passed`. If `test_nightly_builds_universe_stats_and_candles` shows a different `atr14`, check the fake: every daily bar has high−low = 1 and close = open = 10, so every true range is 1 and ATR must be exactly `1.0000`.
 
 - [ ] **Step 10: Add `nightly` and `notify` to the CLI**
 

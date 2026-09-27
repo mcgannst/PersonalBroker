@@ -29,7 +29,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T5 | FinViz parser and scraper | T1 | fixing | 2 | V✅ B❌ S❌ C❌ | b058cdd |
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | building | 1 |  |  |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | todo | 0 | | |
-| P1-T8 | Indicators | T4 | gauntlet | 2 | V✅ B❌ S✅ C✅ → fix 358296f (verify+review running) | 358296f |
+| P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | todo | 0 | | |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | todo | 0 | | |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | todo | 0 | | |
@@ -375,3 +375,25 @@ None open.
 
 ### 2026-09-27T04:35:32Z · P1-T6 · Builder · attempt 1 · started
 - Result: starting Steps 1-7 (Step 7 LIVE, once)
+
+### 2026-09-27T04:36:00Z · P1-T8 · Verifier+fix reviewer · attempt 2 · started
+- Notes: verifying fix commit 358296f in own worktree
+
+### 2026-09-27T04:48:00Z · P1-T3 · Spec+Code reviewer · attempt 1 · finished
+- Result: PASS (0 must-fix, 3 should-fix, 7 nit)
+- Commits: reviewed 58b15df
+- Findings: should-fix - inf accepted for finviz float keys (settings_store.py:30-31), then JSONB insert fails with a DB error instead of ValidationError - no content validation on UI-editable filters, symbols, markets (settings_store.py:27-29) - concurrent first write of a key hits a PK IntegrityError and audit "before" can be stale (settings_store.py:57-65). Nits - frozen model holds mutable, unhashable lists, now() called twice, _db_keys recomputed per call, populate_by_name lets field-name rows load but set() rejects them, one bad row breaks load() for all keys, Crypto.decrypt hides wrong-key vs empty
+- Notes: code matches plan verbatim apart from the declared typed default factory (acceptable). Atomicity, alias map, extra=ignore, injected now all correct
+
+### 2026-09-27T04:37:27Z · P1-T8 · Verifier+fix reviewer · attempt 2 · finished
+- Result: PASS for P1-T8. Tree clean at 18c4ec9, all T8 checkboxes ticked
+- Gate: check.sh lint/format/mypy clean. 99 passed, 9 failed, all 9 in the allowed t2/t5 breaker files. All 20 T8 tests pass (8 breaker, 12 unit)
+- Findings: 358296f covers all six required fixes. Nits: atr() does not check high<low on daily bars, and the module docstring promise about malformed input is broader than the code
+- Notes: P1-T9 plan needs a change (should-fix for the plan, not T8). nightly passes the raw Questrade daily list to atr() with no sort or dedupe, inside one session_scope. One unordered or duplicate bar raises ValueError and aborts the whole nightly run. Duplicate dates would also break the ON CONFLICT upsert. Normalise daily_ok by start (sort plus dedupe) or catch ValueError per symbol
+
+### 2026-09-27T04:37:39Z · P1-T3 · Breaker · attempt 1 · finished
+- Result: FAIL (2 of 8 new tests fail)
+- Commits: f5ad3a4
+- Gate: pytest tests/gauntlet/test_p1_t3_breaker.py = 6 passed, 2 failed, ruff clean
+- Findings: (1) test_corrupt_stored_value_fails_closed_and_is_repairable - one invalid row in settings makes set() raise for every key, including the corrupt key itself, because set() validates all rows (before) first. The settings can only be repaired by hand in SQL. (2) test_list_values_round_trip_order_and_duplicates - markets_enabled accepts and stores duplicates like US,US, which risks per-market jobs running twice.
+- Notes: field-name keys are rejected with KeyError. Concurrent set on different keys, no audit on failed validation, invalid Fernet key, unicode or 1 MB secrets, and rotated or tampered tokens all pass.

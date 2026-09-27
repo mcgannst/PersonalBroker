@@ -9,10 +9,10 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Current phase | 2 (P2-T0 planning finishing) |
 | Current task | P2-REVIEW; P3 building T3,T5-T11 (T2,T4 queued) |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-27T16:54:31Z |
+| Last updated (UTC) | 2026-09-27T17:23:31Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
-| Token last refreshed (UTC) | 2026-09-27T04:39:34Z (P1-T6 LIVE) |
+| Token last refreshed (UTC) | 2026-09-27T17:21:56Z (re-seeded from Stephen's new token after .env.dev rebuild; token removed from .env.dev) |
 | Phase 1 start commit | d64518b |
 | Phase 1 estimate | COMPLETE at 00:08 MT Sep 27 (started 22:13 MT Sep 26): 1 h 55 min |
 | Times | Mountain Time (America/Edmonton, currently MDT = UTC−6) from 00:05 MT Sep 27; earlier entries are UTC |
@@ -60,16 +60,16 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P2-REVIEW | Phase 2 whole-phase review | all P2 | reviewing | 1 | restarted after pause; whole-phase review + earnings window |  |
 | P3-T0 | Write the Phase 3 plan | P2-REVIEW | accepted | 1 | plan verify+fix PASS (migration renumbered 0004, event settle rule, approval actor) | 37bef3b |
 | P3-T1 | Contracts, migration 0004 (LIVE), fakes | P2 verifiers, 0003 | accepted | 1 | contracts pinned by tests; 0004 LIVE; check.sh green except P2-T14 breaker (since fixed) | fcc813f |
-| P3-T2 | Logging unification | P3-T1 | pending | 0 | - | - |
-| P3-T3 | Session event scheduler + run_job_async | P3-T1 | building | 1 | builder running | - |
-| P3-T4 | Message renderer | P3-T1 | pending | 0 | - | - |
-| P3-T5 | Telegram API client + Notifier | P3-T1 | building | 1 | builder running | - |
-| P3-T6 | Telegram bot: updates, signed callbacks, approvals | P3-T1 | building | 1 | builder running | - |
-| P3-T7 | Telegram commands | P3-T1 | building | 1 | builder running | - |
-| P3-T8 | Notification relay | P3-T1 | building | 1 | builder running | - |
-| P3-T9 | Worker process | P3-T1 | building | 1 | builder running | - |
-| P3-T10 | Day jobs: preopen, checkin, event backup | P3-T1 | building | 1 | builder running | - |
-| P3-T11 | Post-close job + candle archive | P3-T1 | building | 1 | builder running | - |
+| P3-T2 | Logging unification | P3-T1 | fixing | 2 | V✅ B❌(5/12, shared with T4) S✅ C✅; fix round a2 with T4 (review findings forwarded) | 48d22ec |
+| P3-T3 | Session event scheduler + run_job_async | P3-T1 | gauntlet | 1 | built (36 tests); note: day_plan errors log-only, not event_log (gauntlet to judge) | b086a2c |
+| P3-T4 | Message renderer | P3-T1 | fixing | 2 | T2/T4 breaker FAIL 5/12 (alert token leak, redactor gaps, length cap) -> fix round a2; review still running | 48d22ec |
+| P3-T5 | Telegram API client + Notifier | P3-T1 | gauntlet | 1 | built (37 tests); token-safe error handling; awaiting gauntlet group | c12a3e6 |
+| P3-T6 | Telegram bot: updates, signed callbacks, approvals | P3-T1 | fixing | 2 | V✅ B✅ (12/12) S✅ C✅; should-fix round a2 (429 sync, lost send, issuer API, sender check) | 6443479 |
+| P3-T7 | Telegram commands | P3-T1 | gauntlet | 1 | built (25 tests); gauntlet batched with other P3 tasks | 36f423b |
+| P3-T8 | Notification relay | P3-T1 | fixing | 2 | T3/T7/T8 breaker FAIL 4/12 + review must-fix -> fix round a2 | 7ff7937 |
+| P3-T9 | Worker process | P3-T1 | fixing | 2 | T5/T9 breaker FAIL 7/26 + review must-fix (T9) -> fix round a2 (relay+heartbeat off-step, settings fallback, split_text, alert streaks) | 143708b |
+| P3-T10 | Day jobs: preopen, checkin, event backup | P3-T1 | fixing | 2 | T10/T11 breaker FAIL 1/16 (fire loop not isolated) + review should-fix -> fix round a2 | e0e7ef5 |
+| P3-T11 | Post-close job + candle archive | P3-T1 | gauntlet | 1 | built (15 tests); gauntlet batched with T10 when it lands | 704b260 |
 | P3-T12 | Wiring (runtime, CLI, crontab) + LIVE dev bot | P3-T2..T11 | pending | 0 | - | - |
 | P3-T13 | Integration: worker day with fake Telegram | P3-T12 | pending | 0 | - | - |
 | P3-REVIEW | Phase 3 review | P3-T13 | pending | 0 | - | - |
@@ -1051,3 +1051,172 @@ None open.
 
 ### 2026-09-27 10:52 MT · P3-T10 · Builder · attempt 1 · started
 - Notes: day-level jobs (preopen, checkin, event backup) TDD
+
+### 2026-09-27 11:02 MT · P3-T7 · Builder · attempt 1 · finished
+- Result: done, all 10 plan checkboxes ticked
+- Commits: 36f423b
+- Gate: check.sh passed (1020 tests, 25 new in tests/adapters/test_telegram_commands.py)
+- Notes: no deviations from the T1 contracts. Next event shown only in pre_market/open. Token not OK if unseeded, last_error, never refreshed, or older than 26 h. Commit message says 26 tests, the real count is 25
+
+### 2026-09-27 11:02 MT · P3-T4 · Builder · attempt 1 · started
+- Notes: implementing trader/notify/messages.py (MessageRenderer) TDD against the T1 contracts
+
+### 2026-09-27 11:02 MT · P3-T3 · Builder · attempt 1 · finished
+- Result: done, all 13 plan checkboxes ticked
+- Commits: b086a2c
+- Gate: check.sh passed (1031 tests), 43 new T3 tests
+- Notes: day_plan has no factory, so the key conflict and over-long key errors are structlog error logs (source scheduler), not event_log rows. Test 7 uses exit_at close-30m because the default 15:50 flatten cannot be 20 min late before the 16:00 close. New runner.JobFailure records its message without the type name, so a missed error starts with "missed:".
+
+### 2026-09-27 11:07 MT · P3-T8 · Builder · attempt 1 · finished
+- Result: done. Acceptance tests 1-9 plus alert_kind, other-run and racing-relay tests (12), plan ticked
+- Commits: 5cde5a3
+- Gate: check.sh passed (1007 tests)
+- Notes: catch-up cap keeps the NEWEST N rows plus one summary. Events of other runs are not relayed (run_id NULL or the live run only). Step failures log the exception type only.
+
+### 2026-09-27 11:04 MT · P3-T2 · Builder · attempt 1 · started
+- Notes: logging unification (trader/logging_setup.py, tests/test_logging_setup.py)
+
+### 2026-09-27 11:04 MT · P3-T3/T7/T8 · Spec+Code reviewer · attempt 1 · started
+- Notes: reviewing b086a2c (T3), 36f423b (T7), 5cde5a3 (T8) against phase-3 plan, SPEC and master plan (read-only)
+
+### 2026-09-27 11:06 MT · P3-T3/T7/T8 · Verifier+Breaker · attempt 1 · started
+- Notes: verifying b086a2c (T3), 36f423b (T7), 5cde5a3 (T8) and writing tests/gauntlet/test_p3_t3t7t8_breaker.py
+
+### 2026-09-27 11:20 MT · P3-T5 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-10 plus gate ticked
+- Commits: c12a3e6
+- Gate: check.sh passed (1032 tests before rebase), 37 new tests (20 api, 17 notifier)
+- Notes: error bodies read raw via a HTTPXRequest subclass (PTB rewrites "Bad Request: x" as "X"), 5xx mapped to status None (retryable). Bot.initialize never called (its InvalidToken text contains the token). A keyed message is held back when the DB is down, an unkeyed one is still sent.
+
+### 2026-09-27 11:04 MT · P3-T9 · Builder · attempt 1 · finished
+- Result: done. trader/worker.py implemented, tests/test_worker.py 18 tests (acceptance 1-11 plus a session-mode heartbeat case, a 10-failed-steps critical case, an after-close-start case, a refused-worker main case)
+- Commits: ada38cc
+- Gate: check.sh passed, 1013 tests (before the rebase onto T3/T7/T8). After the rebase, worker and contract tests re-run green (69)
+- Notes: added a public release_single_instance(conn) and a keyword-only once flag on Worker.run (run(stop, *, once=False)). run raises SystemExit(2) for a second worker, and main turns that into return code 2. The due filter is inline (plan events with at <= now and not in fired), matching the due_events contract, so the worker does not depend on T3's code. T12 must not take the worker lock itself: Worker.run takes it, and a second lock on another connection in the same process would be refused
+
+### 2026-09-27 11:04 MT · P3-T11 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-11 ticked
+- Commits: 704b260
+- Gate: check.sh passed (1009 tests) before rebase. After the rebase, mypy and the P3-T11 and contract tests re-ran green
+- Notes: BR-33 decision count and average leave out auto approvals (0 ms, nobody decided). cancelled counts the run's orders with cancel_reason end_of_session closed since the job started. archive.missing is a list of symbol_id, ticker, interval, reason entries. The summary view's archive map holds 5m, 1m and a missing count
+
+### 2026-09-27 11:08 MT · P3-T6 · Builder · attempt 1 · finished
+- Result: done. callbacks.py (CallbackSigner, DbCallbackIssuer) and bot.py (TelegramBot) implemented, plan T6 boxes 1-15 ticked
+- Commits: 988ecbe
+- Gate: check.sh passed before the rebase (1041 tests). 47 new T6 tests (17 callbacks, 30 bot)
+- Notes: all text updates (not only /commands) go to commands.handle so T7 can answer plain text with its unknown-command reply. Extras: a refused proposal send (Telegram status set) deletes its nonce so the relay can retry, a network error keeps it (at most once). Pause and journal failures release the nonce. The polling offset is kept on the bot. An approved entry blocked by the entry guard answers "Not submitted, entry blocked: <reason>"
+
+### 2026-09-27 11:05 MT · P3-T5/T9 · Spec+Code reviewer · attempt 1 · started
+- Notes: reviewing c12a3e6 (T5) and ada38cc (T9) against phase-3 plan, SPEC and master plan (read-only)
+- Correction (P3-T6): 46 new T6 tests (16 callbacks, 30 bot), not 47
+
+### 2026-09-27 11:05 MT · P3-T5/P3-T9 · Verifier+Breaker · attempt 1 · started
+- Notes: verifying c12a3e6 (T5) and ada38cc (T9), writing tests/gauntlet/test_p3_t5t9_breaker.py
+
+### 2026-09-27 11:06 MT · P3-T6 · Spec+Code reviewer · attempt 1 · started
+- Notes: reviewing 988ecbe (callbacks.py, bot.py) against phase-3 plan T6, SPEC §8/§14/BR-30-34 and master plan (read-only, security focus)
+
+### 2026-09-27 11:06 MT · P3-T6 · Verifier+Breaker · attempt 1 · started
+- Notes: verifying commit 988ecbe on trunk, then gauntlet tests in tests/gauntlet/test_p3_t6_breaker.py
+
+### 2026-09-27 11:22 MT · P3-T10 · Builder · attempt 1 · finished
+- Result: ec5438e pushed. preopen/checkin/events implemented, 27 new tests, check.sh green (1210 passed)
+- Notes: worker check also errors on a heartbeat with phase stopped. run_event_backup returns one not_session FireResult (key "due" in due mode) on a holiday. force in due mode ignores settled keys (fire carries --force itself)
+
+### 2026-09-27 11:09 MT · P3-T10/P3-T11 · Spec+Code reviewer · attempt 1 · started
+- Notes: reviewing ec5438e (T10 preopen, checkin, events) and 704b260 (T11 post-close, archive) against phase-3 plan, SPEC §8/§9/BR-33/42/60 and master plan (read-only)
+
+### 2026-09-27 11:10 MT · P3-T10/P3-T11 · Verifier+Breaker · attempt 1 · started
+- Notes: verify on fresh trunk, then gauntlet tests in tests/gauntlet/test_p3_t10t11_breaker.py
+
+### 2026-09-27 11:08 MT · P3-T3/T7/T8 · Spec+Code reviewer · attempt 1 · finished
+- Result: T3 PASS, T7 PASS, T8 FAIL with 1 must-fix, 5 should-fix and 7 nits across the three tasks
+- Commits: reviewed b086a2c, 36f423b, 5cde5a3. None made
+- Findings: MUST-FIX T8 relay.py:245-261. The high-water cursor skips rows whose ids commit out of order (cron or api writers), so an alert or a fill can be lost with no error. SHOULD-FIX: the T8 cap applies on every pump, and a cap of 0 turns every alert into a summary (relay.py:258-259). T8 _proposal_view duplicates T6 and already differs on risk_usd and reason (relay.py:318 vs bot.py:362). T3 day_plan logs a key conflict or an over-long key to structlog only, not to event_log (scheduler.py:83 and 102, plan T3 and test 9). T3 MAX_EVENT_ATTEMPTS settles flatten after 3 failures in about 6 s with no backoff (scheduler.py:131). Nits are in the hand-back
+- Notes: builder decisions accepted: JobFailure, the 26 h token limit, the unbound pause nonce, newest-N catch-up and the other-run event filter. The chat filter belongs to T6, and nothing here sends to another chat. No secrets reach the logs. Alert data goes to Telegram unredacted (T4 and P5-T8)
+
+### 2026-09-27 11:09 MT · P3-T5/T9 · Spec+Code reviewer · attempt 1 · finished
+- Result: T5 PASS (no must-fix). T9 FAIL (2 must-fix)
+- Findings: T9 must-fix 1, worker.py:330/376/429 read deps.settings() (a DB query) outside any guard, so a DB blip or a bad settings row ends Worker.run. T9 must-fix 2, worker.py:185 awaits relay inline, so a slow or down Telegram (20 s timeouts, retries, 30 s 429 waits, 1 s pacing) stalls quote polling, tick and heartbeat for minutes (Review Focus 3). Should-fix: advisory lock never re-checked after a DB restart, per-step error events every 2 s during an outage, read-timeout retry can double a message, T12 plan text must not take the lock
+- Notes: builder decisions accepted: raw-body error request, 5xx as retryable, keyed message held back when DB is down, failed key not retried, once flag, SystemExit(2), release_single_instance. Inline due filter equals T3 due_events today (nit: call it)
+
+### 2026-09-27 11:10 MT · P3-T2 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-7 ticked
+- Commits: b98087e
+- Gate: check.sh passed (1076 tests), logging tests 10
+- Notes: added a redaction processor (bot tokens, token= values, bearer) and held sqlalchemy at WARNING, both beyond the plan. Wiring configure_logging into the CLI and worker is left to P3-T12
+
+### 2026-09-27 11:26 MT · P3-T6 · Spec+Code reviewer · attempt 1 · finished
+- Result: PASS (0 must-fix, 4 should-fix, 9 nits)
+- Commits: reviewed 988ecbe (read-only)
+- Findings: crypto sound (derived key with label, kind in the MAC body, compare_digest, strict parse). Nonce claim is row-locked and single use across processes. Chat filter covers every update kind. decide contract and entry-guard reply correct. Should-fix: sync_closed treats 429 as permanent, so the message keeps its buttons (bot.py:309). A network-error proposal send keeps the unbound nonce, so the proposal is never re-sent and Stephen is not told (bot.py:272). risk_usd differs from T8 relay.py:364 (risk_dollars is the budget, not qty x per-share risk). bot.py writes telegram_callbacks directly (276, 315, 325)
+- Notes: T12 must wire entry_blocked into the bot's ProposalService, or Telegram approvals bypass kill switches. T4 proposal_closed must show p.error for an entry-blocked "rejected"
+
+### 2026-09-27 11:24 MT · P3-T10/P3-T11 · Spec+Code reviewer · attempt 1 · finished
+- Result: S✅ C✅ for T10 (ec5438e) and T11 (704b260), no must-fix
+- Findings: should-fix (1) check-in and event --due fire loops not isolated, one raising fire skips later safety events (checkin.py:212, events.py:51). (2) post-close archive or issuer failure stops the BR-60 summary (postclose.py:101-116). (3) event --due --force re-fires every past event incl. a succeeded orb_open (events.py:48), T12 should reject or narrow it. (4) check-in duplicates token-health logic and builds KillSwitches itself (checkin.py:40,59,148), T12 should add token_health and killswitches to CheckinDeps. Nits in the reviewer log and report
+- Notes: builder decisions accepted (stopped heartbeat is an error, holiday list result, auto approvals excluded from BR-33, safety-net cancelled count, SPY fallback, orphan journal nonce on a forced re-run)
+
+### 2026-09-27 11:13 MT · P3-T3/T7/T8 · Verifier+Breaker · attempt 1 · finished
+- Result: VERIFY PASS (clean tree, check.sh 1100 passed, all T3/T7/T8 boxes ticked). BREAK FAIL: 12 tests, 8 pass, 4 fail
+- Commits: 7ff7937 (tests/gauntlet/test_p3_t3t7t8_breaker.py)
+- Gate: n/a (breaker file fails by design)
+- Findings: (1) T3 unrecorded event success is not alerted and the next worker round re-runs the event (running row ignored by fired_keys, then marked abandoned). (2) T3 known deviation confirmed: day_plan key conflict / long key never reach event_log, so no alert. (3) T8 a row committed after a higher id (concurrent writers) is skipped forever by the id cursor. (4) T8 one unrenderable event row fails the whole events step each pump, so all later alerts are blocked. T7 all pass.
+
+### 2026-09-27 11:13 MT · P3-T3/T7/T8 · builder · attempt 2 · started
+- Notes: combined fix round for gauntlet findings (breaker tests + reviewer should-fix + nits)
+
+### 2026-09-27 11:31 MT · P3-T10/P3-T11 · Verifier+Breaker · attempt 1 · finished
+- Result: Verifier PASS (clean tree, check.sh green 1210 passed, T10/T11 boxes ticked). Breaker FAIL (1 of 12 tests, 16 cases)
+- Commits: e0e7ef5 (P3-B4: T10/T11 gauntlet breaker tests)
+- Findings: test_a_due_event_that_raises_does_not_stop_the_later_ones: run_checkin and run_event_backup(due=True) do not isolate a raising fire, so one bad event aborts the loop and later due events (flatten) are never fired
+- Notes: DST, early-close (Thanksgiving Fri, Christmas Eve), stale vs stopped heartbeat, cross-process dedupe, worker/backup race, Questrade outage mid-archive, no SPY, upsert idempotency, Decimal summary maths all pass
+
+### 2026-09-27 11:25 MT · P3-T6 · Verifier+Breaker · attempt 1 · finished
+- Result: Verifier PASS, Breaker PASS
+- Commits: 6443479 (P3-B3: T6 gauntlet breaker tests)
+- Gate: check.sh passed on trunk at 988ecbe (1183 passed). 12/12 breaker tests pass
+- Findings: none failing. Note: the bot filters by chat id only, not by from_id (fine for a private chat, per SPEC)
+
+### 2026-09-27 11:15 MT · P3-T10/P3-T11 · builder · attempt 2 · started
+- Notes: combined fix round (breaker must-fix: isolate backup fire loops, reviewer should-fix: post-close isolation, summary_sent, nonces, batched upsert, nits)
+
+### 2026-09-27 11:15 MT · P3-T6 · Builder · attempt 2 · started
+- Result: fix round for review should-fix items (sync_closed 429, lost send retry, issuer methods, sender check) + nits
+
+### 2026-09-27 11:15 MT · P3-T4 · Builder · attempt 1 · finished
+- Result: done, all 9 plan checkboxes ticked
+- Commits: 366862f
+- Gate: check.sh passed (1101 tests), 45 new tests in tests/notify/test_messages.py
+- Notes: plan bug in test 7 (tzdata 2026c keeps America/Edmonton on UTC-6 after Nov 1 2026, so MST is checked on America/Denver). proposal_closed has no decided_at, so "Approved via telegram" has no time. Weekly link path /reports?week=<date> is not in the web-link contract yet. Added "Rejected: <error>" for blocked approvals (coordinator request).
+
+### 2026-09-27 11:16 MT · P3-T2/P3-T4 · Spec+Code reviewer · attempt 1 · started
+- Notes: reviewing b98087e (logging) and 366862f (MessageRenderer) against phase-3 plan, SPEC §8, §14, BR-30-34, BR-60
+
+### 2026-09-27 11:16 MT · P3-T2+T4 · Verifier+Breaker · attempt 1 · started
+- Notes: verifying b98087e and 366862f, then writing tests/gauntlet/test_p3_t2t4_breaker.py
+
+### 2026-09-27 11:20 MT · P3-T5/P3-T9 · Verifier+Breaker · attempt 1 · finished
+- Result: Verifier PASS (clean tree, check.sh 1183 passed, all T5/T9 boxes ticked). Breaker FAIL: 7 of 26 cases
+- Commits: 143708b
+- Gate: tests/gauntlet/test_p3_t5t9_breaker.py 19 passed, 7 failed
+- Findings: T5 split_text cuts HTML entities/tags on a hard cut and gives an empty last part for 4096 chars plus a newline (buttons lost). T9 heartbeat goes stale (156 s) during a long step. One worker error event per failing step (61 in 2 min), each relayed as an alert. run() dies when settings() raises (reads outside the guarded parts).
+
+### 2026-09-27 11:17 MT · P3-T5/T9 · Builder · attempt 2 · started
+- Notes: fix round for gauntlet findings (settings guard, relay/heartbeat tasks, split_text, alert flood, lock re-check, notifier retry rules, nits)
+
+### 2026-09-27 11:24 MT · P3-T2+T4 · Verifier+Breaker · attempt 1 · finished
+- Result: Verify PASS (clean tree, boxes ticked, the only check.sh failures are 5 tests in other tasks' breaker files). Breaker FAIL: 5 of 12 fail
+- Commits: 48d22ec (tests/gauntlet/test_p3_t2t4_breaker.py)
+- Findings: proposal_closed with a long error goes over 4096 (tail not capped). Alert text shows full bot or refresh tokens (renderer does not redact). Logs keep Questrade tokens in JSON bodies and in refresh_token= or access_token= kwargs. Kill-switch value floats render raw (0.30000000000000004). Escalation data None values show as "None"
+- Notes: installed tzdata (system and pip 2026d) keeps America/Edmonton on UTC-6 after 2026-03-08, and rendering follows it
+
+### 2026-09-27 11:28 MT · P3-T2/P3-T4 · Spec+Code reviewer · attempt 1 · finished
+- Result: PASS for both (0 must-fix). T2: 3 should-fix, 4 nits. T4: 2 should-fix, 6 nits
+- Commits: reviewed b98087e, 366862f (none made)
+- Gate: 55 T2/T4 tests pass on an export of 366862f, mypy clean on both modules
+- Findings: T2 should-fix: (1) redaction runs before rendering, so non-str values (httpx.URL, sets) leak the bot token via the JSON repr fallback (logging_setup.py:58-72). (2) JSON or dict forms ("refresh_token": "...") and DB URL passwords are not masked (logging_setup.py:29-44). (3) a pre-existing root handler (basicConfig, uvicorn) is kept, so lines print twice and the other copy is unredacted (logging_setup.py:96-126). T4 should-fix: (1) proposal_closed with a long error goes over 4096 (5047 measured), so the edit would fail (messages.py:157-170, 260-264). (2) alert error and message text are not passed through redact_text (messages.py:319-345)
+- Notes: tzdata 2026c (macOS) and 2026d (PyPI tzdata 2026.4, a transitive dependency of exchange_calendars) both keep America/Edmonton on UTC-6. P4 must pin tzdata so zoneinfo reads the same version (direct dependency plus an empty PYTHONTZPATH, or Debian tzdata 2026c or later). Builder decisions accepted: fractions for fmt_pct, per-switch reset text, no decided_at, /reports?week= (add it to contract 4), the safety net, sqlalchemy at WARNING, no logger cache
+
+### 2026-09-27 11:22 MT · P3-T2/T4 · Builder · attempt 2 · started
+- Notes: combined verify+fix round for T2/T4 breaker findings (redaction, length cap, Decimal rendering, None skipping, no show_locals)

@@ -390,6 +390,16 @@ Requirements: BRD BR-50–56, BR-62 (export route); SPEC §4.2 (manual CSV uploa
 | P4-T10 | Docker image and runtime | `docker/Dockerfile`, `docker/supervisord.conf`, `docker/entrypoint.sh`, `docker/docker-compose.dev.yml` | Multi-stage build (node:22-alpine → python:3.12-slim); non-root user; read-only root filesystem except `/tmp`; entrypoint runs `alembic upgrade head` as owner, creates the admin if missing, starts supervisord (api, worker, cron); no published ports; networks `trader_internal` + external `proxy`; volume `trader_dev_logs` | T1–T9 |
 | P4-T11 | Deploy script and LIVE deploy to dev | `docker/deploy.sh`, `web/tests/smoke.spec.ts` (Playwright) | `deploy.sh dev` builds amd64 on the Mac, ships to `192.168.68.73`, recreates `trader-dev`, and waits for `https://trader-dev.sunspinner.ca/api/health` = 200; Playwright smoke: login → dashboard → approve a seeded proposal | T10 |
 
+**Notes for the P4 planner, from the Phase 2–3 builds (2026-09-27):**
+- **Migration numbers:** 0003 (P2 broker hardening) and 0004 (P3 worker) are taken. The users migration is the next free number; check `alembic heads` at build time.
+- **Time zone data:** tzdata ≥ 2026c keeps America/Edmonton on UTC−6 all year. Make `tzdata>=2026.3` a direct dependency, set `PYTHONTZPATH=` (empty) in the image so zoneinfo uses the pinned package, and still install Debian `tzdata` for supercronic's `CRON_TZ`. Consider a test that asserts the IANA version is at least 2026c.
+- **Logging:** run uvicorn with `log_config=None` (or route `uvicorn`/`uvicorn.access` into the root handler) so API logs get the JSON shape and redaction from `configure_logging`.
+- **Web links:** serve the Telegram link paths `/dashboard?proposal=`, `/trades?position=`, `/journal?date=`, `/system` and `/reports?week=<date>`.
+- **Proposal decision time:** add `decided_at` to `ProposalView` so closed proposals can show the decision time.
+- **Web approvals:** approve and reject must use a `ProposalService` built with `entry_blocked=killswitches.entry_guard()`, the same as the engine and the bot.
+- **Worker shutdown:** supervisord `stopwaitsecs` ≥ 40 s for the worker, so its "stopped" heartbeat is written.
+- **Credentials:** `docker/.env.dev` was rebuilt on 2026-09-27 (new role passwords and APP_ENCRYPTION_KEY). Keep a secure backup of the env files outside the repo folder.
+
 ### 7.5 Phase 5: Replay, reports, hardening
 
 Requirements: BRD BR-41, BR-52, BR-54, BR-60–62, non-functional reliability; SPEC §7.4, §8, §16.

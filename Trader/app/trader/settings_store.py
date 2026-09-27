@@ -7,6 +7,7 @@ writes, and setting the corrupt key itself to a valid value repairs the store.
 
 from collections.abc import Callable
 from datetime import datetime
+from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 import structlog
@@ -28,6 +29,8 @@ OVERLAY_SYMBOL = "SPY"  # the market overlay reads SPY bars, so it must always b
 
 Market = Literal["US", "TSX"]
 Ticker = Annotated[str, StringConstraints(pattern=TICKER_PATTERN)]
+Currency = Literal["USD", "CAD"]
+ClaudeModel = Literal["claude-sonnet-5", "claude-haiku-4-5"]
 
 
 def _default_markets() -> list[Market]:
@@ -35,8 +38,9 @@ def _default_markets() -> list[Market]:
 
 
 class RuntimeSettings(BaseModel):
-    # The DB key of a setting is its alias. Phase 2 keys must use `alias=` (not `validation_alias`),
-    # because _DB_KEYS and model_dump(by_alias=True) are built from `alias`.
+    # The DB key of a setting is its alias. Every field added after Phase 1 declares alias= (even when the
+    # key equals the field name), because _DB_KEYS and model_dump(by_alias=True) are built from alias.
+    # No model_validator: keys are validated one at a time.
     model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
 
     approval_mode: Literal["manual", "auto"] = "manual"
@@ -57,6 +61,85 @@ class RuntimeSettings(BaseModel):
     # used but flagged stale (an error event and `fallback_stale` in the job detail).
     universe_fallback_stale_after_sessions: int = Field(
         3, ge=1, le=10, alias="universe.fallback_stale_after_sessions"
+    )
+    # --- Phase 2: account and FX (SPEC §7.3, BR-22)
+    starting_cash: Decimal = Field(
+        Decimal("720"), gt=0, le=Decimal("10000000"), allow_inf_nan=False, alias="starting_cash"
+    )
+    starting_cash_currency: Currency = Field("USD", alias="starting_cash_currency")
+    account_currency: Currency = Field("USD", alias="account_currency")
+    fx_cad_usd_rate: Decimal = Field(
+        Decimal("0.72"), gt=0, le=Decimal("2"), allow_inf_nan=False, alias="fx.cad_usd_rate"
+    )
+    fx_fee_pct: Decimal = Field(
+        Decimal("0.015"), ge=0, le=Decimal("0.10"), allow_inf_nan=False, alias="fx.fee_pct"
+    )
+    cash_account_mode: bool = Field(True, alias="cash_account_mode")
+    # --- risk (SPEC §6.1, BR-40)
+    risk_pct: Decimal = Field(
+        Decimal("0.02"), gt=0, le=Decimal("0.10"), allow_inf_nan=False, alias="risk_pct"
+    )
+    slippage_buffer: Decimal = Field(
+        Decimal("0.005"), ge=0, le=Decimal("0.05"), allow_inf_nan=False, alias="slippage_buffer"
+    )
+    no_entry_before_close_minutes: int = Field(30, ge=0, le=390, alias="no_entry_before_close_minutes")
+    # --- fill model (SPEC §7.2)
+    quote_poll_seconds: float = Field(2.0, ge=1.0, le=60, allow_inf_nan=False, alias="quote_poll_seconds")
+    stale_quote_seconds: float = Field(10.0, ge=1.0, le=300, allow_inf_nan=False, alias="stale_quote_seconds")
+    slippage_min: Decimal = Field(
+        Decimal("0.01"), ge=0, le=Decimal("1"), allow_inf_nan=False, alias="slippage_min"
+    )
+    slippage_bps: Decimal = Field(
+        Decimal("5"), ge=0, le=Decimal("100"), allow_inf_nan=False, alias="slippage_bps"
+    )
+    fees_commission: Decimal = Field(
+        Decimal("0"), ge=0, le=Decimal("100"), allow_inf_nan=False, alias="fees.commission"
+    )
+    fees_direct_route: bool = Field(False, alias="fees.direct_route")
+    fees_ecn_per_share: Decimal = Field(
+        Decimal("0.0035"), ge=0, le=Decimal("1"), allow_inf_nan=False, alias="fees.ecn_per_share"
+    )
+    fees_sec_rate: Decimal = Field(
+        Decimal("0.0000206"), ge=0, le=Decimal("0.001"), allow_inf_nan=False, alias="fees.sec_rate"
+    )
+    # --- proposals (SPEC §6.2)
+    proposal_ttl_entry_seconds: int = Field(300, ge=30, le=3600, alias="proposal_ttl_entry_seconds")
+    proposal_ttl_stop_seconds: int = Field(180, ge=30, le=3600, alias="proposal_ttl_stop_seconds")
+    proposal_ttl_exit_seconds: int = Field(300, ge=30, le=3600, alias="proposal_ttl_exit_seconds")
+    stop_escalation_seconds: int = Field(60, ge=10, le=3600, alias="stop_escalation_seconds")
+    auto_flatten_on_expiry: bool = Field(True, alias="auto_flatten_on_expiry")
+    # --- kill switches (SPEC §6.3, BR-41)
+    killswitch_daily_loss_pct: Decimal = Field(
+        Decimal("0.05"), gt=0, le=Decimal("1"), allow_inf_nan=False, alias="killswitch.daily_loss_pct"
+    )
+    killswitch_max_drawdown_pct: Decimal = Field(
+        Decimal("0.15"), gt=0, le=Decimal("1"), allow_inf_nan=False, alias="killswitch.max_drawdown_pct"
+    )
+    killswitch_expectancy_min_trades: int = Field(
+        50, ge=1, le=10000, alias="killswitch.expectancy_min_trades"
+    )
+    killswitch_expectancy_threshold_r: Decimal = Field(
+        Decimal("0"),
+        ge=Decimal("-10"),
+        le=Decimal("10"),
+        allow_inf_nan=False,
+        alias="killswitch.expectancy_threshold_r",
+    )
+    # --- Claude (SPEC §4.3)
+    claude_model: ClaudeModel = Field("claude-sonnet-5", alias="claude.model")
+    claude_daily_budget_usd: Decimal = Field(
+        Decimal("1.00"), ge=0, le=Decimal("100"), allow_inf_nan=False, alias="claude.daily_budget_usd"
+    )
+    claude_premarket_max_candidates: int = Field(50, ge=0, le=500, alias="claude.premarket_max_candidates")
+    # --- pre-market scan (SPEC §4.2)
+    premarket_gap_min_pct: Decimal = Field(
+        Decimal("0.03"), gt=0, le=Decimal("1"), allow_inf_nan=False, alias="premarket.gap_min_pct"
+    )
+    premarket_news_filter: str = Field(
+        "news_date_today", pattern=FINVIZ_FILTERS_PATTERN, alias="premarket.news_filter"
+    )
+    premarket_earnings_filter: str = Field(
+        "earningsdate_today", pattern=FINVIZ_FILTERS_PATTERN, alias="premarket.earnings_filter"
     )
 
     @field_validator("markets_enabled")

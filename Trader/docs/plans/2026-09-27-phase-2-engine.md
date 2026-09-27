@@ -1176,7 +1176,7 @@ Expected: `Running upgrade 0001 -> 0002`. Then run `uv --directory Trader/app ru
     The proposal TTL for a `cancel` proposal is `proposal_ttl_exit_seconds`. Percentages are fractions (`0.02` = 2%). `slippage_bps` is basis points (`5` = 0.05%).
   - `trader.engine.runs`: `RunInfo(id, mode, started_at, label)`; `SimAccountInfo(id, run_id, currency, starting_cash, source_amount, source_currency, fx_rate, fx_fee)`; `StartingBalance(amount, fx_rate, fx_fee)`; `starting_balance(settings) -> StartingBalance`; `ensure_sim_account(session, run_id, settings, now) -> SimAccountInfo` (creates the account and its one `deposit` ledger row once; the deposit settles on its own trade date); `get_live_run(factory, clock, settings) -> RunInfo` (creates the one active live run and its account, or returns the existing one; safe under concurrency via the partial unique index); `sim_account(factory, run_id) -> SimAccountInfo | None`.
 
-- [ ] **Step 1: Write the failing settings tests**
+- [x] **Step 1: Write the failing settings tests**
 
 `Trader/app/tests/test_runtime_settings_phase2.py`:
 ```python
@@ -1294,12 +1294,12 @@ def test_store_sets_dotted_phase2_key(db_factory: sessionmaker[Session]) -> None
     assert loaded.claude_model == "claude-haiku-4-5"
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `uv --directory Trader/app run pytest tests/test_runtime_settings_phase2.py -q`
 Expected: FAIL with `AttributeError: 'RuntimeSettings' object has no attribute 'starting_cash'`.
 
-- [ ] **Step 3: Add the Phase 2 fields to `RuntimeSettings`**
+- [x] **Step 3: Add the Phase 2 fields to `RuntimeSettings`**
 
 In `Trader/app/trader/settings_store.py` add `from decimal import Decimal` to the imports, then add below `Ticker = ...`:
 ```python
@@ -1376,12 +1376,12 @@ Add these fields to `RuntimeSettings`, after `open_bar_lookback_sessions` and be
 ```
 Also update the comment above `model_config` to: `# The DB key of a setting is its alias. Every field added after Phase 1 declares alias= (even when the key equals the field name), because _DB_KEYS and model_dump(by_alias=True) are built from alias. No model_validator: keys are validated one at a time.`
 
-- [ ] **Step 4: Run the settings tests, including Phase 1's**
+- [x] **Step 4: Run the settings tests, including Phase 1's**
 
 Run: `uv --directory Trader/app run pytest tests/test_runtime_settings_phase2.py tests/db/test_settings_store.py -q`
 Expected: all pass. (`Decimal` values are stored as JSON strings by `model_dump(mode="json")`, which validates back to `Decimal`.)
 
-- [ ] **Step 5: Write the failing run and sim-account tests**
+- [x] **Step 5: Write the failing run and sim-account tests**
 
 `Trader/app/tests/engine/__init__.py`: empty file.
 
@@ -1460,12 +1460,12 @@ def test_cad_account_deposit_applies_fx_once(db_factory: sessionmaker[Session]) 
     assert rows[0].trade_date == rows[0].settle_date == date(2026, 10, 6)
 ```
 
-- [ ] **Step 6: Run to see them fail**
+- [x] **Step 6: Run to see them fail**
 
 Run: `uv --directory Trader/app run pytest tests/engine/test_runs.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.engine'`.
 
-- [ ] **Step 7: Implement `trader/engine/runs.py`**
+- [x] **Step 7: Implement `trader/engine/runs.py`**
 
 `Trader/app/trader/engine/__init__.py`: empty file.
 
@@ -1605,7 +1605,7 @@ def sim_account(factory: sessionmaker[Session], run_id: int) -> SimAccountInfo |
         return _info(acct) if acct is not None else None
 ```
 
-- [ ] **Step 8: Run the tests, the gate, commit and push**
+- [x] **Step 8: Run the tests, the gate, commit and push**
 
 Run: `uv --directory Trader/app run pytest tests/engine/test_runs.py tests/test_runtime_settings_phase2.py -q` → all pass.
 Run: `uv --directory Trader/app run ruff format .` then `bash Trader/app/scripts/check.sh` → all pass.

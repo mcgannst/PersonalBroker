@@ -458,16 +458,16 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 - **Event backup:** `key` given → `fire(key, session)` once; `due=True` → fire every due event. With the idempotent `fire`, a backup after the worker already fired is `skipped` (not an error). Exit status (T12): 0 for `fired`, `skipped`, `too_early`, `not_session`, `not_scheduled`; 1 for `failed` and `missed`.
 
 **Acceptance tests:**
-- [ ] 1. On Thanksgiving each of the three jobs returns the not-a-session result and sends nothing.
-- [ ] 2. Pre-open with everything healthy sends one `preopen` message with six OK checks; with `notify_when_ok = false` it sends nothing and the detail has `ok: true`.
-- [ ] 3. Pre-open with a token check that raises, a heartbeat 10 minutes old and `max_drawdown_pct` tripped reports three `error` checks with those details and sends the message.
-- [ ] 4. Pre-open with a stale fallback universe reports `error`, a fresh fallback `warning`, and a missing pre-market run `warning`.
-- [ ] 5. Check-in `13:30` on 2026-11-27 (13:00 close) is skipped; `11:30` on a normal day sends one message with the given label.
-- [ ] 6. Running a check-in twice sends one message (the dedupe key).
-- [ ] 7. Check-in at 11:30:00 ET with `entry_cancel` due and unfired calls `fire("entry_cancel")`; with it already fired it does not call `fire`.
-- [ ] 8. `run_event_backup(key="orb_open")` passes the `fire` result through; when the fake `fire` says `skipped` (the worker fired first) that is returned unchanged.
-- [ ] 9. `run_event_backup(due=True)` fires every due event and none that is not yet due.
-- [ ] 10. Gate and commit `P3-T10: ...`.
+- [x] 1. On Thanksgiving each of the three jobs returns the not-a-session result and sends nothing.
+- [x] 2. Pre-open with everything healthy sends one `preopen` message with six OK checks; with `notify_when_ok = false` it sends nothing and the detail has `ok: true`.
+- [x] 3. Pre-open with a token check that raises, a heartbeat 10 minutes old and `max_drawdown_pct` tripped reports three `error` checks with those details and sends the message.
+- [x] 4. Pre-open with a stale fallback universe reports `error`, a fresh fallback `warning`, and a missing pre-market run `warning`.
+- [x] 5. Check-in `13:30` on 2026-11-27 (13:00 close) is skipped; `11:30` on a normal day sends one message with the given label.
+- [x] 6. Running a check-in twice sends one message (the dedupe key).
+- [x] 7. Check-in at 11:30:00 ET with `entry_cancel` due and unfired calls `fire("entry_cancel")`; with it already fired it does not call `fire`.
+- [x] 8. `run_event_backup(key="orb_open")` passes the `fire` result through; when the fake `fire` says `skipped` (the worker fired first) that is returned unchanged.
+- [x] 9. `run_event_backup(due=True)` fires every due event and none that is not yet due.
+- [x] 10. Gate and commit `P3-T10: ...`.
 
 ---
 

@@ -1,0 +1,33 @@
+# trader (prod) on the shared Docker host (SPEC §15, §15.1), deployed by `TRADER_TAG=<tag> bash docker/deploy.sh
+# prod` from Phase 6. The same as docker-compose.dev.yml with the prod names: NPM proxy host
+# `trader.sunspinner.ca` forwards to http://trader:8000 over the external `proxy` network; no host port.
+name: trader
+
+services:
+  trader:
+    image: trader:${TRADER_TAG}
+    container_name: trader
+    env_file: ${TRADER_ENV_FILE:-.env.prod}
+    environment:
+      APP_ENV: prod
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    volumes:
+      - trader_logs:/app/logs
+    networks:
+      - trader_internal
+      - proxy
+    init: true
+    # At least the sum of supervisord's stopwaitsecs (api 15 + worker 60 + cron 30).
+    stop_grace_period: 120s
+    restart: unless-stopped
+
+volumes:
+  trader_logs: {}
+
+networks:
+  trader_internal:
+    driver: bridge
+  proxy:
+    external: true

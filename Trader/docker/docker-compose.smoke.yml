@@ -1,0 +1,47 @@
+# A throwaway local stack for the end-to-end smoke (P4-T17, run by docker/smoke.sh): the real image in `api`
+# mode against a throwaway PostgreSQL 14. Ports are published on the Mac's 127.0.0.1 only, and smoke.sh
+# removes everything (`down -v`) after each run. It never touches trader_dev.
+name: trader-smoke
+
+services:
+  db:
+    image: postgres:14-alpine
+    environment:
+      POSTGRES_DB: trader_smoke
+      POSTGRES_USER: postgres
+      # Protects nothing: the database lives only for one smoke run and listens on localhost.
+      POSTGRES_PASSWORD: smoke-postgres
+    volumes:
+      - ./smoke/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "127.0.0.1:15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d trader_smoke"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - smoke
+
+  trader:
+    image: trader:smoke
+    command: ["api"]
+    env_file: ${SMOKE_ENV_FILE:?SMOKE_ENV_FILE must name the smoke env file}
+    environment:
+      APP_ENV: dev
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    ports:
+      - "127.0.0.1:18000:8000"
+    init: true
+    stop_grace_period: 30s
+    networks:
+      - smoke
+
+networks:
+  smoke:
+    driver: bridge

@@ -1,0 +1,22 @@
+# Build context of the image (docker/Dockerfile, context = Trader/). Secrets never enter it: the compose
+# file passes docker/.env.* to the container at run time.
+docker/.env*
+**/.env*
+.git
+**/.git
+**/.DS_Store
+**/__pycache__
+app/.venv
+app/tests
+app/.mypy_cache
+app/.pytest_cache
+app/.ruff_cache
+web/node_modules
+web/dist
+web/test-results
+web/playwright-report
+web/*.tsbuildinfo
+spikes
+reports
+docs
+build

@@ -1,0 +1,37 @@
+# trader-dev on the shared Docker host (SPEC §15.1), deployed by `bash docker/deploy.sh dev`.
+# The image is built on the Mac and shipped with `docker save | ssh ... docker load`, so this file never builds.
+# NPM proxy host `trader-dev.sunspinner.ca` forwards to http://trader-dev:8000 over the external `proxy`
+# network (Home LAN only access list); no host port is published.
+# Secrets come from the env file at run time: $TRADER_ENV_FILE (an absolute path, set by deploy.sh), else
+# docker/.env.dev next to this file. Compose reads it on the Mac, so a remote daemon never needs the file.
+name: trader-dev
+
+services:
+  trader:
+    image: trader:dev
+    container_name: trader-dev
+    env_file: ${TRADER_ENV_FILE:-.env.dev}
+    environment:
+      APP_ENV: dev
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    volumes:
+      - trader_dev_logs:/app/logs
+    networks:
+      - trader_internal
+      - proxy
+    init: true
+    # At least the sum of supervisord's stopwaitsecs (api 15 + worker 60 + cron 30), so the worker writes
+    # its `stopped` heartbeat before Docker kills anything.
+    stop_grace_period: 120s
+    restart: unless-stopped
+
+volumes:
+  trader_dev_logs: {}
+
+networks:
+  trader_internal:
+    driver: bridge
+  proxy:
+    external: true

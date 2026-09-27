@@ -314,20 +314,25 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - Responses never contain the password hash, the TOTP secret (except the one-time setup response) or the session token (only the cookie).
 
 **Acceptance tests (real DB; `TestClient` on `https://testserver` with the auth router plus a test-only protected route):**
-- [ ] 1. Login with the right password → 200, `SessionOut` with a CSRF token, a `Set-Cookie` with `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`; the DB row stores the SHA-256 of the token, not the token.
-- [ ] 2. A protected route without a cookie, with a cookie whose MAC is changed by one character, with a revoked session, past `expires_at` and past the idle limit → 401 each, and the response clears the cookie.
-- [ ] 3. A wrong password and an unknown username give the same 401 body; both call Argon2 verification once (spy).
-- [ ] 4. Five wrong passwords → the sixth attempt with the RIGHT password gets 429 with `Retry-After`; after `web.lockout_minutes` of fake time it succeeds and `failed_logins` is 0.
-- [ ] 5. Eleven attempts from one IP within a minute (`web.login_rate_per_minute = 10`) → the eleventh gets 429 without touching the DB; another IP is unaffected.
-- [ ] 6. TOTP: setup (password) → confirm with a valid code → login without a code gets 401, with the code 200; the same code again (same step) → 401; disable with password and code → login without a code works.
-- [ ] 7. Password change: a 7-character new password → 422 (no password in the body); an 8-character one → 200, other sessions get 401, the current one still works; the audit row has no password.
-- [ ] 8. `POST` to a protected route without `X-CSRF-Token`, or with another session's token → 403 `csrf`; with the right token → 200; a `GET` needs none.
-- [ ] 9. An `Origin: https://evil.example` header on login or on a protected `POST` → 403; the configured origin and the request host → accepted.
-- [ ] 10. Logout revokes the session (the same cookie then gets 401) and clears the cookie.
-- [ ] 11. `ensure_admin`: empty table + env → `created` (Argon2 hash stored, audit row); called again → `exists`; with a 7-character password → `rejected` and no row, with an 8-character one → `created`; `ADMIN_USERNAME=Stephen!` → `rejected` and no row; without env → `not_configured`.
-- [ ] 12. No response body or captured log line (structlog and stdlib) contains the password, the TOTP secret after setup, a code, or the raw session token, across tests 1–11.
-- [ ] 13. A login with outdated Argon2 parameters (hash made with `time_cost=1`) succeeds and the stored hash is replaced.
-- [ ] 14. Gate and commit `P4-T4: ...`.
+- [x] 1. Login with the right password → 200, `SessionOut` with a CSRF token, a `Set-Cookie` with `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`; the DB row stores the SHA-256 of the token, not the token.
+- [x] 2. A protected route without a cookie, with a cookie whose MAC is changed by one character, with a revoked session, past `expires_at` and past the idle limit → 401 each, and the response clears the cookie.
+- [x] 3. A wrong password and an unknown username give the same 401 body; both call Argon2 verification once (spy).
+- [x] 4. Five wrong passwords → the sixth attempt with the RIGHT password gets 429 with `Retry-After`; after `web.lockout_minutes` of fake time it succeeds and `failed_logins` is 0.
+- [x] 5. Eleven attempts from one IP within a minute (`web.login_rate_per_minute = 10`) → the eleventh gets 429 without touching the DB; another IP is unaffected.
+- [x] 6. TOTP: setup (password) → confirm with a valid code → login without a code gets 401, with the code 200; the same code again (same step) → 401; disable with password and code → login without a code works.
+- [x] 7. Password change: a 7-character new password → 422 (no password in the body); an 8-character one → 200, other sessions get 401, the current one still works; the audit row has no password.
+- [x] 8. `POST` to a protected route without `X-CSRF-Token`, or with another session's token → 403 `csrf`; with the right token → 200; a `GET` needs none.
+- [x] 9. An `Origin: https://evil.example` header on login or on a protected `POST` → 403; the configured origin and the request host → accepted.
+- [x] 10. Logout revokes the session (the same cookie then gets 401) and clears the cookie.
+- [x] 11. `ensure_admin`: empty table + env → `created` (Argon2 hash stored, audit row); called again → `exists`; with a 7-character password → `rejected` and no row, with an 8-character one → `created`; `ADMIN_USERNAME=Stephen!` → `rejected` and no row; without env → `not_configured`.
+- [x] 12. No response body or captured log line (structlog and stdlib) contains the password, the TOTP secret after setup, a code, or the raw session token, across tests 1–11.
+- [x] 13. A login with outdated Argon2 parameters (hash made with `time_cost=1`) succeeds and the stored hash is replaced.
+- [x] 14. Gate and commit `P4-T4: ...`.
+
+**Build notes (T4, 2026-09-27; names other tasks use):**
+- Additive names in `trader.api.auth`: `CLEAR_COOKIE` (the `Set-Cookie` value that drops the session; sent with every 401 and with logout), `check_origin(request)` (login and `check_csrf` use it), `client_ip(request)`, `login_limiter(request, services)` (the one `LoginLimiter`, kept on `app.state.login_limiter`), `cookie_max_age(services)`, `session_info(services, user) -> SessionOut` (`GET /auth/me`).
+- Error codes: 401 `unauthorized` (session or login), 403 `csrf` (missing or wrong `X-CSRF-Token`), 403 `forbidden` (foreign `Origin`), 429 `too_many_requests` (rate limit or lockout, with `Retry-After`), **403 `bad_credentials`** for a signed-in user's wrong current password or code on password change and TOTP setup/confirm/disable (orchestrator ruling: never 401, which the SPA treats as a lost session; these do not count toward the login lockout), 409 `conflict` (TOTP already on / not started / already off), 422 `validation` (new password under 8 characters or equal to the current one).
+- Login lower-cases and strips the username before the lookup (phones capitalise the first letter). When TOTP is on, `PUT /auth/password` also needs a valid `totp` code. A lock that has run out restarts the failure count. `ensure_admin` also writes one `critical` `event_log` row (source `auth`) with the reason when it rejects the env values.
 
 ---
 

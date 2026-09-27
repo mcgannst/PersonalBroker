@@ -10,6 +10,7 @@ import { Card, Empty, ErrorBox, Loading } from "../components/ui";
 import CatalystCard from "./dashboard/CatalystCard";
 import "./dashboard/dashboard.css";
 import RankingTable from "./dashboard/RankingTable";
+import { isIsoDate } from "./performance/dates";
 
 function CandidatesBody({ data }: { data: CandidatesOut }) {
   return (
@@ -37,8 +38,11 @@ function CandidatesBody({ data }: { data: CandidatesOut }) {
 export default function CandidatesPage() {
   const api = useApi();
   const [params, setParams] = useSearchParams();
-  const date = params.get("date") || undefined;
-  const q = useQuery({ queryKey: qk.candidates(date), queryFn: () => api.candidates(date) });
+  const raw = params.get("date") || undefined;
+  // A malformed ?date= never reaches the API (the same check as Journal and Reports).
+  const badDate = raw !== undefined && !isIsoDate(raw);
+  const date = badDate ? undefined : raw;
+  const q = useQuery({ queryKey: qk.candidates(date), queryFn: () => api.candidates(date), enabled: !badDate });
   const pickerValue = date ?? q.data?.session_date ?? "";
 
   function changeDate(value: string) {
@@ -57,8 +61,14 @@ export default function CandidatesPage() {
           <input type="date" value={pickerValue} onChange={(e) => changeDate(e.target.value)} />
         </label>
       </div>
-      {q.isError && <ErrorBox error={q.error} onRetry={() => void q.refetch()} />}
-      {q.data ? <CandidatesBody data={q.data} /> : q.isPending && <Loading />}
+      {badDate ? (
+        <Empty>“{raw}” is not a date (use YYYY-MM-DD).</Empty>
+      ) : (
+        <>
+          {q.isError && <ErrorBox error={q.error} onRetry={() => void q.refetch()} />}
+          {q.data ? <CandidatesBody data={q.data} /> : q.isPending && <Loading />}
+        </>
+      )}
     </main>
   );
 }

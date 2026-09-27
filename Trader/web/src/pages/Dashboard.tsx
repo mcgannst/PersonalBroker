@@ -8,7 +8,9 @@ import { useApi } from "../api/client";
 import { qk } from "../api/queryKeys";
 import type { DashboardOut, DecisionOut } from "../api/types";
 import { Badge, Button, Empty, ErrorBox, Light, Loading } from "../components/ui";
+import { skewFrom } from "../layout/serverTime";
 import { fmtDate } from "../lib/format";
+import { parseId } from "../lib/params";
 import "./dashboard/dashboard.css";
 import EventList from "./dashboard/EventList";
 import KillSwitchLights from "./dashboard/KillSwitchLights";
@@ -18,13 +20,6 @@ import PnlTiles from "./dashboard/PnlTiles";
 import PositionCard from "./dashboard/PositionCard";
 import ProposalPanel from "./dashboard/ProposalPanel";
 import Timeline from "./dashboard/Timeline";
-
-/** A positive whole-number id from a query parameter, else null. */
-function parseId(raw: string | null): number | null {
-  if (!raw || !/^\d{1,15}$/.test(raw)) return null;
-  const id = Number(raw);
-  return id > 0 ? id : null;
-}
 
 function HeaderRow({ data }: { data: DashboardOut }) {
   const problem = !data.token.ok || !data.worker.ok;
@@ -89,8 +84,7 @@ function CandidatesSummary({ data }: { data: DashboardOut }) {
 
 function DashboardBody({ data, updatedAt, proposalId }: { data: DashboardOut; updatedAt: number; proposalId: number | null }) {
   const [decisions, setDecisions] = useState<DecisionOut[]>([]);
-  const parsed = Date.parse(data.server_time);
-  const skew = Number.isNaN(parsed) || !updatedAt ? 0 : parsed - updatedAt;
+  const skew = updatedAt ? skewFrom(data.server_time, updatedAt) : 0;
   const pendingIds = new Set(data.pending.map((p) => p.id));
   const showPanel = proposalId !== null && !pendingIds.has(proposalId);
 

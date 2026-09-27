@@ -20,11 +20,11 @@ export function RHistogram({ bins, width, height = 180 }: { bins: HistogramBinOu
     <figure aria-label="R multiples" style={{ margin: 0 }}>
       <ChartFrame height={height} width={width}>
         <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
           <XAxis dataKey="label" fontSize={10} interval={0} />
           <YAxis allowDecimals={false} width={32} fontSize={11} />
           <Tooltip formatter={(v: number) => [v, "Trades"]} />
-          <Bar dataKey="count" name="Trades" fill="#6366f1" isAnimationActive={false} />
+          <Bar dataKey="count" name="Trades" fill="var(--chart-bar)" isAnimationActive={false} />
         </BarChart>
       </ChartFrame>
     </figure>

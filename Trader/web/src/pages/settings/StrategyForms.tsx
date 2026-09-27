@@ -9,7 +9,7 @@ import { qk } from "../../api/queryKeys";
 import type { Items, JsonObject, StrategyIn, StrategyOut } from "../../api/types";
 import { Button, ErrorBox, Loading, errorMessage } from "../../components/ui";
 import { fmtDateTime } from "../../lib/format";
-import { CHECK_LABEL, FieldInput } from "./FieldInput";
+import { FieldInput } from "./FieldInput";
 import { useDraft, useObjectDraft } from "./useDraft";
 import { fieldErrorsFor, sameValue, validateValue, wireValue } from "./validate";
 
@@ -62,7 +62,7 @@ function StrategyCard({ strategy }: { strategy: StrategyOut }) {
           {strategy.updated_by ? ` by ${strategy.updated_by}` : ""}
         </p>
       </header>
-      <label style={CHECK_LABEL}>
+      <label className="check-row">
         <input
           type="checkbox"
           checked={enabled}

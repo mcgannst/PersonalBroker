@@ -253,3 +253,50 @@ describe("createHttpClient: 401 and CSRF (test 2)", () => {
     expect(calls()).toHaveLength(1);
   });
 });
+
+describe("createHttpClient: path segments", () => {
+  it.each([".", "..", ""])("refuses the segment %j before any request", async (bad) => {
+    const client = await loggedIn();
+    const err = (await client.putJournal(bad, { notes: "x" }).catch((e: unknown) => e)) as ApiError;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.code).toBe("bad_request");
+    expect(calls()).toHaveLength(0);
+  });
+
+  it("encodes other odd values inside one segment", async () => {
+    const client = await loggedIn();
+    fetchMock.mockResolvedValueOnce(json({}));
+    await client.putSetting("a/../b?c#d", 1);
+    expect(calls()[0]![0]).toBe("/api/settings/a%2F..%2Fb%3Fc%23d");
+    // A percent-encoded dot is encoded again, so it is never a dot segment either.
+    fetchMock.mockResolvedValueOnce(json({}));
+    await client.putSetting("%2e%2E", 1);
+    expect(calls()[1]![0]).toBe("/api/settings/%252e%252E");
+  });
+});
+
+describe("createHttpClient: wrong credentials are not a session expiry (the 401 ruling)", () => {
+  it.each([
+    [403, "bad_credentials", "Wrong password or code."],
+    [422, "validation", "The new password is too short."],
+  ])("a %i from /auth/password keeps the session and the server's message", async (status, code, message) => {
+    const onUnauthorized = vi.fn();
+    const client = await loggedIn({ onUnauthorized });
+    fetchMock.mockResolvedValueOnce(errorBody(status, code, message));
+    const body = { current_password: "x", new_password: "abcdefgh" };
+    const err = (await client.changePassword(body).catch((e: unknown) => e)) as ApiError;
+    expect(err).toMatchObject({ status, code, message });
+    expect(onUnauthorized).not.toHaveBeenCalled();
+    expect(client.csrfToken()).toBe(sessionOut.csrf_token);
+    expect(calls()).toHaveLength(1);
+  });
+
+  it("a 401 outside /auth/login is still a session expiry", async () => {
+    const onUnauthorized = vi.fn();
+    const client = await loggedIn({ onUnauthorized });
+    fetchMock.mockResolvedValueOnce(errorBody(401, "unauthorized", "Please log in"));
+    await client.totpDisable({ password: "x", code: "123456" }).catch(() => undefined);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    expect(client.csrfToken()).toBeNull();
+  });
+});

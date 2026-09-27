@@ -7,6 +7,7 @@ import { useApi } from "../../api/client";
 import { qk } from "../../api/queryKeys";
 import type { JobRunIn, ManualJob } from "../../api/types";
 import { Button, Card, errorMessage } from "../../components/ui";
+import { Confirm } from "../settings/Confirm";
 
 /** `trader token-refresh` takes no options: the server refuses a date or force for it. */
 const NO_OPTIONS: ReadonlySet<ManualJob> = new Set<ManualJob>(["token-refresh"]);
@@ -71,20 +72,12 @@ export function RunJob({ jobs }: { jobs: ManualJob[] }) {
           />
         </div>
         <p className="small muted">Leave the date empty for the job&apos;s own default session.</p>
-        <label className="row">
+        <label className="check-row">
           <input type="checkbox" checked={force} disabled={noOptions} onChange={(e) => setForce(e.target.checked)} />
           Force
         </label>
         {confirming ? (
-          <div className="stack">
-            <p>{`Run ${summary}?`}</p>
-            <div className="row">
-              <Button variant="primary" onClick={confirm}>
-                Confirm
-              </Button>
-              <Button onClick={() => setConfirming(false)}>Cancel</Button>
-            </div>
-          </div>
+          <Confirm message={`Run ${summary}?`} confirmLabel="Confirm" variant="primary" onConfirm={confirm} onCancel={() => setConfirming(false)} />
         ) : (
           <div>
             <Button variant="primary" busy={run.isPending} disabled={job === ""} onClick={() => setConfirming(true)}>

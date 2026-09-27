@@ -2,8 +2,7 @@
 // drawdown (P4-T13).
 import type { PnlOut } from "../../api/types";
 import { Stat } from "../../components/ui";
-import { fmtMoney, fmtPct } from "../../lib/format";
-import { unsignedPct } from "./labels";
+import { fmtMoney, fmtRate } from "../../lib/format";
 
 export default function PnlTiles({ pnl }: { pnl: PnlOut }) {
   return (
@@ -14,7 +13,7 @@ export default function PnlTiles({ pnl }: { pnl: PnlOut }) {
         <Stat label="Unrealized" value={fmtMoney(pnl.unrealized)} sub={pnl.unrealized_partial ? "partial" : undefined} />
         <Stat label="Week to date" value={fmtMoney(pnl.week_to_date)} />
         <Stat label="Equity" value={fmtMoney(pnl.equity)} sub={`peak ${fmtMoney(pnl.peak_equity)}`} />
-        <Stat label="Drawdown" value={unsignedPct(fmtPct(pnl.drawdown_pct))} />
+        <Stat label="Drawdown" value={fmtRate(pnl.drawdown_pct)} />
       </div>
     </section>
   );

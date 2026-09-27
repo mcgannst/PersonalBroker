@@ -36,8 +36,8 @@ function WeekReport({ week }: { week: TradingWeek }) {
         Week of {week.monday} to {week.friday}
       </h2>
       <nav className="row" style={{ gap: 12, flexWrap: "wrap" }} aria-label="Weeks">
-        <Link to={weekHref(addDays(week.friday, -7))}>← Previous week</Link>
-        <Link to={weekHref(addDays(week.friday, 7))}>Next week →</Link>
+        <Link className="link-touch" to={weekHref(addDays(week.friday, -7))}>← Previous week</Link>
+        <Link className="link-touch" to={weekHref(addDays(week.friday, 7))}>Next week →</Link>
       </nav>
       <p className="small muted">The Claude commentary arrives with the weekly report.</p>
 
@@ -77,7 +77,7 @@ function WeekReport({ week }: { week: TradingWeek }) {
                 const row = byDate.get(day);
                 return (
                   <li key={day} className="row" style={{ gap: 8, flexWrap: "wrap", minHeight: 44, alignItems: "center" }}>
-                    <Link to={`/journal?date=${day}`}>{fmtDate(day)}</Link>
+                    <Link className="link-touch" to={`/journal?date=${day}`}>{fmtDate(day)}</Link>
                     <span>{row ? answerText(row) : "Not answered"}</span>
                     {row?.notes && <span className="small muted">{row.notes}</span>}
                   </li>

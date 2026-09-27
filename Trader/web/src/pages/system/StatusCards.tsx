@@ -3,10 +3,10 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 
-import type { NotificationOut, SystemOut, TokenOut, WorkerOut } from "../../api/types";
+import type { MetaOut, NotificationOut, SystemOut, TokenOut, WorkerOut } from "../../api/types";
 import { Card, Empty, Light, Table } from "../../components/ui";
-import { displayZoneInfo, fmtDateTime, fmtDuration } from "../../lib/format";
-import { TelegramTest } from "./TelegramTest";
+import { zoneCheck } from "../../layout/serverTime";
+import { fmtDateTime, fmtDuration } from "../../lib/format";
 
 export const WORKER_DOWN_TEXT = "worker not running: approvals and fills will not happen";
 export const TELEGRAM_OFF_TEXT = "Telegram not configured: nothing is relayed to your phone; approve on the Dashboard";
@@ -49,7 +49,7 @@ function TokenCard({ token }: { token: TokenOut }) {
       />
       {!token.ok && (
         <p className="small">
-          <Link to="/settings#questrade">Paste a new token</Link>
+          <Link className="link-touch" to="/settings#questrade">Paste a new token</Link>
         </p>
       )}
     </Card>
@@ -79,18 +79,33 @@ function TelegramCard({ configured }: { configured: boolean }) {
     <Card title="Telegram">
       <Light tone={configured ? "ok" : "bad"} label={configured ? "Telegram configured" : "Telegram not configured"} />
       {!configured && <p className="small tone-bad">{TELEGRAM_OFF_TEXT}</p>}
-      <TelegramTest />
+      <p className="small">
+        <Link className="link-touch" to="/settings#telegram">
+          Send a test message
+        </Link>
+      </p>
     </Card>
   );
 }
 
-function TimeZoneCard({ serverOffsetMinutes }: { serverOffsetMinutes: number | null }) {
-  const info = displayZoneInfo();
-  const offset = info.serverOffsetMinutes ?? serverOffsetMinutes;
-  const offsetText = offset === null ? "" : ` (${utcOffsetLabel(offset)})`;
+/**
+ * The time-zone check, derived from the `/api/meta` answer itself (the same comparison the shell makes to
+ * pick the display mode), so it re-renders when meta arrives and never shows a stale "OK".
+ */
+function TimeZoneCard({ meta }: { meta: MetaOut | null }) {
+  if (meta === null) {
+    return (
+      <Card title="Time zone">
+        <Light tone="muted" label="Time zone: checking" />
+        <p className="small muted">Waiting for the server&apos;s time zone.</p>
+      </Card>
+    );
+  }
+  const check = zoneCheck(meta);
+  const offsetText = ` (${utcOffsetLabel(check.serverOffsetMinutes)})`;
   return (
     <Card title="Time zone">
-      {info.mode === "zone" ? (
+      {check.mode === "zone" ? (
         <>
           <Light tone="ok" label="Time zone OK" />
           <p className="small">Your browser&apos;s time-zone data agrees with the server&apos;s{offsetText}.</p>
@@ -103,20 +118,18 @@ function TimeZoneCard({ serverOffsetMinutes }: { serverOffsetMinutes: number | n
           </p>
         </>
       )}
-      {info.browserOffsetMinutes !== null && info.serverOffsetMinutes !== null && (
-        <Facts
-          rows={[
-            ["Browser", utcOffsetLabel(info.browserOffsetMinutes)],
-            ["Server", utcOffsetLabel(info.serverOffsetMinutes)],
-          ]}
-        />
-      )}
+      <Facts
+        rows={[
+          ["Browser", check.browserOffsetMinutes === null ? "zone unknown" : utcOffsetLabel(check.browserOffsetMinutes)],
+          ["Server", utcOffsetLabel(check.serverOffsetMinutes)],
+        ]}
+      />
     </Card>
   );
 }
 
-/** The status cards. `serverOffsetMinutes` is `meta.tz_offset_minutes` (null while meta loads). */
-export function StatusCards({ system, serverOffsetMinutes }: { system: SystemOut; serverOffsetMinutes: number | null }) {
+/** The status cards. `meta` is the `/api/meta` answer (null while it loads or when it failed). */
+export function StatusCards({ system, meta }: { system: SystemOut; meta: MetaOut | null }) {
   return (
     <div className="grid">
       <TokenCard token={system.token} />
@@ -132,7 +145,7 @@ export function StatusCards({ system, serverOffsetMinutes }: { system: SystemOut
           ]}
         />
       </Card>
-      <TimeZoneCard serverOffsetMinutes={serverOffsetMinutes} />
+      <TimeZoneCard meta={meta} />
     </div>
   );
 }

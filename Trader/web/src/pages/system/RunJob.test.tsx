@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -15,8 +15,11 @@ describe("RunJob (acceptance test 4)", () => {
     await userEvent.click(screen.getByLabelText("Force"));
     await userEvent.click(screen.getByRole("button", { name: "Run" }));
     expect(api.callsTo("runJob")).toEqual([]);
-    await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveTextContent("Run nightly with Force?");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(api.callsTo("runJob")).toEqual([["nightly", { force: true }]]));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(await screen.findByText("nightly launched for 2026-10-07")).toBeInTheDocument();
   });
 

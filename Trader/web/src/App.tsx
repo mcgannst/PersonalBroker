@@ -16,6 +16,7 @@ import { AuthProvider, notifyUnauthorized } from "./layout/AuthContext";
 import { Layout } from "./layout/Layout";
 import { NotFound } from "./layout/NotFound";
 import { RequireAuth } from "./layout/RequireAuth";
+import { ROUTER_FUTURE } from "./layout/routerFuture";
 import CandidatesPage from "./pages/Candidates";
 import DashboardPage from "./pages/Dashboard";
 import JournalPage from "./pages/Journal";
@@ -70,7 +71,7 @@ export function App({ api }: { api?: ApiClient } = {}) {
   return (
     <QueryClientProvider client={queryClient}>
       <ApiProvider client={client}>
-        <BrowserRouter>
+        <BrowserRouter future={ROUTER_FUTURE}>
           <AppRoutes />
         </BrowserRouter>
       </ApiProvider>

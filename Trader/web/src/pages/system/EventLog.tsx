@@ -6,17 +6,14 @@ import { useState } from "react";
 import { useApi, type EventsQuery } from "../../api/client";
 import { qk } from "../../api/queryKeys";
 import type { EventOut } from "../../api/types";
-import { Badge, Button, Card, Empty, ErrorBox, Loading, type Tone } from "../../components/ui";
+import { Badge, Button, Card, Empty, ErrorBox, Loading } from "../../components/ui";
 import { fmtDateTime } from "../../lib/format";
+import { levelTone } from "../dashboard/labels";
 
 const LEVELS = ["info", "warning", "error", "critical"] as const;
 
-function levelTone(level: string): Tone {
-  if (level === "error" || level === "critical") return "bad";
-  if (level === "warning") return "warn";
-  if (level === "info") return "info";
-  return "muted";
-}
+/** The page size sent to `/api/events` (the server's default `limit`): a shorter page is the last one. */
+export const EVENTS_PAGE_SIZE = 100;
 
 function EventRows({ events }: { events: EventOut[] }) {
   return (
@@ -46,9 +43,12 @@ export function EventLog() {
   const base: EventsQuery = level ? { level } : {};
   const query = useInfiniteQuery({
     queryKey: [...qk.events(base), "log"],
-    queryFn: ({ pageParam }) => api.events(pageParam === undefined ? base : { ...base, before: pageParam }),
+    queryFn: ({ pageParam }) =>
+      api.events(pageParam === undefined ? { ...base, limit: EVENTS_PAGE_SIZE } : { ...base, limit: EVENTS_PAGE_SIZE, before: pageParam }),
     initialPageParam: undefined as number | undefined,
-    getNextPageParam: (last) => (last.items.length ? Math.min(...last.items.map((e) => e.id)) : undefined),
+    // A page shorter than the limit is the last one: no "Load older" after it.
+    getNextPageParam: (last) =>
+      last.items.length >= EVENTS_PAGE_SIZE ? Math.min(...last.items.map((e) => e.id)) : undefined,
   });
   const events = query.data?.pages.flatMap((p) => p.items) ?? [];
 

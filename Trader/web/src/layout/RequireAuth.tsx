@@ -28,7 +28,7 @@ export function RequireAuth({ children }: { children?: ReactNode }) {
     );
   }
   if (auth.status === "out" || !auth.user) {
-    return <Navigate to={loginPathFor(`${location.pathname}${location.search}`)} replace />;
+    return <Navigate to={loginPathFor(`${location.pathname}${location.search}${location.hash}`)} replace />;
   }
   return children !== undefined ? <>{children}</> : <Outlet />;
 }

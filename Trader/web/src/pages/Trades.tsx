@@ -7,17 +7,11 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useApi, type TradesQuery } from "../api/client";
 import { qk } from "../api/queryKeys";
 import { Button, Card, Empty, ErrorBox, Loading } from "../components/ui";
+import { parseId } from "../lib/params";
 import { PositionDetail } from "./trades/PositionDetail";
 import { TradeList } from "./trades/TradeList";
 
 export const TRADES_PAGE_SIZE = 50;
-
-/** A positive integer id from a query-string value, else null. */
-export function parseId(value: string | null): number | null {
-  if (value === null || !/^\d{1,15}$/.test(value)) return null;
-  const n = Number(value);
-  return n > 0 ? n : null;
-}
 
 function TradeHistory() {
   const api = useApi();
@@ -81,7 +75,7 @@ export default function TradesPage() {
       ) : (
         <>
           <p>
-            <Link to="/trades">← Back to trades</Link>
+            <Link className="link-touch" to="/trades">← Back to trades</Link>
           </p>
           {id === null ? <Empty>“{raw}” is not a valid position id.</Empty> : <PositionDetail id={id} />}
         </>

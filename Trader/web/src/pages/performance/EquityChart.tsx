@@ -22,11 +22,11 @@ export function EquityChart({ points, width, height = 200 }: { points: EquityPoi
     <figure aria-label="Equity" style={{ margin: 0 }}>
       <ChartFrame height={height} width={width}>
         <LineChart data={data} syncId={PERFORMANCE_SYNC_ID} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
           <XAxis dataKey="t" type="number" scale="time" domain={timeDomain(points)} tickFormatter={tickDay} fontSize={11} />
           <YAxis domain={["auto", "auto"]} width={56} fontSize={11} tickFormatter={(v: number) => fmtMoney(v)} />
           <Tooltip labelFormatter={(t: number) => fmtDateTime(new Date(t).toISOString())} formatter={(v: number) => [fmtMoney(v), "Equity"]} />
-          <Line dataKey="equity" name="Equity" stroke="#2563eb" dot={false} strokeWidth={1.5} isAnimationActive={false} />
+          <Line dataKey="equity" name="Equity" stroke="var(--chart-entry)" dot={false} strokeWidth={1.5} isAnimationActive={false} />
         </LineChart>
       </ChartFrame>
     </figure>

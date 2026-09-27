@@ -2,13 +2,12 @@
 // decimal → text with inputmode decimal (a string); integer/number → number input (a number);
 // boolean → checkbox; enum → select; string → text with the pattern; string_list → comma-separated text
 // (an array); enum_list → checkboxes (an array); nullable adds a "None" checkbox (null).
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { FieldOut } from "../../api/types";
 import { validateValue } from "./validate";
 
-/** A checkbox and its text side by side (the global `label` style stacks a label's children). */
-export const CHECK_LABEL: CSSProperties = { flexDirection: "row", alignItems: "center", gap: 8 };
+// Checkbox rows use the shared `check-row` class (styles.css): box and text side by side, one 44 px target.
 
 export interface FieldInputProps {
   /** A unique id prefix for this control (labels and messages hang off it). */
@@ -184,7 +183,7 @@ export function FieldInput({ id, field, value, onChange, errors = [], disabled =
       control = (
         <div className="row" id={controlId}>
           {items.map((item) => (
-            <label key={item} style={CHECK_LABEL}>
+            <label key={item} className="check-row">
               <input
                 type="checkbox"
                 checked={selected.includes(item)}
@@ -218,7 +217,7 @@ export function FieldInput({ id, field, value, onChange, errors = [], disabled =
   }
 
   const noneBox = field.nullable ? (
-    <label className="small" style={CHECK_LABEL}>
+    <label className="small check-row">
       <input
         type="checkbox"
         checked={isNull}
@@ -260,7 +259,7 @@ export function FieldInput({ id, field, value, onChange, errors = [], disabled =
   if (field.kind === "boolean") {
     return (
       <div className="field stack">
-        <label htmlFor={controlId} style={CHECK_LABEL}>
+        <label htmlFor={controlId} className="check-row">
           {control} {title}
         </label>
         {noneBox}

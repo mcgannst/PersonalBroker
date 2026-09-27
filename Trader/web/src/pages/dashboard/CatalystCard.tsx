@@ -35,7 +35,7 @@ export default function CatalystCard({ catalyst }: { catalyst: CatalystOut }) {
             return (
               <li key={i}>
                 {url ? (
-                  <a href={url} target="_blank" rel="noopener noreferrer">
+                  <a className="link-touch" href={url} target="_blank" rel="noopener noreferrer">
                     {h.title}
                   </a>
                 ) : (

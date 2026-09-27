@@ -24,6 +24,16 @@
   --muted: #6e7781;
   --muted-bg: #eaeef2;
 
+  /* Charts (Recharts SVG attributes take these as var(...)). */
+  --chart-grid: #e5e7eb;
+  --chart-line: #1f2937;
+  --chart-range: #93c5fd;
+  --chart-entry: #2563eb;
+  --chart-stop: #dc2626;
+  --chart-stop-fill: #fecaca;
+  --chart-exit: #16a34a;
+  --chart-bar: #6366f1;
+
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -58,6 +68,15 @@
     --info-bg: #121d2f;
     --muted: #8b949e;
     --muted-bg: #21262d;
+
+    --chart-grid: #30363d;
+    --chart-line: #e6edf3;
+    --chart-range: #1f4e8c;
+    --chart-entry: #58a6ff;
+    --chart-stop: #f85149;
+    --chart-stop-fill: #5a1e22;
+    --chart-exit: #3fb950;
+    --chart-bar: #a5a8ff;
   }
 }
 
@@ -296,6 +315,31 @@ label {
   display: inline-flex;
   flex-direction: column;
   gap: var(--space-1);
+}
+
+/* ---------------------------------------------------------------- touch targets (44 px on a phone)
+   Links, <summary> toggles and checkbox rows are tapped as often as buttons, so they get the same height. */
+
+.link-touch {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch);
+}
+
+summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--touch);
+  cursor: pointer;
+}
+
+label.check-row,
+.check-row {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--touch);
 }
 
 /* ---------------------------------------------------------------- stat */

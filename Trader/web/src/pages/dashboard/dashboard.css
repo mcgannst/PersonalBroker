@@ -24,12 +24,6 @@
   font-size: 1.1rem;
 }
 
-.link-touch {
-  display: inline-flex;
-  align-items: center;
-  min-height: var(--touch);
-}
-
 .notice {
   margin: var(--space-2) 0 0;
   padding: var(--space-2) var(--space-3);

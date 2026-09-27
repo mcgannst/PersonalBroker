@@ -6,6 +6,7 @@ import type { ReactElement, ReactNode } from "react";
 import { MemoryRouter, Route, Routes, useLocation, type Location } from "react-router-dom";
 
 import { ApiProvider, type ApiClient } from "../api/client";
+import { ROUTER_FUTURE } from "../layout/routerFuture";
 import { FakeApiClient } from "./fakeApi";
 
 export interface RenderWithProvidersOptions extends Omit<RenderOptions, "wrapper"> {
@@ -58,7 +59,7 @@ export function renderWithProviders<A extends ApiClient = FakeApiClient>(
   const result = render(
     <QueryClientProvider client={queryClient}>
       <ApiProvider client={api}>
-        <MemoryRouter initialEntries={[route]}>
+        <MemoryRouter initialEntries={[route]} future={ROUTER_FUTURE}>
           {content}
           {probe}
         </MemoryRouter>

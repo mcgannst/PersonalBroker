@@ -11,7 +11,6 @@ export type AuthStatus = "loading" | "in" | "out" | "error";
 
 export interface AuthState {
   user: UserOut | null;
-  csrf: string | null;
   /** `loading` until the first `/auth/me` answers; `error` when the server could not be reached. */
   status: AuthStatus;
   /** The error of the last failed check (only while `status` is `error`). */
@@ -20,7 +19,7 @@ export interface AuthState {
   refresh(): Promise<void>;
   /** Ends the session on the server (errors ignored) and forgets it here. */
   logout(): Promise<void>;
-  /** Stores the session a successful login returned. */
+  /** Stores the user of the session a successful login returned (the HTTP client keeps its CSRF token). */
   setSession(session: SessionOut): void;
   /** Forgets the session without calling the server (after a 401). */
   clear(): void;
@@ -38,12 +37,11 @@ const AuthContext = createContext<AuthState | null>(null);
 interface Session {
   status: AuthStatus;
   user: UserOut | null;
-  csrf: string | null;
   error: unknown;
 }
 
-const LOADING: Session = { status: "loading", user: null, csrf: null, error: null };
-const OUT: Session = { status: "out", user: null, csrf: null, error: null };
+const LOADING: Session = { status: "loading", user: null, error: null };
+const OUT: Session = { status: "out", user: null, error: null };
 
 export function AuthProvider({ children }: { children?: ReactNode }) {
   const api = useApi();
@@ -52,7 +50,7 @@ export function AuthProvider({ children }: { children?: ReactNode }) {
   const mounted = useRef(true);
 
   const setSession = useCallback((s: SessionOut) => {
-    setSessionState({ status: "in", user: s.user, csrf: s.csrf_token, error: null });
+    setSessionState({ status: "in", user: s.user, error: null });
   }, []);
 
   const clear = useCallback(() => {
@@ -70,7 +68,7 @@ export function AuthProvider({ children }: { children?: ReactNode }) {
         setSessionState(OUT);
       } else {
         // Keep a known session through a blip; only a first check that fails shows the error.
-        setSessionState((prev) => (prev.status === "in" ? prev : { status: "error", user: null, csrf: null, error: err }));
+        setSessionState((prev) => (prev.status === "in" ? prev : { status: "error", user: null, error: err }));
       }
     }
   }, [api, setSession]);

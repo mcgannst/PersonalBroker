@@ -35,7 +35,7 @@ export function TradeList({ trades }: { trades: TradeOut[] }) {
           <tr key={t.id} onClick={() => navigate(positionHref(t.position_id))} style={{ cursor: "pointer" }}>
             <td>{fmtDate(t.session_date)}</td>
             <td>
-              <Link to={positionHref(t.position_id)} onClick={(e) => e.stopPropagation()}>
+              <Link className="link-touch" to={positionHref(t.position_id)} onClick={(e) => e.stopPropagation()}>
                 {t.ticker}
               </Link>
             </td>

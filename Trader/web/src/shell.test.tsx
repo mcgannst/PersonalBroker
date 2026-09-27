@@ -114,6 +114,22 @@ describe("routes and deep links (tests 3-4)", () => {
     expect(api.callsTo("login")).toEqual([[{ username: "stephen", password: "correct horse" }]]);
   });
 
+  it("test 3: a logged-out deep link with a #section keeps the section through login", async () => {
+    const api = loggedOutApi();
+    const user = userEvent.setup();
+    const r = renderWithProviders(<AppRoutes />, { api, route: "/settings#questrade" });
+    await screen.findByRole("heading", { name: "Login" });
+    expect(r.location().search).toBe("?next=%2Fsettings%23questrade");
+
+    await user.type(screen.getByLabelText(/username/i), "stephen");
+    await user.type(screen.getByLabelText(/^password/i), "correct horse");
+    await user.click(screen.getByRole("button", { name: /log in/i }));
+
+    expect(await page()).toBe("Settings page");
+    expect(r.location().pathname).toBe("/settings");
+    expect(r.location().hash).toBe("#questrade");
+  });
+
   it.each([["https://evil.example"], ["//evil.example"], ["/\\evil.example"]])("test 3: a next of %j lands on /dashboard", async (next) => {
     const api = loggedOutApi();
     const user = userEvent.setup();

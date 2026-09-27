@@ -219,6 +219,17 @@ export function fmtPct(fraction: string | number | null | undefined): string {
   return `${r.sign}${r.int}.${r.frac}%`;
 }
 
+/**
+ * A fraction as a percentage without the plus sign, for rates and drawdowns (`0.5` → `50.00%`,
+ * `0.0138` → `1.38%`); a negative value keeps its minus.
+ */
+export function fmtRate(fraction: string | number | null | undefined): string {
+  const d = parseDec(fraction);
+  if (!d) return NA;
+  const r = signed(shift(d, 2), 2, false);
+  return `${r.sign}${r.int}.${r.frac}%`;
+}
+
 /** An R multiple: `2.1700` → `+2.17R`. */
 export function fmtR(s: string | number | null | undefined): string {
   const d = parseDec(s);

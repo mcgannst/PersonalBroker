@@ -1,13 +1,22 @@
 // Account security (SPEC §14): change the password (at least 8 characters, typed twice; Stephen's decision
 // 2026-09-27) and optional two-step sign-in (TOTP). The TOTP secret is shown only during setup and is
-// dropped from state when setup ends or is cancelled. Password fields are cleared once sent.
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+// dropped from state when setup ends or is cancelled.
+//
+// Passwords and codes are secrets: every input here is uncontrolled (the value lives only in the DOM input,
+// never in React state), the values are read and the inputs cleared in the same step as a submit, and the calls
+// go through `useSecretCall` rather than `useMutation`, whose cache would keep them as `variables`. A form that
+// fails the local checks sends nothing and keeps what was typed, so it can be corrected.
+//
+// Wrong credentials: the server answers a wrong current password or two-step code with 403 `bad_credentials`
+// or 422 (never 401, which the HTTP client treats as an expired session), and its message is shown here.
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRef, useState, type FormEvent, type RefObject } from "react";
 
 import { useApi } from "../../api/client";
 import { qk } from "../../api/queryKeys";
-import type { PasswordChangeIn, TotpSetupOut } from "../../api/types";
+import type { OkOut, PasswordChangeIn, TotpSetupOut } from "../../api/types";
 import { Button, ErrorBox, Loading, errorMessage } from "../../components/ui";
+import { useSecretCall } from "./useSecretCall";
 
 export const MIN_PASSWORD_CHARS = 8;
 const CODE_RE = /^\d{6}$/;
@@ -20,43 +29,54 @@ export function passwordProblem(current: string, next: string, again: string): s
   return null;
 }
 
+/** An input's current value ("" when it is not mounted). */
+function valueOf(ref: RefObject<HTMLInputElement>): string {
+  return ref.current?.value ?? "";
+}
+
+/** Empties the given inputs. */
+function clearInputs(...refs: RefObject<HTMLInputElement>[]): void {
+  for (const ref of refs) if (ref.current) ref.current.value = "";
+}
+
 function ChangePassword({ totpEnabled }: { totpEnabled: boolean }) {
   const api = useApi();
-  const [current, setCurrent] = useState("");
-  const [next, setNext] = useState("");
-  const [again, setAgain] = useState("");
-  const [code, setCode] = useState("");
+  const currentRef = useRef<HTMLInputElement>(null);
+  const nextRef = useRef<HTMLInputElement>(null);
+  const againRef = useRef<HTMLInputElement>(null);
+  const codeRef = useRef<HTMLInputElement>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  const change = useMutation({ mutationFn: (body: PasswordChangeIn) => api.changePassword(body) });
+  const change = useSecretCall<OkOut>();
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    if (change.isPending) return;
     change.reset();
-    const p = passwordProblem(current, next, again);
+    const current = valueOf(currentRef);
+    const next = valueOf(nextRef);
+    const p = passwordProblem(current, next, valueOf(againRef));
     setProblem(p);
     if (p) return;
+    const code = valueOf(codeRef).trim();
     const body: PasswordChangeIn = { current_password: current, new_password: next };
-    if (totpEnabled && code.trim()) body.totp = code.trim();
-    setCurrent("");
-    setNext("");
-    setAgain("");
-    setCode("");
-    change.mutate(body);
+    if (totpEnabled && code) body.totp = code;
+    clearInputs(currentRef, nextRef, againRef, codeRef);
+    void change.run(() => api.changePassword(body));
   };
 
   return (
     <form className="stack" aria-label="Change password" onSubmit={submit}>
       <h3>Password</h3>
       <label htmlFor="pw-current">Current password</label>
-      <input id="pw-current" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
+      <input id="pw-current" ref={currentRef} type="password" autoComplete="current-password" />
       <label htmlFor="pw-new">New password</label>
-      <input id="pw-new" type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
+      <input id="pw-new" ref={nextRef} type="password" autoComplete="new-password" />
       <label htmlFor="pw-again">New password again</label>
-      <input id="pw-again" type="password" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} />
+      <input id="pw-again" ref={againRef} type="password" autoComplete="new-password" />
       {totpEnabled && (
         <>
           <label htmlFor="pw-code">Two-step code</label>
-          <input id="pw-code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value)} />
+          <input id="pw-code" ref={codeRef} inputMode="numeric" autoComplete="one-time-code" maxLength={6} />
         </>
       )}
       <p className="small muted">At least {MIN_PASSWORD_CHARS} characters. Your other sessions are signed out.</p>
@@ -87,31 +107,23 @@ function ChangePassword({ totpEnabled }: { totpEnabled: boolean }) {
 function TotpSetup({ onDone }: { onDone: (message: string) => void }) {
   const api = useApi();
   const queryClient = useQueryClient();
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const codeRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
-  const [password, setPassword] = useState("");
-  const [setup, setSetup] = useState<TotpSetupOut | null>(null);
-  const [code, setCode] = useState("");
-
-  const start = useMutation({
-    mutationFn: (pw: string) => api.totpSetup({ password: pw }),
-    onSuccess: (out) => setSetup(out),
-  });
-  const confirm = useMutation({
-    mutationFn: (c: string) => api.totpConfirm({ code: c }),
-    onSuccess: () => {
-      end();
-      onDone("Two-step sign-in is on.");
-      void queryClient.invalidateQueries({ queryKey: qk.me() });
-    },
-  });
+  const [hasPassword, setHasPassword] = useState(false);
+  const [codeReady, setCodeReady] = useState(false);
+  // `start.data` is the setup answer (the secret to show); it is forgotten by `end()`.
+  const start = useSecretCall<TotpSetupOut>();
+  const confirm = useSecretCall<OkOut>();
 
   function end() {
     // Forget the secret and everything typed.
-    setSetup(null);
-    setPassword("");
-    setCode("");
+    clearInputs(passwordRef, codeRef);
+    setHasPassword(false);
+    setCodeReady(false);
     setOpen(false);
     start.reset();
+    confirm.reset();
   }
 
   if (!open) {
@@ -130,6 +142,7 @@ function TotpSetup({ onDone }: { onDone: (message: string) => void }) {
     );
   }
 
+  const setup = start.isSuccess ? start.data : undefined;
   if (!setup) {
     return (
       <form
@@ -137,15 +150,22 @@ function TotpSetup({ onDone }: { onDone: (message: string) => void }) {
         aria-label="Set up two-step"
         onSubmit={(e) => {
           e.preventDefault();
-          const pw = password;
-          setPassword("");
-          if (pw) start.mutate(pw);
+          const pw = valueOf(passwordRef);
+          clearInputs(passwordRef);
+          setHasPassword(false);
+          if (pw) void start.run(() => api.totpSetup({ password: pw }));
         }}
       >
         <label htmlFor="totp-setup-password">Password</label>
-        <input id="totp-setup-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+        <input
+          id="totp-setup-password"
+          ref={passwordRef}
+          type="password"
+          autoComplete="current-password"
+          onChange={(e) => setHasPassword(e.target.value !== "")}
+        />
         <div className="row">
-          <Button type="submit" variant="primary" disabled={!password} busy={start.isPending}>
+          <Button type="submit" variant="primary" disabled={!hasPassword} busy={start.isPending}>
             Continue
           </Button>
           <Button variant="plain" onClick={end}>
@@ -168,7 +188,16 @@ function TotpSetup({ onDone }: { onDone: (message: string) => void }) {
       aria-label="Confirm two-step"
       onSubmit={(e) => {
         e.preventDefault();
-        if (CODE_RE.test(code)) confirm.mutate(code);
+        const code = valueOf(codeRef).trim();
+        if (!CODE_RE.test(code)) return;
+        clearInputs(codeRef);
+        setCodeReady(false);
+        void confirm.run(() => api.totpConfirm({ code })).then((ok) => {
+          if (ok === undefined) return;
+          end();
+          onDone("Two-step sign-in is on.");
+          void queryClient.invalidateQueries({ queryKey: qk.me() });
+        });
       }}
     >
       <p className="small">Add this key to an authenticator app, then enter the 6-digit code it shows.</p>
@@ -177,20 +206,22 @@ function TotpSetup({ onDone }: { onDone: (message: string) => void }) {
       </p>
       {linkOk && (
         <p>
-          <a href={setup.otpauth_uri}>Open in an authenticator app</a>
+          <a className="link-touch" href={setup.otpauth_uri}>
+            Open in an authenticator app
+          </a>
         </p>
       )}
       <label htmlFor="totp-confirm-code">Code from the app</label>
       <input
         id="totp-confirm-code"
+        ref={codeRef}
         inputMode="numeric"
         autoComplete="one-time-code"
         maxLength={6}
-        value={code}
-        onChange={(e) => setCode(e.target.value.trim())}
+        onChange={(e) => setCodeReady(CODE_RE.test(e.target.value.trim()))}
       />
       <div className="row">
-        <Button type="submit" variant="primary" disabled={!CODE_RE.test(code)} busy={confirm.isPending}>
+        <Button type="submit" variant="primary" disabled={!codeReady} busy={confirm.isPending}>
           Confirm
         </Button>
         <Button variant="plain" disabled={confirm.isPending} onClick={end}>
@@ -209,40 +240,48 @@ function TotpSetup({ onDone }: { onDone: (message: string) => void }) {
 function TotpDisable({ onDone }: { onDone: (message: string) => void }) {
   const api = useApi();
   const queryClient = useQueryClient();
-  const [password, setPassword] = useState("");
-  const [code, setCode] = useState("");
-  const disable = useMutation({
-    mutationFn: (body: { password: string; code: string }) => api.totpDisable(body),
-    onSuccess: () => {
-      onDone("Two-step sign-in is off.");
-      void queryClient.invalidateQueries({ queryKey: qk.me() });
-    },
-  });
-  const ready = password !== "" && CODE_RE.test(code);
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const codeRef = useRef<HTMLInputElement>(null);
+  const [hasPassword, setHasPassword] = useState(false);
+  const [codeReady, setCodeReady] = useState(false);
+  const disable = useSecretCall<OkOut>();
+  const ready = hasPassword && codeReady;
   return (
     <form
       className="stack"
       aria-label="Turn off two-step"
       onSubmit={(e) => {
         e.preventDefault();
-        if (!ready) return;
-        const body = { password, code };
-        setPassword("");
-        setCode("");
+        const password = valueOf(passwordRef);
+        const code = valueOf(codeRef).trim();
+        if (!password || !CODE_RE.test(code)) return;
+        clearInputs(passwordRef, codeRef);
+        setHasPassword(false);
+        setCodeReady(false);
         onDone("");
-        disable.mutate(body);
+        void disable.run(() => api.totpDisable({ password, code })).then((ok) => {
+          if (ok === undefined) return;
+          onDone("Two-step sign-in is off.");
+          void queryClient.invalidateQueries({ queryKey: qk.me() });
+        });
       }}
     >
       <label htmlFor="totp-off-password">Password</label>
-      <input id="totp-off-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+      <input
+        id="totp-off-password"
+        ref={passwordRef}
+        type="password"
+        autoComplete="current-password"
+        onChange={(e) => setHasPassword(e.target.value !== "")}
+      />
       <label htmlFor="totp-off-code">Code from the app</label>
       <input
         id="totp-off-code"
+        ref={codeRef}
         inputMode="numeric"
         autoComplete="one-time-code"
         maxLength={6}
-        value={code}
-        onChange={(e) => setCode(e.target.value.trim())}
+        onChange={(e) => setCodeReady(CODE_RE.test(e.target.value.trim()))}
       />
       <div>
         <Button type="submit" variant="danger" disabled={!ready} busy={disable.isPending}>

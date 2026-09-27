@@ -2,12 +2,7 @@
 // adherence and total P&L.
 import type { MetricsOut } from "../../api/types";
 import { Stat } from "../../components/ui";
-import { fmtMoney, fmtPct, fmtPrice, fmtR } from "../../lib/format";
-
-/** A fraction as an unsigned percentage (`0.5` → `50.00%`), for rates that are never negative. */
-export function fmtRate(fraction: string | null | undefined): string {
-  return fmtPct(fraction).replace(/^\+/, "");
-}
+import { fmtMoney, fmtPrice, fmtR, fmtRate } from "../../lib/format";
 
 /** A plain decimal ratio (`1.2500` → `1.25`). */
 function fmtRatio(value: string | null | undefined): string {

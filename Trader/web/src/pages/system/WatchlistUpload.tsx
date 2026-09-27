@@ -128,7 +128,7 @@ export function WatchlistUpload() {
           />
         </div>
         <p className="small muted">Leave the date empty for the next nightly.</p>
-        <label className="row">
+        <label className="check-row">
           <input type="checkbox" checked={runNightly} onChange={(e) => setRunNightly(e.target.checked)} />
           Run nightly now
         </label>

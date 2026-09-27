@@ -67,8 +67,21 @@ interface RequestSpec {
 const NETWORK_MESSAGE = "Can't reach the server";
 const WRITE_METHODS: ReadonlySet<Method> = new Set(["POST", "PUT", "DELETE"]);
 
+/** One path segment, percent-encoded (`checkPath` refuses the dot segments this leaves as they are). */
 function seg(value: string | number): string {
   return encodeURIComponent(String(value));
+}
+
+// A dot segment, also percent-encoded: URL parsers resolve "." and ".." (and "%2e", ".%2E", ...) as "this"
+// and "the parent" directory, so `/journal/..` would request `/api/` instead.
+const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
+
+/** Refuses a path with an empty or dot segment (from an id or date such as "", "." or ".."). */
+function checkPath(path: string): void {
+  const segments = (path.split("?", 1)[0] ?? "").split("/").slice(1);
+  if (segments.some((s) => s === "" || DOT_SEGMENT.test(s))) {
+    throw new ApiError(0, "bad_request", "That item can't be requested.");
+  }
 }
 
 function genericMessage(status: number): string {
@@ -139,6 +152,7 @@ export function createHttpClient(opts: HttpClientOptions = {}): HttpApiClient {
   }
 
   async function request<T>(spec: RequestSpec, retried = false): Promise<T> {
+    checkPath(spec.path);
     const res = await send(spec);
     if (res.ok) {
       const data = await parse<T>(res);

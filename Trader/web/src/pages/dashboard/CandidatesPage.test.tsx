@@ -89,6 +89,17 @@ describe("Candidates page (acceptance test 8)", () => {
     expect((screen.getByLabelText("Session date") as HTMLInputElement).value).toBe("2026-10-02");
   });
 
+  it.each(["not-a-date", "2026-02-30", "20261006", "<script>"])("a malformed ?date=%s says 'not a date' and calls nothing", async (raw) => {
+    const api = new FakeApiClient();
+    renderWithProviders(<Candidates />, { api, route: `/candidates?date=${encodeURIComponent(raw)}` });
+    expect(await screen.findByText(/is not a date \(use YYYY-MM-DD\)/)).toHaveTextContent(raw);
+    expect(api.callsTo("candidates")).toEqual([]);
+    expect(screen.queryByRole("status", { name: "Loading" })).toBeNull();
+    // Picking a real date from there works.
+    fireEvent.change(screen.getByLabelText("Session date"), { target: { value: "2026-10-05" } });
+    await waitFor(() => expect(api.callsTo("candidates")).toEqual([["2026-10-05"]]));
+  });
+
   it("shows empty states and errors", async () => {
     const api = new FakeApiClient({ candidates: { session_date: "2026-10-06", brief: null, catalysts: [], ranking: [] } });
     renderWithProviders(<Candidates />, { api });
@@ -97,9 +108,9 @@ describe("Candidates page (acceptance test 8)", () => {
     expect(screen.getByText("No ranking for this session")).toBeInTheDocument();
 
     const failing = new FakeApiClient();
-    failing.fail("candidates", new ApiError(422, "validation", "Invalid date"));
-    renderWithProviders(<Candidates />, { api: failing, route: "/candidates?date=nope" });
-    expect(await screen.findByText("Invalid date")).toBeInTheDocument();
+    failing.fail("candidates", new ApiError(422, "validation", "No session on that date"));
+    renderWithProviders(<Candidates />, { api: failing, route: "/candidates?date=2026-10-04" });
+    expect(await screen.findByText("No session on that date")).toBeInTheDocument();
     failing.succeed("candidates");
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(failing.callsTo("candidates")).toHaveLength(2));

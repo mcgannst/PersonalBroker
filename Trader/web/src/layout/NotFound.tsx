@@ -9,7 +9,7 @@ export function NotFound() {
       <h1>Not found</h1>
       <Card>
         <p>There is no page here.</p>
-        <Link to="/dashboard">Go to the dashboard</Link>
+        <Link className="link-touch" to="/dashboard">Go to the dashboard</Link>
       </Card>
     </main>
   );

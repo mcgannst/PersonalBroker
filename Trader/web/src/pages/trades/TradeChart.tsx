@@ -28,9 +28,9 @@ interface Point {
 }
 
 const LINES = [
-  { key: "entry", label: "Entry", color: "#2563eb", dash: "4 3" },
-  { key: "stop", label: "Stop", color: "#dc2626", dash: "4 3" },
-  { key: "exit", label: "Exit", color: "#16a34a", dash: "4 3" },
+  { key: "entry", label: "Entry", color: "var(--chart-entry)", dash: "4 3" },
+  { key: "stop", label: "Stop", color: "var(--chart-stop)", dash: "4 3" },
+  { key: "exit", label: "Exit", color: "var(--chart-exit)", dash: "4 3" },
 ] as const;
 
 function toPoints(candles: CandleOut[]): Point[] {
@@ -56,7 +56,7 @@ export function TradeChart({ candles, entry, stop, exit, fills, chartError, widt
     <figure aria-label="5-minute chart" style={{ margin: 0 }}>
       <ChartFrame height={height} width={width}>
         <ComposedChart data={points} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
           <XAxis
             dataKey="t"
             type="number"
@@ -72,8 +72,8 @@ export function TradeChart({ candles, entry, stop, exit, fills, chartError, widt
               Array.isArray(value) ? [`${fmtPrice(value[0])} to ${fmtPrice(value[1])}`, "Low to high"] : [fmtPrice(value), name]
             }
           />
-          <Area dataKey="range" name="Range" stroke="none" fill="#93c5fd" fillOpacity={0.35} isAnimationActive={false} />
-          <Line dataKey="close" name="Close" stroke="#1f2937" dot={false} strokeWidth={1.5} isAnimationActive={false} />
+          <Area dataKey="range" name="Range" stroke="none" fill="var(--chart-range)" fillOpacity={0.35} isAnimationActive={false} />
+          <Line dataKey="close" name="Close" stroke="var(--chart-line)" dot={false} strokeWidth={1.5} isAnimationActive={false} />
           {LINES.map((line) => {
             const y = plotNumber(prices[line.key]);
             if (y === null) return null;
@@ -98,8 +98,8 @@ export function TradeChart({ candles, entry, stop, exit, fills, chartError, widt
                 x={x}
                 y={y}
                 r={4}
-                fill={f.purpose === "entry" ? "#2563eb" : "#16a34a"}
-                stroke="#fff"
+                fill={f.purpose === "entry" ? "var(--chart-entry)" : "var(--chart-exit)"}
+                stroke="var(--surface)"
                 ifOverflow="extendDomain"
               />
             );

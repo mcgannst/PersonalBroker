@@ -1,4 +1,4 @@
-// Small display helpers shared by the Dashboard and Candidates pages (P4-T13).
+// Small display helpers shared by the Dashboard and Candidates pages (P4-T13); `levelTone` also by System.
 import type { ProposalOut, SessionPhase, TimelineStatus } from "../../api/types";
 import type { Tone } from "../../components/ui";
 import { fmtPrice } from "../../lib/format";
@@ -89,9 +89,4 @@ export function levelTone(level: string): Tone {
 export function safeHttpUrl(url: string | null | undefined): string | null {
   if (typeof url !== "string") return null;
   return /^https?:\/\//i.test(url) ? url : null;
-}
-
-/** A fraction shown as an unsigned percentage (drawdown): "0.0138" → "1.38%". */
-export function unsignedPct(formatted: string): string {
-  return formatted.replace(/^[+-]/, "");
 }

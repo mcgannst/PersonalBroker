@@ -1,4 +1,5 @@
-import { screen, within } from "@testing-library/react";
+import type { QueryClient } from "@tanstack/react-query";
+import { cleanup, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -47,15 +48,120 @@ describe("Security: password change (acceptance test 7)", () => {
     expect(within(form).getByLabelText("New password again")).toHaveValue("");
   });
 
-  it("with two-step on, the code is sent too; a server error is shown", async () => {
+  it("with two-step on, the code is sent too; a 403 bad_credentials shows the server's message", async () => {
     const api = new FakeApiClient({ me: totpOn });
-    api.fail("changePassword", new ApiError(401, "bad_credentials", "Wrong password or code."));
+    api.fail("changePassword", new ApiError(403, "bad_credentials", "Wrong password or code."));
     renderWithProviders(<Security />, { api });
     const form = await screen.findByRole("form", { name: "Change password" });
     await userEvent.type(within(form).getByLabelText("Two-step code"), "123456");
     await fillPassword("old-password", "abcdefgh", "abcdefgh");
     expect(api.callsTo("changePassword")).toEqual([[{ current_password: "old-password", new_password: "abcdefgh", totp: "123456" }]]);
-    expect(await screen.findByText("Wrong password or code.")).toBeInTheDocument();
+    expect(await within(form).findByRole("alert")).toHaveTextContent("Wrong password or code.");
+    expect(within(form).getByLabelText("Two-step code")).toHaveValue("");
+  });
+
+  it("a 422 shows the server's message (for example a new password the server refuses)", async () => {
+    const api = new FakeApiClient().fail("changePassword", new ApiError(422, "validation", "The new password is too common."));
+    renderWithProviders(<Security />, { api });
+    const form = await fillPassword("old-password", "password", "password");
+    expect(await within(form).findByRole("alert")).toHaveTextContent("The new password is too common.");
+    expect(within(form).getByLabelText("Current password")).toHaveValue("");
+  });
+
+  it("a failed local check keeps what was typed so it can be corrected, and sends nothing", async () => {
+    const api = new FakeApiClient();
+    renderWithProviders(<Security />, { api });
+    const form = await fillPassword("old-password", "abcdefgh", "abcdefgX");
+    expect(within(form).getByLabelText("Current password")).toHaveValue("old-password");
+    expect(api.callsTo("changePassword")).toEqual([]);
+  });
+});
+
+describe("Security: wrong credentials (403 bad_credentials, 422)", () => {
+  it.each([
+    [403, "bad_credentials", "Wrong password."],
+    [422, "validation", "The code must be 6 digits."],
+  ])("two-step setup shows the server's %i message", async (status, code, message) => {
+    const api = new FakeApiClient().fail("totpSetup", new ApiError(status, code, message));
+    renderWithProviders(<Security />, { api });
+    await userEvent.click(await screen.findByRole("button", { name: "Set up two-step" }));
+    await userEvent.type(screen.getByLabelText("Password"), "wrong-password");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(screen.getByLabelText("Password")).toHaveValue("");
+  });
+
+  it.each([
+    [403, "bad_credentials", "Wrong code."],
+    [422, "validation", "The code has expired."],
+  ])("two-step confirm shows the server's %i message and keeps the setup open", async (status, code, message) => {
+    const api = new FakeApiClient().fail("totpConfirm", new ApiError(status, code, message));
+    renderWithProviders(<Security />, { api });
+    await userEvent.click(await screen.findByRole("button", { name: "Set up two-step" }));
+    await userEvent.type(screen.getByLabelText("Password"), "my-password");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByText(totpSetupOut.secret);
+    await userEvent.type(screen.getByLabelText("Code from the app"), "111111");
+    await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(screen.getByText(totpSetupOut.secret)).toBeInTheDocument();
+    expect(screen.getByLabelText("Code from the app")).toHaveValue("");
+  });
+
+  it.each([
+    [403, "bad_credentials", "Wrong password or code."],
+    [422, "validation", "The code must be 6 digits."],
+  ])("turning two-step off shows the server's %i message", async (status, code, message) => {
+    const api = new FakeApiClient({ me: totpOn }).fail("totpDisable", new ApiError(status, code, message));
+    renderWithProviders(<Security />, { api });
+    const form = await screen.findByRole("form", { name: "Turn off two-step" });
+    await userEvent.type(within(form).getByLabelText("Password"), "my-password");
+    await userEvent.type(within(form).getByLabelText("Code from the app"), "654321");
+    await userEvent.click(within(form).getByRole("button", { name: "Turn off two-step" }));
+    expect(await within(form).findByRole("alert")).toHaveTextContent(message);
+    expect(screen.queryByText("Two-step sign-in is off.")).toBeNull();
+  });
+});
+
+describe("Security: no secret stays in the query client", () => {
+  function cacheText(client: QueryClient): string {
+    return JSON.stringify([
+      client
+        .getMutationCache()
+        .getAll()
+        .map((m) => m.state.variables ?? null),
+      client
+        .getQueryCache()
+        .getAll()
+        .map((q) => q.state.data ?? null),
+    ]);
+  }
+
+  it("two-step setup, confirm and disable leave no password or code behind, on success and on error", async () => {
+    const PW = "Setup-Passw0rd-Secret";
+    const CODE = "924816";
+    const r1 = renderWithProviders(<Security />);
+    await userEvent.click(await screen.findByRole("button", { name: "Set up two-step" }));
+    await userEvent.type(screen.getByLabelText("Password"), PW);
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByText(totpSetupOut.secret);
+    await userEvent.type(screen.getByLabelText("Code from the app"), CODE);
+    await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await screen.findByText("Two-step sign-in is on.");
+    expect(r1.queryClient.getMutationCache().getAll()).toHaveLength(0);
+    expect(cacheText(r1.queryClient)).not.toMatch(new RegExp(`${PW}|${CODE}`));
+    expect(document.body.innerHTML).not.toMatch(new RegExp(`${PW}|${CODE}`));
+    cleanup();
+
+    const failing = new FakeApiClient({ me: totpOn }).fail("totpDisable", new ApiError(403, "bad_credentials", "Wrong password or code."));
+    const r2 = renderWithProviders(<Security />, { api: failing });
+    const form = await screen.findByRole("form", { name: "Turn off two-step" });
+    await userEvent.type(within(form).getByLabelText("Password"), PW);
+    await userEvent.type(within(form).getByLabelText("Code from the app"), CODE);
+    await userEvent.click(within(form).getByRole("button", { name: "Turn off two-step" }));
+    await within(form).findByRole("alert");
+    expect(cacheText(r2.queryClient)).not.toMatch(new RegExp(`${PW}|${CODE}`));
+    expect(document.body.innerHTML).not.toMatch(new RegExp(`${PW}|${CODE}`));
   });
 });
 

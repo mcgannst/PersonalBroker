@@ -1,4 +1,5 @@
-"""ORM models (SPEC §10). Phase 1 tables, then the Phase 2 trading tables (migration 0002)."""
+"""ORM models (SPEC §10). Phase 1 tables, the Phase 2 trading tables (migration 0002), then the Phase 3
+worker and Telegram tables (migration 0004)."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -432,3 +433,54 @@ class KillSwitchEvent(Base):
     reset_at: Mapped[datetime | None] = mapped_column(TS)
     reset_reason: Mapped[str | None] = mapped_column(Text)
     reset_by: Mapped[str | None] = mapped_column(String(50))
+
+
+# --- Phase 3: worker and Telegram (migration 0004). Operational tables, so no run_id (like job_runs). ------
+class WorkerHeartbeat(Base):
+    __tablename__ = "worker_heartbeats"
+    process: Mapped[str] = mapped_column(String(30), primary_key=True)  # "worker"
+    pid: Mapped[int] = mapped_column(Integer)
+    host: Mapped[str] = mapped_column(String(100))
+    started_at: Mapped[datetime] = mapped_column(TS)
+    beat_at: Mapped[datetime] = mapped_column(TS)
+    session_date: Mapped[date | None] = mapped_column(Date)
+    phase: Mapped[str] = mapped_column(String(20))  # starting | idle | session | stopping | stopped
+    detail: Mapped[Any] = mapped_column(JSONB, nullable=True)
+
+
+class TelegramCallback(Base):
+    __tablename__ = "telegram_callbacks"
+    __table_args__ = (Index("ix_telegram_callbacks_kind_ref", "kind", "ref"),)
+    nonce: Mapped[str] = mapped_column(String(16), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20))  # proposal | pause | journal
+    ref: Mapped[str] = mapped_column(String(50))
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    message_id: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(TS)
+    expires_at: Mapped[datetime | None] = mapped_column(TS)
+    used_at: Mapped[datetime | None] = mapped_column(TS)
+    used_action: Mapped[str | None] = mapped_column(String(20))
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    # Unique where set: PostgreSQL treats NULLs as distinct, so many rows may have no key.
+    __table_args__ = (Index("uq_notifications_dedupe_key", "dedupe_key", unique=True),)
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(30))
+    dedupe_key: Mapped[str | None] = mapped_column(String(200))
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(TS)
+    sent_at: Mapped[datetime | None] = mapped_column(TS)
+    status: Mapped[str] = mapped_column(String(10))  # sending | sent | failed
+    message_ids: Mapped[Any] = mapped_column(JSONB, nullable=True)
+    # server_default as a plain string: `text` is a column name in this class body.
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class NotifyCursor(Base):
+    __tablename__ = "notify_cursors"
+    stream: Mapped[str] = mapped_column(String(30), primary_key=True)  # proposals | fills | events
+    last_id: Mapped[int] = mapped_column(BigInteger)
+    updated_at: Mapped[datetime] = mapped_column(TS)

@@ -7,7 +7,7 @@ found once the lock is held belongs to a process that died, and is marked `faile
 """
 
 import hashlib
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Literal
@@ -153,3 +153,15 @@ def _record_failure(
         log.exception(
             "job.record_failure_failed", job=job, session_date=session_date.isoformat(), run_id=run_id
         )
+
+
+async def run_job_async(
+    factory: sessionmaker[Session],
+    clock: Clock,
+    job: str,
+    session_date: date,
+    fn: Callable[[], Awaitable[dict[str, Any]]],
+    force: bool = False,
+) -> JobOutcome:
+    """run_job for an async body, with exactly run_job's semantics (P3-T1 stub, P3-T3 implements it)."""
+    raise NotImplementedError("P3-T3")

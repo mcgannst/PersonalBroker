@@ -26,9 +26,14 @@ DEFAULT_UNIVERSE_FILTERS = "ind_stocksonly,sh_price_5to50,sh_avgvol_o1000,ta_ave
 FINVIZ_FILTERS_PATTERN = r"^[a-z0-9_.]+(,[a-z0-9_.]+)*$"
 TICKER_PATTERN = r"^[A-Z][A-Z0-9.\-]{0,9}$"
 OVERLAY_SYMBOL = "SPY"  # the market overlay reads SPY bars, so it must always be in the universe
+# A session event key (Phase 3). At most 39 characters, so the job name `event:<key>` fits job_runs.job
+# and the failure-event source `job.event:<key>` fits event_log.source (both varchar(50)).
+EVENT_KEY_PATTERN = r"^[a-z][a-z0-9_]{0,38}$"
+DEFAULT_ALWAYS_FIRE_LATE = ("flatten", "entry_cancel", "overlay_decision")
 
 Market = Literal["US", "TSX"]
 Ticker = Annotated[str, StringConstraints(pattern=TICKER_PATTERN)]
+EventKey = Annotated[str, StringConstraints(pattern=EVENT_KEY_PATTERN)]
 Currency = Literal["USD", "CAD"]
 ClaudeModel = Literal["claude-sonnet-5", "claude-haiku-4-5"]
 
@@ -141,6 +146,29 @@ class RuntimeSettings(BaseModel):
     premarket_earnings_filter: str = Field(
         "earningsdate_today", pattern=FINVIZ_FILTERS_PATTERN, alias="premarket.earnings_filter"
     )
+    # --- Phase 3: worker, scheduler, Telegram, day-level jobs (SPEC §1, §4.4, §9)
+    worker_heartbeat_seconds: int = Field(15, ge=5, le=300, alias="worker.heartbeat_seconds")
+    worker_heartbeat_stale_seconds: int = Field(120, ge=30, le=3600, alias="worker.heartbeat_stale_seconds")
+    worker_idle_poll_seconds: float = Field(
+        30.0, ge=5, le=300, allow_inf_nan=False, alias="worker.idle_poll_seconds"
+    )
+    scheduler_late_grace_seconds: int = Field(120, ge=0, le=3600, alias="scheduler.late_grace_seconds")
+    # Events fired however late (until the close): exits and cancels must never be skipped.
+    scheduler_always_fire_late: list[EventKey] = Field(
+        default_factory=lambda: list(DEFAULT_ALWAYS_FIRE_LATE), alias="scheduler.always_fire_late"
+    )
+    telegram_poll_timeout_seconds: int = Field(30, ge=1, le=50, alias="telegram.poll_timeout_seconds")
+    telegram_confirm_ttl_seconds: int = Field(60, ge=10, le=600, alias="telegram.confirm_ttl_seconds")
+    telegram_relay_catchup_max: int = Field(20, ge=0, le=200, alias="telegram.relay_catchup_max")
+    preopen_notify_when_ok: bool = Field(True, alias="preopen.notify_when_ok")
+    postclose_archive_top_n: int = Field(20, ge=0, le=100, alias="postclose.archive_top_n")
+
+    @field_validator("scheduler_always_fire_late")
+    @classmethod
+    def _unique_event_keys(cls, v: list[str]) -> list[str]:
+        if len(set(v)) != len(v):
+            raise ValueError("scheduler.always_fire_late must not contain duplicates")
+        return v
 
     @field_validator("markets_enabled")
     @classmethod

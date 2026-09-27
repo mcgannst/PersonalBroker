@@ -17,6 +17,7 @@ dependencies = [
   "typer>=0.12",
   "structlog>=24.4",
   "anthropic>=1.0",
+  "python-telegram-bot>=21,<22",
 ]
 
 [project.scripts]

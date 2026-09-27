@@ -30,7 +30,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 0607f11 |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | fixing | 2 | V✅ B❌ S+C❌ | 879520e |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
-| P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | building | 1 |  |  |
+| P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | gauntlet | 1 |  | f9d089f |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | todo | 0 | | |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | todo | 0 | | |
 
@@ -553,3 +553,10 @@ None open.
 - Gate: ruff, format, mypy clean. pytest 254 passed, 2 failed, both in tests/gauntlet/test_p1_t7_breaker.py (P1-T7 fix round, ignored). All P1-T6 tests incl. test_p1_t6_breaker.py pass. P1-T6 plan steps all ticked. Tree clean.
 - Findings: no must-fix or should-fix. Nits - (1) _parse_token_response lets OverflowError escape when expires_in is Infinity or 1e400, and a very large int overflows at now+timedelta, so that malformed 200 is not recorded or throttled (no leak, fails closed). (2) Negative or zero expires_in is accepted, so every access() would exchange. (3) questrade-seed without --force is allowed whenever last_error is set, including a transient network or 5xx error on a probably-healthy chain.
 - Notes: TokenSource and AccessToken unchanged. The failure cooldown runs 60 s from the last failed attempt only, because throttled raises do not touch updated_at. typer pretty_exceptions_show_locals defaults to False (typer 0.27.2), so tracebacks do not print locals.
+
+### 2026-09-27T05:20:35Z · P1-T9 · Builder · attempt 1 · finished
+- Result: done, all steps 1-12 complete and ticked
+- Commits: 348ac1e, 4adc532, f9d089f
+- Gate: check.sh 261 passed, 2 failed (only tests/gauntlet/test_p1_t7_breaker.py, which belongs to P1-T7's fix round). 10 new tests in tests/jobs
+- LIVE: nightly 2026-09-28 succeeded, detail source=finviz, universe=543, unresolved=[], candle_errors=0. Second run: skipped. notify: sent
+- Notes: small changes from the plan. (1) nightly maps tickers to Questrade form (to_questrade_ticker) because the plan's own BF-B test needs it. (2) The no-previous-universe error event is now written before the re-raise, so it isn't rolled back. (3) Daily candle date = et_date(start), not the UTC date. (4) notify exits 1 on failure and prints only the exception type, never the URL that holds the bot token. Risk: a transport timeout in candles_many would abort the whole nightly until the P1-T7 fix lands (its breaker test_candles_many_isolates_transport_errors)

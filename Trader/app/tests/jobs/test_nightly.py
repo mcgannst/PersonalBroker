@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -13,12 +14,16 @@ from trader.adapters.questrade.client import QuestradeApiError
 from trader.adapters.questrade.models import CandleRequest, QtSymbol
 from trader.db.models import DailyCandle, EventLog, IntradayCandle, OpenBarStat, Symbol, UniverseSnapshot
 from trader.jobs.nightly import (
+    MAX_CANDLE_ERROR_FRACTION,
+    MAX_UNRESOLVED_FRACTION,
+    NightlyDegenerate,
     NightlyDeps,
     earliest_run_time,
     run_nightly,
     sessions_between,
     target_session,
 )
+from trader.jobs.runner import run_job
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import FixedClock
 from trader.market.types import Candle
@@ -184,13 +189,104 @@ async def test_nightly_without_any_universe_raises(db_factory: sessionmaker[Sess
         await run_nightly(deps(db_factory, FakeFinviz(None, FinvizBlocked("HTTP 403"))), TARGET)
 
 
+def tickers(n: int) -> list[str]:
+    return [f"T{i:03d}" for i in range(n)]
+
+
 async def test_unknown_and_failing_symbols_are_reported_not_fatal(db_factory: sessionmaker[Session]) -> None:
+    # 39 names + ZZZZ + SPY = 41 wanted, 1 unresolved (2.4%); 40 symbols, 2 of 80 requests fail (2.5%)
     market = FakeMarket(unknown=frozenset({"ZZZZ"}), failing=frozenset({1000}))
-    detail = await run_nightly(deps(db_factory, FakeFinviz(["AAPL", "ZZZZ", "MSFT"]), market), TARGET)
+    detail = await run_nightly(deps(db_factory, FakeFinviz([*tickers(39), "ZZZZ"]), market), TARGET)
     assert detail["unresolved"] == ["ZZZZ"]
-    assert detail["candle_errors"] == 2  # AAPL's daily and 5-minute requests both failed
-    assert detail["candle_error_tickers"] == ["AAPL"]
-    assert detail["universe"] == 3  # AAPL, MSFT, SPY resolved
+    assert detail["candle_errors"] == 2  # T000's daily and 5-minute requests both failed
+    assert detail["candle_error_tickers"] == ["T000"]
+    assert detail["universe"] == 40  # 39 names plus SPY resolved
+
+
+def table_counts(factory: sessionmaker[Session]) -> list[int]:
+    return [count(factory, m) for m in (Symbol, UniverseSnapshot, DailyCandle, IntradayCandle, OpenBarStat)]
+
+
+def degenerate_events(factory: sessionmaker[Session]) -> list[dict[str, Any]]:
+    with factory() as s:
+        return list(
+            s.execute(
+                select(EventLog.data).where(
+                    EventLog.level == "error", EventLog.message.like("nightly result degenerate%")
+                )
+            ).scalars()
+        )
+
+
+@pytest.mark.parametrize(
+    ("names", "market", "reason"),
+    [
+        # FinViz (or another source) gives nothing Questrade knows: only the extra SPY resolves
+        (["ZZZZ"], FakeMarket(unknown=frozenset({"ZZZZ"})), "empty universe"),
+        ([], FakeMarket(), "empty universe"),
+        # 19 names + SPY = 20 wanted; 2 unknown = 10% > 5%
+        (tickers(19), FakeMarket(unknown=frozenset({"T000", "T001"})), "unresolved"),
+        # 19 names + SPY = 20 symbols, 40 requests; 2 symbols fail = 4 errors = 10% > 5%
+        (tickers(19), FakeMarket(failing=frozenset({1000, 1001})), "candle errors"),
+    ],
+)
+async def test_degenerate_result_raises_and_writes_nothing(
+    db_factory: sessionmaker[Session], names: list[str], market: FakeMarket, reason: str
+) -> None:
+    """A degenerate run must fail (so run_job marks it failed) and must not replace the day: an
+    earlier good run for the same session stays exactly as it was."""
+    m = StableMarket()
+    await run_nightly(deps(db_factory, FakeFinviz(["AAPL", "MSFT"]), m), TARGET)
+    before, snap_before = table_counts(db_factory), snapshot(db_factory, TARGET)
+    with pytest.raises(NightlyDegenerate, match=reason):
+        await run_nightly(deps(db_factory, FakeFinviz(names), market), TARGET)
+    assert table_counts(db_factory) == before
+    assert snapshot(db_factory, TARGET) == snap_before
+    [data] = degenerate_events(db_factory)
+    assert data["reason"] == reason
+    assert {"wanted", "resolved", "unresolved", "candle_requests", "candle_errors"} <= set(data)
+
+
+async def test_degenerate_counts_are_logged(db_factory: sessionmaker[Session]) -> None:
+    market = FakeMarket(unknown=frozenset({"T000", "T001"}))
+    with pytest.raises(NightlyDegenerate):
+        await run_nightly(deps(db_factory, FakeFinviz(tickers(19)), market), TARGET)
+    [data] = degenerate_events(db_factory)
+    assert data == {
+        "reason": "unresolved",
+        "session_date": "2026-09-28",
+        "wanted": 20,
+        "resolved": 18,
+        "unresolved": 2,
+        "unresolved_tickers": ["T000", "T001"],
+        "candle_requests": 0,  # stopped before fetching candles
+        "candle_errors": 0,
+        "candle_error_tickers": [],
+    }
+
+
+@pytest.mark.parametrize(
+    "market",
+    [
+        FakeMarket(unknown=frozenset({"T000"})),  # 1 of 20 wanted unresolved: exactly 5%
+        FakeMarket(failing=frozenset({1000})),  # 2 of 40 candle requests failed: exactly 5%
+    ],
+)
+async def test_exactly_five_percent_is_still_a_success(
+    db_factory: sessionmaker[Session], market: FakeMarket
+) -> None:
+    assert MAX_UNRESOLVED_FRACTION == MAX_CANDLE_ERROR_FRACTION == Decimal("0.05")
+    detail = await run_nightly(deps(db_factory, FakeFinviz(tickers(19)), market), TARGET)
+    assert detail["source"] == "finviz"
+    assert degenerate_events(db_factory) == []
+
+
+def test_degenerate_run_is_a_failed_job(db_factory: sessionmaker[Session]) -> None:
+    d = deps(db_factory, FakeFinviz(["ZZZZ"]), FakeMarket(unknown=frozenset({"ZZZZ"})))
+    out = run_job(db_factory, CLOCK, "nightly", TARGET, lambda: asyncio.run(run_nightly(d, TARGET)))
+    assert out.status == "failed"
+    assert out.error is not None and out.error.startswith("NightlyDegenerate: ")
+    assert count(db_factory, UniverseSnapshot) == 0
 
 
 class StableMarket(FakeMarket):

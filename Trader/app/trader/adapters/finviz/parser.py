@@ -25,6 +25,7 @@ _DATE_RE = re.compile(r"^(?:(Today)|([A-Z][a-z]{2}-\d{2}-\d{2}))?\s*(\d{1,2}:\d{
 _BLOCK_MARKERS = ("just a moment", "cf-challenge", "captcha", "attention required")
 MIN_PAGE_BYTES = 1000  # anything shorter is an empty body, not a real FinViz page
 UNIVERSE_COLUMNS = ("Ticker", "Company", "Sector", "Industry", "Price", "Volume")
+BLOCK_STATUSES = frozenset({403, 429, 503})
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,7 +71,7 @@ def to_finviz_ticker(ticker: str) -> str:
 
 
 def blocked_reason(status: int, body: str) -> str | None:
-    if status in (403, 429, 503):
+    if status in BLOCK_STATUSES:
         return f"HTTP {status}"
     if len(body) < MIN_PAGE_BYTES:
         return f"empty body ({len(body)} bytes)"

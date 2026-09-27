@@ -1,9 +1,11 @@
 import asyncio
+import time
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import event, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from trader.db.models import EventLog, JobRun
@@ -122,6 +124,82 @@ def test_long_error_is_truncated(db_factory: sessionmaker[Session]) -> None:
     assert out.error is not None and len(out.error) == MAX_ERROR_CHARS
     with db_factory() as s:
         assert len(s.execute(select(JobRun.error)).scalar_one() or "") == MAX_ERROR_CHARS
+
+
+def advisory_locks(factory: sessionmaker[Session], wait_s: float = 5.0) -> int:
+    """Advisory locks held in this database. A lock on an invalidated connection is released when
+    the server notices the disconnect, so poll briefly for the count to reach zero."""
+    engine = factory.kw["bind"]
+    deadline = time.monotonic() + wait_s
+    while True:
+        with engine.connect() as conn:
+            n = int(
+                conn.execute(
+                    text(
+                        "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' "
+                        "AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
+                    )
+                ).scalar_one()
+            )
+        if n == 0 or time.monotonic() > deadline:
+            return n
+        time.sleep(0.05)
+
+
+def test_no_advisory_lock_is_left_after_success_failure_or_interrupt(
+    db_factory: sessionmaker[Session],
+) -> None:
+    def boom() -> dict[str, Any]:
+        raise RuntimeError("boom")
+
+    def interrupted() -> dict[str, Any]:
+        raise KeyboardInterrupt
+
+    assert run_job(db_factory, CLOCK, "nightly", D, lambda: {}).status == "succeeded"
+    assert advisory_locks(db_factory) == 0
+    assert run_job(db_factory, CLOCK, "a", D, boom).status == "failed"
+    assert advisory_locks(db_factory) == 0
+    with pytest.raises(KeyboardInterrupt):
+        run_job(db_factory, CLOCK, "b", D, interrupted)
+    assert advisory_locks(db_factory) == 0
+
+
+def _raise_on(factory: sessionmaker[Session], sql: str, when: str) -> Callable[[], None]:
+    """Raise KeyboardInterrupt around the first statement containing `sql`. Returns the remover."""
+    engine = factory.kw["bind"]
+    fired: list[bool] = []
+
+    def hook(*args: Any, **_: Any) -> None:
+        if sql in args[2] and not fired:
+            fired.append(True)
+            raise KeyboardInterrupt
+
+    event.listen(engine, when, hook)
+    return lambda: event.remove(engine, when, hook)
+
+
+def test_interrupt_right_after_the_lock_is_taken_leaves_no_lock(db_factory: sessionmaker[Session]) -> None:
+    """The server granted the lock but the interrupt arrived before run_job saw the answer."""
+    remove = _raise_on(db_factory, "pg_try_advisory_lock", "after_cursor_execute")
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            run_job(db_factory, CLOCK, "nightly", D, lambda: {})
+    finally:
+        remove()
+    assert advisory_locks(db_factory) == 0
+    assert run_job(db_factory, CLOCK, "nightly", D, lambda: {}).status == "succeeded"
+
+
+def test_interrupt_during_unlock_discards_the_locked_connection(db_factory: sessionmaker[Session]) -> None:
+    remove = _raise_on(db_factory, "pg_advisory_unlock", "before_cursor_execute")
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            run_job(db_factory, CLOCK, "nightly", D, lambda: {})
+    finally:
+        remove()
+    assert advisory_locks(db_factory) == 0
+    # the run itself finished before the unlock, so the retry is skipped as already succeeded
+    assert run_job(db_factory, CLOCK, "nightly", D, lambda: {}).detail == {"reason": "already succeeded"}
 
 
 def test_failure_to_record_a_failure_keeps_the_original_error(

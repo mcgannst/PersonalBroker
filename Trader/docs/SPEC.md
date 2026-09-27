@@ -152,8 +152,11 @@ The docs don't say whether these limits apply per app or per login. ⚠ VERIFY i
 
 - **Universe (nightly):** the screener URL is built from settings, for example `https://finviz.com/screener.ashx?v=111&f=ind_stocksonly,sh_price_5to50,sh_avgvol_o1000,ta_averagetruerange_o0.5,geo_usa`. **`ind_stocksonly` excludes ETFs and other funds** (decided 2026-09-26: 542 stocks instead of 695 when tested). SPY is fetched separately for the overlay. It pages through the results 20 rows at a time and parses the ticker, price, volume and sector. FinViz ignores unknown filter codes and returns the unfiltered list, so a result count equal to the unfiltered count is treated as an error. Ticker share classes are mapped to Questrade's form (`BF-B` → `BF.B`).
 - **Pre-market (08:00 ET):** candidate tickers come from (a) a FinViz "news today / earnings today" screen and (b) a Questrade quote check on the universe for pre-market change ≥ 3% (⚠ VERIFY pre-market data). Headlines come from each ticker's FinViz quote page.
-- **Politeness:** at most 1 request per 2 seconds, a browser User-Agent, results cached for 12 hours, and backoff when blocked.
-- **Isolation:** all HTML parsing lives in `finviz/parser.py`, with tests against saved HTML samples. A parse failure triggers an alert and falls back to the previous night's universe.
+- **Politeness:** at most 1 request per 2 seconds (`finviz.min_interval_seconds`, never below 2), measured from the end of the previous request, failed or not; a browser User-Agent; results cached for 12 hours (`finviz.cache_hours`); and backoff when blocked. A screener request that gets HTTP 429 or 503 is retried after 30 s, then 90 s, then fails as blocked. HTTP 403 is never retried. News (quote-page) requests aren't retried: the caller skips that ticker. Nothing that fails validation is cached.
+- **Failures:** HTTP 403/429/503, an empty body or a bot-check page count as *blocked*; other non-2xx or transport errors, a layout change, a result count that doesn't match the rows, an empty universe, and ignored filters all raise an error. The scraper never returns an empty or partial universe.
+- **Isolation:** all HTML parsing lives in `finviz/parser.py`, with tests against saved HTML samples.
+- **Fallback:** when FinViz fails, the nightly job logs an error event and reuses the most recent stored universe (its snapshot rows get `source = fallback`). The job detail reports the date that universe originally came from FinViz (`fallback_from`, following a fallback of a fallback back to the FinViz date) and its age in sessions. A fallback older than `universe.fallback_stale_after_sessions` (default 3) is still used, but an extra error event ("fallback universe too old") is logged and `fallback_stale: true` is set; the strategy decides whether to trade on it. With no stored universe at all, the job fails.
+- **Degenerate results fail the job:** the nightly job writes nothing for the session (and keeps an earlier good run of it) and is marked failed, with an error event giving the counts, when the resolved universe is empty (not counting `universe.extra_symbols`), more than 5% of the wanted tickers don't resolve to a Questrade symbol, or more than 5% of the candle requests fail.
 - **Manual fallback:** the web app can upload a CSV watchlist.
 
 ### 4.3 Claude API: catalyst classification
@@ -378,7 +381,7 @@ All times are **ET**, from supercronic with `CRON_TZ=America/New_York`. Every jo
 | 16:15 Mon–Fri | 14:15 | Post-close: end-of-day orders, journal, metrics, equity snapshot, **candle archive** (1-min RTH bars for the top 20 + SPY), daily summary | `trader postclose` |
 | Sat 09:00 | 07:00 | Weekly report + Claude commentary | `trader weekly` |
 
-Each job records a `job_runs` row with status, start and end time, and any error. Jobs can safely be re-run: they're keyed by `(job, session_date)`.
+Each job records a `job_runs` row with status, start and end time, and any error. Jobs can safely be re-run: they're keyed by `(job, session_date)`. A run that already succeeded is skipped unless forced, and a PostgreSQL advisory lock on `(job, session_date)` makes a second start while one is running a skip (`already running`).
 
 ## 10. Data model (PostgreSQL, schema `trader`)
 
@@ -409,7 +412,7 @@ Timestamps are `timestamptz` in UTC. Money is `numeric(14,4)`. Primary keys are 
 | `equity_snapshots` | run_id, ts, equity, cash, settled_cash, peak_equity, drawdown_pct | Equity curve |
 | `journal` | run_id, session_date, rules_followed bool, notes, answered_via | Daily adherence |
 | `kill_switch_events` | id, run_id, switch, tripped_at, value, reset_at, reset_reason | Kill-switch history |
-| `job_runs` | id, job, session_date, started_at, finished_at, status, error | Operations |
+| `job_runs` | id, job, session_date, started_at, finished_at, status, error, detail jsonb | Operations |
 | `event_log` | id, ts, level, source, run_id, message, data jsonb | Timeline for the UI |
 | `users` | id, username, password_hash, totp_secret_enc | Single user |
 | `audit_log` | id, ts, actor, action, before jsonb, after jsonb | Settings and approval changes |
@@ -468,11 +471,25 @@ All endpoints need a session cookie, except `/api/auth/login` and `/api/health`.
 | `SESSION_SECRET` | Cookie signing |
 | `ANTHROPIC_API_KEY` | Claude |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Bot and the one authorized chat |
+| `QUESTRADE_REFRESH_TOKEN` | Optional; read only by `trader questrade-seed` to start the token chain in `api_credentials` (never used after seeding) |
 | `PUBLIC_BASE_URL` | `https://trader.sunspinner.ca` (resolves on the home LAN only), used in Telegram links |
 | `ADMIN_USERNAME`, `ADMIN_PASSWORD_INITIAL` | First-run user creation only |
 | `TZ_DISPLAY` | `America/Edmonton` |
 
 **Runtime settings** (the `settings` table, editable in the UI) include `approval_mode` (`manual`|`auto`), `starting_cash`, `account_currency`, `markets_enabled`, `cash_account_mode`, `risk_pct`, `quote_poll_seconds`, `slippage_*`, `stale_quote_seconds`, `proposal_ttl_*`, `auto_flatten_on_expiry`, `killswitch.*`, `claude.model`, `claude.daily_budget_usd`, and `claude.premarket_max_candidates` (default 50).
+
+Data-layer settings (Phase 1):
+
+| Key | Default | Allowed | Purpose |
+|---|---|---|---|
+| `universe.finviz_filters` | `ind_stocksonly,sh_price_5to50,sh_avgvol_o1000,ta_averagetruerange_o0.5,geo_usa` | comma-separated tokens of `[a-z0-9_.]` | FinViz screener filters for the nightly universe (§4.2) |
+| `universe.extra_symbols` | `["SPY"]` | tickers, no duplicates, must include `SPY` | Always added to the universe (SPY for the overlay) |
+| `universe.fallback_stale_after_sessions` | `3` | 1–10 | A fallback universe older than this is flagged stale (§4.2) |
+| `finviz.min_interval_seconds` | `2.0` | 2–60 | Spacing between FinViz requests |
+| `finviz.cache_hours` | `12.0` | 0–168 | FinViz page cache lifetime |
+| `open_bar.lookback_sessions` | `14` | 5–30 | Sessions averaged for the opening-bar volume (`avg_open_vol_14d`) |
+
+Every stored value is validated; `load()` fails closed on an invalid row, and every change is written to `audit_log`.
 
 ## 14. Security
 

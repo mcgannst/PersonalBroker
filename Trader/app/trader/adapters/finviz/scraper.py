@@ -22,6 +22,7 @@ import httpx
 
 from trader.adapters.finviz.parser import (
     BASE,
+    BLOCK_STATUSES,
     UNIVERSE_COLUMNS,
     Headline,
     ScreenerPage,
@@ -46,7 +47,6 @@ BROWSER_HEADERS = {
 }
 PAGE_SIZE = 20
 MAX_PAGES = 100
-BLOCK_STATUSES = frozenset({403, 429, 503})
 RETRY_STATUSES = frozenset({429, 503})  # 403 is not retried
 BLOCK_BACKOFF_S = (30.0, 90.0)  # waits before the 1st and 2nd retry of a blocked screener request
 

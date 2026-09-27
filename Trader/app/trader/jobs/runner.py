@@ -55,12 +55,16 @@ def _engine(factory: sessionmaker[Session]) -> Engine:
 
 
 def _unlock(conn: Connection, key: int) -> None:
+    """Release the lock. If that fails in any way (a DB error, or an interrupt mid-call), discard the
+    connection: the lock lives as long as the session, so it must never go back to the pool locked.
+    A non-Exception (KeyboardInterrupt, CancelledError) is re-raised once the connection is gone."""
     try:
         conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
-    except Exception:
-        # The lock lives as long as the connection: discard it rather than return it to the pool locked.
+    except BaseException as exc:
         log.exception("job.unlock_failed", key=key)
         conn.invalidate()
+        if not isinstance(exc, Exception):
+            raise
 
 
 def run_job(
@@ -81,12 +85,17 @@ def run_job(
     key = lock_key(job, session_date)
     with _engine(factory).connect() as conn:
         conn.execution_options(isolation_level="AUTOCOMMIT")
-        if not conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key}).scalar_one():
-            return JobOutcome("skipped", {"reason": "already running"})
+        # None until the server's answer is known: an interrupt can land after the server granted the
+        # lock but before we see it, and that case must be unlocked too.
+        acquired: bool | None = None
         try:
+            acquired = bool(conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key}).scalar_one())
+            if not acquired:
+                return JobOutcome("skipped", {"reason": "already running"})
             return _run_locked(factory, clock, job, session_date, fn, force)
         finally:
-            _unlock(conn, key)
+            if acquired is not False and not conn.invalidated:
+                _unlock(conn, key)
 
 
 def _run_locked(

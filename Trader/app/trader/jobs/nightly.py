@@ -8,6 +8,12 @@ transaction as the upserts).
 `open_bar_stats.avg_open_vol_14d` is the mean 09:30 five-minute volume over the lookback sessions. It
 is NULL unless at least MIN_OPENING_BARS opening bars were found (or every lookback session, when
 `open_bar.lookback_sessions` is below that), so a thin history never passes for a real average.
+
+A degenerate result is a failure, not a thin success: `NightlyDegenerate` is raised (so run_job marks
+the job failed) and NOTHING is written, not even the day-replacement deletes, when the resolved
+universe is empty (not counting `universe.extra_symbols`), or more than MAX_UNRESOLVED_FRACTION of the
+wanted names don't resolve, or more than MAX_CANDLE_ERROR_FRACTION of the candle requests fail. An
+error event records the counts first.
 """
 
 import asyncio
@@ -29,7 +35,7 @@ from trader.market import repository as repo
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import ET, Clock, et_date
 from trader.market.indicators import atr, average_volume, opening_bar
-from trader.market.types import Candle
+from trader.market.types import INTERVAL_CODES, Candle
 from trader.settings_store import RuntimeSettings
 
 DAILY_LOOKBACK = timedelta(days=30)
@@ -38,6 +44,13 @@ MIN_OPENING_BARS = 10
 MAX_ERROR_TICKERS = 50
 # The last lookback session's daily bar is final only some time after its close.
 SETTLE_AFTER_CLOSE = timedelta(minutes=15)
+# Above these fractions a run fails instead of storing a thin universe (exactly 5% still passes).
+MAX_UNRESOLVED_FRACTION = Decimal("0.05")  # of the wanted names (universe plus extra symbols)
+MAX_CANDLE_ERROR_FRACTION = Decimal("0.05")  # of the candle requests (two per symbol)
+
+
+class NightlyDegenerate(RuntimeError):
+    """The run's result is too thin to trust. Nothing was written for the session."""
 
 
 class UniverseSource(Protocol):
@@ -193,13 +206,61 @@ async def _fetch_chunk(
     return out
 
 
+def _too_many(part: int, whole: int, limit: Decimal) -> bool:
+    return whole > 0 and Decimal(part) / whole > limit
+
+
+def _degenerate(
+    deps: NightlyDeps,
+    session_date: date,
+    reason: str,
+    *,
+    wanted: int,
+    resolved: int,
+    unresolved: list[str],
+    fetched: list[_Fetched],
+) -> NightlyDegenerate:
+    """Log the counts as an error event (committed on its own) and return the error to raise."""
+    failed = [f for f in fetched if f.errors]
+    data: dict[str, Any] = {
+        "reason": reason,
+        "session_date": session_date.isoformat(),
+        "wanted": wanted,
+        "resolved": resolved,
+        "unresolved": len(unresolved),
+        "unresolved_tickers": unresolved[:MAX_ERROR_TICKERS],
+        "candle_requests": 2 * len(fetched),
+        "candle_errors": sum(f.errors for f in failed),
+        "candle_error_tickers": sorted(f.sym.symbol for f in failed)[:MAX_ERROR_TICKERS],
+    }
+    with session_scope(deps.factory) as s:
+        log_event(
+            s,
+            deps.clock,
+            "error",
+            "job.nightly",
+            f"nightly result degenerate ({reason}); nothing written for {session_date}",
+            data,
+        )
+    return NightlyDegenerate(
+        f"{reason} for {session_date}: {len(unresolved)}/{wanted} names unresolved, "
+        f"{data['candle_errors']}/{data['candle_requests']} candle requests failed"
+    )
+
+
 async def run_nightly(deps: NightlyDeps, session_date: date) -> dict[str, Any]:
     universe = await _universe(deps, session_date)
     # Questrade form (BF-B -> BF.B). The scraper already does this; any other source might not.
     by_ticker = {to_questrade_ticker(r.ticker): r for r in universe.rows}
-    wanted = list(dict.fromkeys([*by_ticker, *deps.settings.universe_extra_symbols]))
+    extras = deps.settings.universe_extra_symbols
+    wanted = list(dict.fromkeys([*by_ticker, *extras]))
     resolved = await deps.market.symbols_by_names(wanted)
     unresolved = sorted(set(wanted) - set(resolved))
+    counts: dict[str, Any] = {"wanted": len(wanted), "resolved": len(resolved), "unresolved": unresolved}
+    if not any(name in resolved and name not in extras for name in by_ticker):
+        raise _degenerate(deps, session_date, "empty universe", fetched=[], **counts)
+    if _too_many(len(unresolved), len(wanted), MAX_UNRESOLVED_FRACTION):
+        raise _degenerate(deps, session_date, "unresolved", fetched=[], **counts)
 
     # Two requested names can resolve to one Questrade symbol (an alias): keep one entry per symbol,
     # preferring a name that has a FinViz row (for its price).
@@ -216,6 +277,8 @@ async def run_nightly(deps: NightlyDeps, session_date: date) -> dict[str, Any]:
     for i in range(0, len(entries), CHUNK_SIZE):
         fetched.extend(await _fetch_chunk(deps, entries[i : i + CHUNK_SIZE], lookback))
     failed = [f for f in fetched if f.errors]
+    if _too_many(sum(f.errors for f in failed), 2 * len(fetched), MAX_CANDLE_ERROR_FRACTION):
+        raise _degenerate(deps, session_date, "candle errors", fetched=fetched, **counts)
 
     with session_scope(deps.factory) as s:
         snapshot: list[repo.UniverseSnapshotRow] = []
@@ -223,7 +286,7 @@ async def run_nightly(deps: NightlyDeps, session_date: date) -> dict[str, Any]:
         for f in fetched:
             sid = repo.upsert_symbols(s, [f.sym], clock=deps.clock)[f.sym.symbol]
             repo.upsert_daily_candles(s, sid, f.daily)
-            repo.upsert_intraday_candles(s, sid, "5m", f.opening)
+            repo.upsert_intraday_candles(s, sid, INTERVAL_CODES["FiveMinutes"], f.opening)
             atr14 = atr(f.daily, 14)  # full ~20-session history so Wilder smoothing applies
             avg_vol = average_volume(f.daily[-14:])
             avg_open = average_volume(f.opening) if len(f.opening) >= min_bars else None

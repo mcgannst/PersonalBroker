@@ -24,7 +24,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 |---|---|---|---|---|---|---|
 | P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | accepted | 2 | V✅ B✅ S✅ C✅ (fix review ✅) | 3a3a50f |
 | P1-T2 | Database models, migration 0001, test database fixture | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 5e8a594 |
-| P1-T3 | Crypto and runtime settings store | T2 | fixing | 2 | V✅ B❌ S✅ C✅(should-fix) | f5ad3a4 |
+| P1-T3 | Crypto and runtime settings store | T2 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 7b5eca2 |
 | P1-T4 | Market types, clock and session calendar | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 4af1355 |
 | P1-T5 | FinViz parser and scraper | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | b1d45e5 |
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | gauntlet | 1 | V✅ | d922a9c |
@@ -458,3 +458,25 @@ None open.
 
 ### 2026-09-27T04:43:15Z · P1-T6 · Breaker · attempt 1 · started
 - Notes: writing tests/gauntlet/test_p1_t6_breaker.py against questrade/auth.py (respx + testcontainers only)
+
+### 2026-09-27T04:43:29Z · P1-T3 · Builder · attempt 2 · finished
+- Result: done. All 6 findings fixed, and all 8 tests in test_p1_t3_breaker.py pass
+- Commits: 7b5eca2
+- Gate: check.sh passed (207 tests) after rebasing on trunk 1e0f055. tests/db/test_settings_store.py grew from 6 to 39 tests
+- Notes: set() now drops invalid stored rows per key, then validates the merged result. It creates the row with INSERT ON CONFLICT DO NOTHING, otherwise uses SELECT FOR UPDATE, and reads before under the lock. Audit before for a corrupt key is value plus invalid true. markets_enabled rejects duplicates rather than deduping. populate_by_name is kept (not in the fix list)
+
+### 2026-09-27T04:44:10Z · P1-T3 · Verifier+Fix reviewer · attempt 2 · started
+- Notes: verifying trunk after fix commit 7b5eca2 and reviewing the fix against attempt-1 findings
+
+### 2026-09-27T04:45:04Z · P1-T6 · Spec+Code reviewer · attempt 1 · finished
+- Result: PASS (0 must-fix, 3 should-fix, 7 nit)
+- Commits: reviewed 0f4e1f7, d922a9c
+- Findings: should-fix - keep_alive early return ignores last_error, so token-refresh reports ok on a dead chain for up to 1 h (auth.py:105-114) - log.critical error=str(exc) of a SQLAlchemy error includes the bound parameters, i.e. the encrypted rotated tokens (auth.py:198, fix with hide_parameters=True in make_engine or log only the exception type) - the refresh token travels in the GET query string, and httpx logs full request URLs at INFO, so any later INFO-level logging config leaks it in plain text (auth.py:168-170, silence the httpx and httpcore loggers). Nits - token-refresh prints "valid until" a possibly past time (cli.py:49) - 5xx recorded with "generate a new manual token" advice (auth.py:176-180) - network error sets no failed cooldown (auth.py:172-173) - non-JSON or bad expires_in on a 200 raises a non-QuestradeAuthError after the chain is spent (auth.py:185-190) - seed accepts an empty token and does not reset last_refresh_at (auth.py:74-85) - questrade-seed silently overwrites a healthy chain (cli.py:22-34) - httpx.Client and engine never closed
+- Notes: lock with populate_existing, re-check under lock, 120 s skew, 90 s and 60 s cooldowns, commit-before-use with critical log all match SPEC 4.1 and the FinanceTracker reference. Clock only, no token in any message. keep_alive deviation is safe for current callers (only the CLI)
+
+### 2026-09-27T04:45:08Z · P1-T3 · Verifier+Fix reviewer · attempt 2 · finished
+- Result: PASS
+- Commits: reviewed 7b5eca2 (trunk at 4f70e46)
+- Gate: check.sh green (ruff, format, mypy, 207 passed), git status clean, all P1-T3 plan boxes ticked
+- Findings: all six attempt-1 findings fixed. No must-fix or should-fix. Nits only: the concurrency test covers only the new-key path, not the FOR UPDATE path. set() returns other keys from a snapshot taken before the lock. The plan Step code sample for RuntimeSettings is still the old version (the Interfaces text is correct). _key_is_valid checks one key against defaults, which will break if cross-field validators are added later.
+- Notes: the SPY requirement is compatible with P1-T9 (it uses RuntimeSettings() defaults and dedupes extra symbols)

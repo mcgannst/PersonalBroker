@@ -7,7 +7,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 2 (P2-T0 planning finishing) |
-| Current task | P2-B1 building (T2-T5) |
+| Current task | P2-B1 building (T2 done), P2-T12 building (parallel) |
 | Gauntlet stage | Breaker + reviewers |
 | Last updated (UTC) | 2026-09-27T04:44:00Z |
 | Last pushed commit | d64518b |
@@ -50,7 +50,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P2-T9 | spy_overlay 1.0.0 | T6, T7 | todo | 0 | | |
 | P2-T10 | Risk manager + kill switches | T5 | todo | 0 | | |
 | P2-T11 | Proposal service | T5, T10 | todo | 0 | | |
-| P2-T12 | Claude catalyst classifier, store, service | T2 | todo | 0 | | |
+| P2-T12 | Claude catalyst classifier, store, service | T2 | building | 1 |  |  |
 | P2-T13 | Engine orchestrator | T8–T12 | todo | 0 | | |
 | P2-T14 | Pre-market job + premarket CLI | T7, T12 | todo | 0 | | |
 | P2-T15 | Integration: one full simulated day | T13, T14 | todo | 0 | | |
@@ -712,3 +712,6 @@ None open.
 - Commits: ff0e1ce (the rebased 8d337f2)
 - Gate: plan code from P2-T2 onwards laid over trunk c36f03e in a scratch copy outside the repo. check.sh green, 585 passed
 - Notes: P2-T1 section unchanged
+
+### 2026-09-27 00:25 MT · P2-B1 · Builder · attempt 1 · started
+- Notes: batch P2-T2..T5 from Trader/docs/plans/2026-09-27-phase-2-engine.md

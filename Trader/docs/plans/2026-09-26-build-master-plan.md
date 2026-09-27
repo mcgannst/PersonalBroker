@@ -121,7 +121,7 @@ Each running agent keeps `Trader/docs/build/agents/<TASK_ID>-<role>-a<attempt>.m
 - [ ] **Recover an interrupted stage.** If the header shows a task in `building`, `gauntlet` or `fixing`, check the activity log for that stage's `finished` entry.
   - No `finished` entry: the agent died. Run `git status`. Commit any uncommitted work that belongs to the task's file list (message `<ID>: WIP recovered after interruption`), then restart that stage with a fresh agent and tell it about the recovered commit.
   - There is a `finished` entry: continue from the next stage.
-- [ ] **Pick the next tasks.** Start every `todo` task whose dependencies have all at least **passed the Verifier** (full acceptance isn't required; if a dependency later needs a fix, dependants are re-verified). Run at most **5 Builders at once**, each in its own worktree (Agent tool `isolation: "worktree"`). Builders, Verifiers and Breakers get worktrees; the read-only reviewers work from the main checkout.
+- [ ] **Pick the next tasks.** Start every `todo` task whose dependencies have all at least **passed the Verifier** (full acceptance isn't required; if a dependency later needs a fix, dependants are re-verified). Run at most **8 Builders at once** (raised from 5 on 2026-09-27), each in its own worktree (Agent tool `isolation: "worktree"`). Builders, Verifiers and Breakers get worktrees; the read-only reviewers work from the main checkout.
 - [ ] **Build.** Set the task to `building`, commit and push the state file, and spawn a Builder (§6.1).
 - [ ] **Gauntlet.** When the Builder finishes, set `gauntlet` and run the stages in §5.
 - [ ] **Accept.** When every stage passes, set `accepted`, record the last commit, commit and push the state file, and append an orchestrator log entry.
@@ -281,6 +281,21 @@ signatures match what exists. The plan contains:
 - Keep the §7.1 cross-phase contracts; state any refinement and why.
 Aim for roughly 30–80 lines per task. Implement the task outline for Phase <n> in §7.
 ```
+
+**Organise for maximum concurrency (Stephen, 2026-09-27).** The plan must be shaped so as many builders as
+possible run at once:
+- **Contract-first:** task `Pn-T1` creates only the shared contracts: types, dataclasses, protocols, enums,
+  DB migration and ORM columns, settings keys, and stub modules whose functions raise `NotImplementedError`.
+  It stays small (under about 30 minutes). Every other task depends on `Pn-T1` and on as little else as
+  possible.
+- **Depend on contracts, not implementations:** a task may use another task's interface through the `Pn-T1`
+  contract plus a fake in its tests, instead of waiting for the real implementation. Only integration tasks
+  depend on real implementations.
+- **One owner per file:** no two tasks create or modify the same file. Shared registration points (`cli.py`
+  commands, `pyproject.toml` entry points, `crontab`, router registration) belong to one final "wiring" task,
+  or each task adds its own module and the wiring task registers them.
+- **The plan states** its critical path (longest dependency chain) and its maximum parallel width, and aims
+  for a critical path of at most 4 tasks (contracts → build → integration → end-to-end).
 
 ## 7. Task outlines for Phases 2–6
 

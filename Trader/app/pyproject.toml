@@ -22,6 +22,10 @@ dependencies = [
 [project.scripts]
 trader = "trader.cli:app"
 
+[project.entry-points."trader.strategies"]
+orb_sip = "trader.strategies.orb_sip:OrbSip"
+spy_overlay = "trader.strategies.spy_overlay:SpyOverlay"
+
 [dependency-groups]
 dev = [
   "pytest>=8.3",

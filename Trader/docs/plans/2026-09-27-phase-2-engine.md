@@ -3391,7 +3391,7 @@ git push origin HEAD:trunk
   - `pyproject.toml`: entry points `orb_sip = "trader.strategies.orb_sip:OrbSip"` and `spy_overlay = "trader.strategies.spy_overlay:SpyOverlay"` (the modules arrive in P2-T8/T9; `available()` lists names without importing, and nothing loads them before T13).
   - `tests/strategies/fakes.py`: `CAL`, `SESSION` (Tue 2026-10-06), `NOW` (09:35:05 ET), `bar(...)`, `quote(...)`, `FakeCatalyst`, `FakeCatalysts`, `FakeData`, `make_ctx(...)`, `position(...)`, `working_entry(...)` for P2-T8 and P2-T9.
 
-- [ ] **Step 1: Add the market data types**
+- [x] **Step 1: Add the market data types**
 
 In `Trader/app/trader/market/types.py` change `from datetime import datetime` to `from datetime import date, datetime` and append:
 ```python
@@ -3433,7 +3433,7 @@ class OpeningBars:
     missing: dict[int, str]  # symbol_id -> reason, e.g. "no_bar_at_open" (Review Focus 4: reported, not raised)
 ```
 
-- [ ] **Step 2: Write the failing framework tests and the shared fakes**
+- [x] **Step 2: Write the failing framework tests and the shared fakes**
 
 `Trader/app/tests/strategies/__init__.py`: empty file.
 
@@ -3843,12 +3843,12 @@ def test_current_before_defaults_is_a_key_error(db_factory: sessionmaker[Session
         StrategyRegistry(db_factory, CLOCK, plugins={"demo": DemoStrategy}).current("demo")
 ```
 
-- [ ] **Step 3: Run to see them fail**
+- [x] **Step 3: Run to see them fail**
 
 Run: `uv --directory Trader/app run pytest tests/strategies/test_framework.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.strategies'`.
 
-- [ ] **Step 4: Implement `trader/strategies/base.py`**
+- [x] **Step 4: Implement `trader/strategies/base.py`**
 
 `Trader/app/trader/strategies/__init__.py`: empty file.
 
@@ -4052,7 +4052,7 @@ class Strategy(Protocol):
     async def on_fill(self, ctx: StrategyContext, fill: Fill) -> list[Intent]: ...
 ```
 
-- [ ] **Step 5: Implement `trader/strategies/registry.py`**
+- [x] **Step 5: Implement `trader/strategies/registry.py`**
 
 ```python
 """Strategy plug-ins found through the `trader.strategies` entry point (SPEC §5.1, BR-10).
@@ -4257,7 +4257,7 @@ class StrategyRegistry:
             ).scalar_one_or_none()
 ```
 
-- [ ] **Step 6: Declare the entry points**
+- [x] **Step 6: Declare the entry points**
 
 In `Trader/app/pyproject.toml`, directly after the `[project.scripts]` table, add:
 ```toml
@@ -4268,12 +4268,12 @@ spy_overlay = "trader.strategies.spy_overlay:SpyOverlay"
 ```
 Run: `uv --directory Trader/app sync --reinstall-package trader` so the installed metadata carries them.
 
-- [ ] **Step 7: Run the tests**
+- [x] **Step 7: Run the tests**
 
 Run: `uv --directory Trader/app run pytest tests/strategies/test_framework.py -q`
 Expected: all pass. `test_the_real_plugins_are_declared` only lists names; the modules arrive in P2-T8/T9.
 
-- [ ] **Step 8: Run the gate, commit and push**
+- [x] **Step 8: Run the gate, commit and push**
 
 Run: `uv --directory Trader/app run ruff format .` then `bash Trader/app/scripts/check.sh` → all pass.
 ```bash

@@ -4029,7 +4029,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 git pull --rebase && git push
 ```
 
-- [ ] **Step 12: LIVE: run the nightly job against `trader_dev`**
+- [x] **Step 12: LIVE: run the nightly job against `trader_dev`**
 
 Run: `bash scripts/trader-dev.sh nightly`
 Expected, within about 3 minutes (FinViz ~28 pages at 2 s each, then ~1,100 Questrade calls at 20/s): `nightly <next session>: succeeded {... 'source': 'finviz', 'universe': ~543, 'unresolved': [...], 'candle_errors': 0 ...}`. Then run it again and expect `skipped`.

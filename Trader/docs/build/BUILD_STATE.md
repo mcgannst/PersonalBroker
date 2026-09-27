@@ -22,11 +22,11 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 
 | ID | Title | Depends on | Status | Attempt | Stage results | Last commit |
 |---|---|---|---|---|---|---|
-| P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | gauntlet | 2 | V✅ B✅ (fix review running) | 3a3a50f |
+| P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | accepted | 2 | V✅ B✅ S✅ C✅ (fix review ✅) | 3a3a50f |
 | P1-T2 | Database models, migration 0001, test database fixture | T1 | gauntlet | 1 | V✅ | 8cb3256 |
 | P1-T3 | Crypto and runtime settings store | T2 | building | 1 |  |  |
 | P1-T4 | Market types, clock and session calendar | T1 | fixing | 2 | V✅ B❌ S✅ C✅(should-fix) | c07c6a5 |
-| P1-T5 | FinViz parser and scraper | T1 | gauntlet | 1 | V✅ S❌ C❌ (Breaker running) | 2dae157 |
+| P1-T5 | FinViz parser and scraper | T1 | fixing | 2 | V✅ B❌ S❌ C❌ | b058cdd |
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | todo | 0 | | |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | todo | 0 | | |
 | P1-T8 | Indicators | T4 | gauntlet | 1 | V✅ | 02af350 |
@@ -265,3 +265,37 @@ None open.
 - Commits: none
 - Gate: ruff, format, mypy green. pytest 61 passed, 1 failed, and the one failure is the known P1-T4 test tests/gauntlet/test_p1_t4_breaker.py::test_sessions_before_zero_is_empty (allowed). git status clean
 - Findings: none for P1-T8
+
+### 2026-09-27T04:30:32Z · P1-T5 · Breaker · attempt 1 · finished
+- Result: FAIL (7 of 12 test cases fail, 8 functions)
+- Commits: b058cdd
+- Gate: ruff, format and mypy pass. pytest: only the 7 new breaker cases fail
+- Findings: (1) no count text gives total 0, and screen returns page 1 only, with no error. (2) total 45 but page 2 empty returns 20 rows, with no error. (3) layout change (Price renamed, or header column count mismatch) gives prices of None or 0 rows, with no error. (4) HTTP 502 or other non-2xx with a long body is not treated as an error, so news returns an empty list and the page is cached. (5) cached quote page read after midnight: "Today" is re-dated to the new day (headline 24 h off). (6) news("BF.B") requests t=BF.B, not FinViz form BF-B
+- Notes: these pass: year boundary, 12AM/PM, DST, 429/503/CF-200, TTL refetch, empty-filters guard, dash-ticker mapping
+
+### 2026-09-27T04:30:37Z · P1-T1 · Spec+Code reviewer · attempt 2 · finished
+- Result: PASS (0 must-fix, 0 should-fix, 3 nits)
+- Commits: reviewed 3a3a50f (none made)
+- Findings: all 4 fix items done correctly with regression tests. Nits: phase plan code blocks for steps 3, 5, 8 and 9 (test_config type-ignores, get_env type-ignore, env_setup, notify) still show the pre-fix code. notify.py does not catch a non-JSON reply or a read timeout (traceback, exit 1, no token leak). env_setup.py leaks the fd if os.fdopen itself fails
+- Notes: the only later-task use of the DB URL in the phase plan (build_core, P1-T6) now calls get_secret_value(). Alembic env.py reads os.environ directly, so it is unaffected
+
+### 2026-09-27T04:30:40Z · P1-T8 · Spec+Code reviewer · attempt 1 · started
+- Notes: reviewing 02af350 against plan P1-T8, SPEC 5.2, Global Constraints
+
+### 2026-09-27T04:30:44Z · P1-T8 · Breaker · attempt 1 · started
+- Notes: writing Trader/app/tests/gauntlet/test_p1_t8_breaker.py against trader/market/indicators.py
+
+### 2026-09-27T04:30:59Z · P1-T2 · Spec reviewer · attempt 1 · finished
+- Result: PASS (0 must-fix, 1 should-fix, 3 nits)
+- Commits: 3a5f493, 8cb3256 reviewed
+- Findings: should-fix: models.py:123 JobRun.job index=True does not match migration 0001:142 composite ix_job_runs_job_session, and models.py lacks migration 0001:154 ix_event_log_ts (ORM and migration disagree, autogenerate drift). nit: 0001:111 partition bounds are bare dates, resolved in the session TimeZone (UTC today in trader_dev, not pinned). nit: intraday_candles.symbol_id has no FK to symbols, unlike the other candle tables. nit: rows landing in intraday_candles_default after 2028-12 will block adding that month's partition later.
+- Notes: all 11 Phase 1 tables match SPEC 10 key columns, timestamptz, numeric(14,4), bigint identity, monthly partitions verified in trader_dev (UTC bounds), app role has INSERT via default privileges
+
+### 2026-09-27T04:31:25Z · P1-T8 · Spec+Code reviewer · attempt 1 · finished
+- Result: PASS (0 must-fix, 0 should-fix, 7 nits)
+- Commits: reviewed 02af350
+- Findings: code matches plan Interfaces verbatim. Wilder ATR maths, 4dp/2dp HALF_UP rounding, doji at or under 10 pct, bearish close under open all match SPEC 5.2. Decimal only, no clock reads. Nits only: no period guard in atr, input order undocumented, no docstrings, pairwise more readable than zip, bad-data doji case, rounding-mode tests do not discriminate, and T9 calls atr with exactly 15 candles so no smoothing is applied
+
+### 2026-09-27T05:45:00Z · P1-T1 · Orchestrator · attempt 2 · finished
+- Result: ACCEPTED. Fix round (3a3a50f) passed Verifier, breaker tests and focused fix review
+- Notes: nits logged only (plan code blocks for P1-T1 show pre-fix code; notify.py JSON decode error not caught)

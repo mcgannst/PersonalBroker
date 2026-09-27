@@ -78,6 +78,24 @@ def _refused(exc: BaseException) -> bool:
     return isinstance(exc, TelegramApiError) and exc.status is not None and exc.status < 500
 
 
+def _not_sent(exc: BaseException) -> bool:
+    """The request surely never reached Telegram, or Telegram surely did not carry it out: a connect-phase
+    network error or a 5xx (the API client raises these as TelegramNotSentError), or any HTTP error answer
+    (Telegram answered, so nothing was delivered). A read timeout or a dropped connection may have
+    delivered the message, so it is not one of these."""
+    if not isinstance(exc, TelegramApiError):
+        return False
+    return exc.status is not None or getattr(exc, "not_sent", False) is True
+
+
+def _transient(exc: BaseException) -> bool:
+    """Surely not sent, and worth trying again: unreachable, a 5xx or a 429 (not another 4xx refusal)."""
+    if not _not_sent(exc):
+        return False
+    status = exc.status if isinstance(exc, TelegramApiError) else None
+    return status is None or status == 429 or status >= 500
+
+
 def _retry_after(exc: BaseException) -> float | None:
     """Telegram's retry_after of a 429, else None."""
     if isinstance(exc, TelegramApiError) and exc.status == 429 and exc.retry_after:
@@ -120,8 +138,12 @@ class TelegramBot:
         self._offset: int | None = None
         # Unbound proposal nonces whose one re-send also failed (in memory: a restart allows one more try).
         self._lost_sends: set[str] = set()
+        # Proposals whose message could not be sent: one warning event each (later failures only log).
+        self._send_warned: set[int] = set()
         # sync_closed waits until then after a 429 on an edit.
         self._edits_paused_until: datetime | None = None
+        # send_proposal waits until then after a 429 on a send.
+        self._sends_paused_until: datetime | None = None
         # Foreign id -> times of its recent warning events (the rate limit).
         self._foreign_events: dict[int, list[datetime]] = {}
 
@@ -287,11 +309,16 @@ class TelegramBot:
     async def send_proposal(self, proposal_id: int, *, resend: bool = False) -> bool:
         """Send the approval message of a pending proposal (False when skipped or not sent).
 
-        A send refused by Telegram (4xx) delivered nothing: its nonce is discarded and the next call starts
-        afresh. A network error or a 5xx may have delivered it: the unbound nonce is kept and the next call
-        re-sends ONCE with the same nonce (a duplicate message is harmless: its buttons share the nonce, so
-        only one decision can happen), binding it on success. If that re-send fails too, an `error` event
-        with a source the relay forwards tells Stephen to decide on the web, and no further re-send is made.
+        A send that surely delivered nothing (Telegram unreachable, a 5xx, a 429 or another 4xx) discards
+        its nonce, and the next call (the relay's next pump) starts afresh with a fresh nonce: an outage
+        never gives a proposal up. After a 429 no send is tried until Telegram's retry_after has passed.
+        A read timeout or a dropped connection may have delivered it: the unbound nonce is kept and the next
+        call re-sends ONCE with the same nonce (a duplicate message is harmless: its buttons share the
+        nonce, so only one decision can happen), binding it on success. That re-send failing unreachable,
+        5xx or 429 is not counted (it surely did nothing): the next call tries it again. Failing any other
+        way, an `error` event with a source the relay forwards tells Stephen to decide on the web (the relay
+        retries that alert like any notification), and no further re-send is made.
+        Only the first failure of each proposal writes a `warning` event; later ones are only logged.
         """
         view = self._proposal_view(proposal_id)
         if view is None or view.status != "pending":
@@ -304,6 +331,9 @@ class TelegramBot:
             retry_nonce = self.issuer.unbound_for("proposal", ref, self.chat_id)
             if retry_nonce is not None and retry_nonce in self._lost_sends:
                 return False
+            paused = self._sends_paused_until
+            if paused is not None and self.clock.now() < paused:
+                return False  # rate limited: this send would get a 429 too
         if retry_nonce is None:
             # No TTL: the proposal's own expiry is enforced by ProposalService.decide ("Already expired").
             nonce, data = self.issuer.issue("proposal", ref, PROPOSAL_ACTIONS, self.chat_id, None)
@@ -314,26 +344,37 @@ class TelegramBot:
         try:
             message_id = await self.api.send_message(self.chat_id, msg.text, msg.buttons, msg.silent)
         except Exception as exc:
-            err = _error_text(exc)
-            log.warning(
-                "telegram.proposal_send_failed", proposal_id=proposal_id, retry=retry_nonce is not None, **err
-            )
-            if retry_nonce is not None:
-                self._lost_sends.add(nonce)
-                self._event(
-                    "error",
-                    f"proposal {proposal_id} approval message could not be sent to Telegram; "
-                    "decide it on the web",
-                    {"proposal_id": proposal_id, **err},
-                    source=LOST_SEND_SOURCE,
-                )
-            else:
-                self._event("warning", f"proposal {proposal_id} message not sent", err)
-                if _refused(exc):
-                    self.issuer.discard(nonce)  # nothing was delivered: the next call starts afresh
+            self._send_failed(proposal_id, nonce, retry_nonce is not None, exc)
             return False
+        self._sends_paused_until = None
+        self._send_warned.discard(proposal_id)
         self.issuer.bind(nonce, message_id)
         return True
+
+    def _send_failed(self, proposal_id: int, nonce: str, retry: bool, exc: BaseException) -> None:
+        """Book a failed proposal send (see send_proposal)."""
+        err = _error_text(exc)
+        log.warning("telegram.proposal_send_failed", proposal_id=proposal_id, retry=retry, **err)
+        retry_after = _retry_after(exc)
+        if retry_after is not None:
+            self._sends_paused_until = self.clock.now() + timedelta(seconds=retry_after)
+        if retry and _transient(exc):
+            return  # the one re-send surely did nothing: keep the nonce and try it again next time
+        if retry:
+            self._lost_sends.add(nonce)
+            self._event(
+                "error",
+                f"proposal {proposal_id} approval message could not be sent to Telegram; "
+                "decide it on the web",
+                {"proposal_id": proposal_id, **err},
+                source=LOST_SEND_SOURCE,
+            )
+            return
+        if _not_sent(exc):
+            self.issuer.discard(nonce)  # nothing was delivered: the next call starts afresh
+        if proposal_id not in self._send_warned:
+            self._send_warned.add(proposal_id)
+            self._event("warning", f"proposal {proposal_id} message not sent", err)
 
     async def sync_closed(self) -> int:
         """Close every bound, unused proposal message whose proposal is no longer pending. An edit that

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tests.factories import add_strategy_config, add_symbol
 from tests.fakes_telegram import FakeMessenger, FakeRenderer, FakeTelegramApi, RecordingNotifier
+from trader.adapters.telegram.api import TelegramNotSentError
 from trader.adapters.telegram.bot import (
     FOREIGN_EVENT_BURST,
     FOREIGN_EVENT_WINDOW,
@@ -640,7 +641,7 @@ async def test_a_lost_send_that_fails_again_raises_an_error_the_relay_forwards(e
     )
     await relay.pump()  # creates the cursors at the current ends
     pid = new_entry(env)
-    env.api.fail("send_message", TelegramApiError(502, "Bad Gateway"), times=2)
+    env.api.fail("send_message", TelegramApiError(None, "timed out"), times=2)  # may have been delivered
     assert await env.bot.send_proposal(pid) is False
     first = _last_data(env)
     assert await env.bot.send_proposal(pid) is False
@@ -660,13 +661,105 @@ async def test_a_lost_send_that_fails_again_raises_an_error_the_relay_forwards(e
 async def test_a_refused_retry_of_an_uncertain_send_also_gives_up(env: Env) -> None:
     pid = new_entry(env)
     env.api.fail("send_message", TelegramApiError(None, "timed out"))
-    env.api.fail("send_message", TelegramApiError(429, "Too Many Requests", retry_after=3))
+    env.api.fail("send_message", TelegramApiError(400, "Bad Request: chat not found"))
     assert await env.bot.send_proposal(pid) is False
     assert await env.bot.send_proposal(pid) is False
     (row,) = _callback_rows(env)  # kept: the first attempt may have been delivered
     assert row.message_id is None and row.used_at is None
     with env.factory() as s:
         assert s.scalar(select(func.count()).select_from(m.EventLog).where(m.EventLog.level == "error")) == 1
+    assert await env.bot.send_proposal(pid) is False  # given up
+    assert len(env.api.calls_of("send_message")) == 2
+
+
+# --- Fix round 2 (outage delivery) ----------
+def _error_events(env: Env) -> int:
+    with env.factory() as s:
+        return s.scalar(select(func.count()).select_from(m.EventLog).where(m.EventLog.level == "error")) or 0
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TelegramNotSentError(None, "NetworkError: httpx.ConnectError: connection refused"),
+        TelegramNotSentError(None, "Telegram server error 502: Bad Gateway"),
+        TelegramApiError(502, "Bad Gateway"),
+    ],
+)
+async def test_a_surely_unsent_proposal_is_sent_later_with_a_fresh_nonce(
+    env: Env, error: TelegramApiError
+) -> None:
+    """Telegram unreachable for several pumps: every attempt discards its nonce, nothing is given up, and
+    the first send after the outage goes out with a fresh nonce that a tap then decides."""
+    bot = real_bot(env)
+    pid = new_entry(env)
+    env.api.fail("send_message", error, times=4)
+    seen: list[str] = []
+    for _ in range(4):
+        assert await bot.send_proposal(pid) is False
+        seen.append(_last_data(env)["a"])
+        assert _callback_rows(env) == []  # discarded: nothing was delivered
+    assert len(set(seen)) == 4  # a fresh nonce each time
+    assert await bot.send_proposal(pid) is True
+    fresh = _last_data(env)
+    assert fresh["a"] not in seen
+    (row,) = _callback_rows(env)
+    assert row.message_id is not None
+    assert await bot.send_proposal(pid) is False  # bound now: sent once
+    assert len(events(env, "warning")) == 1  # one warning for the proposal, not one per pump
+    assert _error_events(env) == 0  # no "decide it on the web": it was not lost
+    await bot.handle_update(tap(env, fresh["a"], row.message_id))
+    assert answers(env) == ["Approved"]
+    for old in seen:
+        await bot.handle_update(tap(env, old, row.message_id))
+    assert answers(env)[1:] == ["Invalid button"] * 4  # the discarded nonces never decide
+
+
+async def test_a_429_on_a_proposal_send_waits_retry_after_then_sends(env: Env) -> None:
+    pid = new_entry(env)
+    env.api.fail("send_message", TelegramApiError(429, "Too Many Requests: retry after 20", retry_after=20))
+    assert await env.bot.send_proposal(pid) is False
+    env.clock.advance(timedelta(seconds=19))
+    assert await env.bot.send_proposal(pid) is False
+    assert len(env.api.calls_of("send_message")) == 1  # still inside retry_after: not tried
+    env.clock.advance(timedelta(seconds=1))
+    assert await env.bot.send_proposal(pid) is True
+    assert len(env.api.calls_of("send_message")) == 2 and _error_events(env) == 0
+
+
+async def test_an_uncertain_send_whose_resend_is_surely_unsent_keeps_its_nonce_and_is_not_lost(
+    env: Env,
+) -> None:
+    """Possibly delivered, then Telegram unreachable: the unreachable re-sends don't use up the one re-send
+    (they surely did nothing), the same nonce goes out once Telegram is back, and no alert is raised."""
+    pid = new_entry(env)
+    env.api.fail("send_message", TelegramApiError(None, "timed out"))
+    env.api.fail("send_message", TelegramNotSentError(None, "connection refused"), times=3)
+    assert await env.bot.send_proposal(pid) is False
+    first = _last_data(env)
+    for _ in range(3):
+        assert await env.bot.send_proposal(pid) is False
+        assert _last_data(env) == first
+    assert await env.bot.send_proposal(pid) is True
+    assert _last_data(env) == first
+    (row,) = _callback_rows(env)
+    assert row.message_id is not None
+    assert _error_events(env) == 0
+
+
+async def test_an_uncertain_send_whose_resend_may_also_have_been_delivered_alerts_once(env: Env) -> None:
+    """The possibly-delivered rule is unchanged: one re-send with the same nonce, then one error event
+    ("decide it on the web"), then no more sends."""
+    pid = new_entry(env)
+    env.api.fail("send_message", TelegramApiError(None, "timed out"), times=2)
+    assert await env.bot.send_proposal(pid) is False
+    first = _last_data(env)
+    assert await env.bot.send_proposal(pid) is False
+    assert _last_data(env) == first
+    for _ in range(3):
+        assert await env.bot.send_proposal(pid) is False
+    assert len(env.api.calls_of("send_message")) == 2
+    assert _error_events(env) == 1
 
 
 async def test_in_a_private_chat_a_tap_or_text_from_another_sender_is_ignored(env: Env) -> None:

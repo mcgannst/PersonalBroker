@@ -938,18 +938,6 @@ async def test_telegram_outage_trading_continues(world: World) -> None:
     assert [lb for lb in world.api.labels() if lb.startswith("Daily summary")] == ["Daily summary 2026-10-06"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "P3-T13 finding: messages that fail during a Telegram outage are never delivered later. "
-        "TelegramNotifier records a surely-unsent message as `failed` (retry_later) but nothing sends that "
-        "dedupe key again: the relay's cursor has moved past the row and its re-scan drops rows whose key is "
-        "already in `notifications` (notify/relay.py _scan). TelegramBot.send_proposal treats a "
-        "surely-unsent TelegramNotSentError like a possibly-delivered error: one same-nonce re-send on the "
-        "next pump, then "
-        "`_lost_sends` stops it for the rest of the process (adapters/telegram/bot.py send_proposal)."
-    ),
-)
 async def test_telegram_outage_alerts_delivered_later_exactly_once(world: World) -> None:
     """Review Focus 3 and the task: after an outage, what could not be sent (the protective stop proposal
     and the entry fill) is delivered once Telegram is back, exactly once each, without Stephen asking."""

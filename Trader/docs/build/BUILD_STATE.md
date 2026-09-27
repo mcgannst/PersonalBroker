@@ -7,7 +7,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 1 |
-| Current task | P1-T1 |
+| Current task | P1-T1 (gauntlet), P1-T2, P1-T4, P1-T5 (building) |
 | Gauntlet stage | Breaker + reviewers |
 | Last updated (UTC) | 2026-09-27T04:45:00Z |
 | Last pushed commit | d64518b |
@@ -23,10 +23,10 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | ID | Title | Depends on | Status | Attempt | Stage results | Last commit |
 |---|---|---|---|---|---|---|
 | P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | gauntlet | 1 | V✅ | cf0ad8e |
-| P1-T2 | Database models, migration 0001, test database fixture | T1 | todo | 0 | | |
+| P1-T2 | Database models, migration 0001, test database fixture | T1 | building | 1 | | |
 | P1-T3 | Crypto and runtime settings store | T2 | todo | 0 | | |
-| P1-T4 | Market types, clock and session calendar | T1 | todo | 0 | | |
-| P1-T5 | FinViz parser and scraper | T1 | todo | 0 | | |
+| P1-T4 | Market types, clock and session calendar | T1 | building | 1 | | |
+| P1-T5 | FinViz parser and scraper | T1 | building | 1 | | |
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | todo | 0 | | |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | todo | 0 | | |
 | P1-T8 | Indicators | T4 | todo | 0 | | |
@@ -66,3 +66,7 @@ None open.
 - Commits: none (read-only), verified at dea2fdb
 - Gate: check.sh passed (ruff, format, mypy clean, 4 tests passed)
 - Notes: git pull --rebase refused only because of the orchestrator's uncommitted BUILD_STATE.md, git fetch showed trunk equal to origin/trunk. All 10 P1-T1 checkboxes ticked. trader-dev.sh version prints 0.1.0. Untracked .DS_Store files at repo root and .claude/ (not task files)
+
+### 2026-09-27T04:55:00Z · P1-T2/T4/T5 · Orchestrator · attempt 1 · started
+- Result: Stephen asked for more parallel agents. Builders now run in their own worktrees and push to trunk. Tasks start once their dependencies pass the Verifier. Up to 5 builders.
+- Notes: P1-T1 passed the Verifier. Its Breaker and both reviewers run now, in parallel with the builders of T2, T4, T5.

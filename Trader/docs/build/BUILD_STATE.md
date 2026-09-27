@@ -7,9 +7,9 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 4 (Phase 3 COMPLETE ~13:45 MT Sep 27, tag phase-3-complete) |
-| Current task | P3-REVIEW; P4-T1 contracts; web builders T12-T16 |
+| Current task | P4 wave 1 backend (T3,T4,T5,T6,T7,T11,T17) + T12 shell; web pages gauntlet; T8,T9,T10 queued |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-27T19:17:11Z |
+| Last updated (UTC) | 2026-09-27T19:55:33Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
 | Token last refreshed (UTC) | 2026-09-27T17:21:56Z (re-seeded from Stephen's new token after .env.dev rebuild; token removed from .env.dev) |
@@ -76,23 +76,23 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P3-T12 | Wiring (runtime, CLI, crontab) + LIVE dev bot | P3-T2..T11 | accepted | 2 | fix round: breaker 12/12, 1565 green; GuardedSettings, run-change exit 4, overlay cron backups | 1befdf1 |
 | P3-T13 | Integration: worker day with fake Telegram | P3-T12 | accepted | 2 | integration day 8/8 (outage xfail now passes after 707ef23); 1580 green | 707ef23 |
 | P3-REVIEW | Phase 3 review | P3-T13 | accepted | 1 | PASS; 409 alert relayed, safety-event alert cap, masked stored errors; + second flatten cron backup (12:58/15:58) | b3b9c38 |
-| P4-T1 | Backend contracts, migration 0005 (LIVE), fakes | P3 | building | 1 | - | - |
+| P4-T1 | Backend contracts, migration 0005 (LIVE), fakes | P3 | accepted | 1 | contracts + migration 0005 on trunk | b461e62 |
 | P4-T2 | Web contracts (Vite, types, ApiClient, UI) | P3 | gauntlet | 1 | built (40 web tests); gauntlet batched with web pages | 7abefd6 |
-| P4-T3 | API core, health, SPA serving | T1 | todo | 1 | - | - |
-| P4-T4 | Auth (Argon2, sessions, CSRF, lockout, TOTP) | T1 | todo | 1 | - | - |
-| P4-T5 | Dashboard and trading reads | T1 | todo | 1 | - | - |
-| P4-T6 | Decisions (approve/reject, kill switches) | T1 | todo | 1 | - | - |
-| P4-T7 | Performance, journal, CSV export | T1 | todo | 1 | - | - |
-| P4-T8 | Settings and strategies | T1 | todo | 1 | - | - |
-| P4-T9 | System, jobs, token paste, Telegram test | T1 | todo | 1 | - | - |
-| P4-T10 | Watchlist CSV upload | T1 | todo | 1 | - | - |
-| P4-T11 | Change feed and SSE | T1 | todo | 1 | - | - |
-| P4-T12 | Web shell | T2 | building | 1 | - | - |
-| P4-T13 | Web Dashboard and Candidates | T2 | building | 1 | - | - |
-| P4-T14 | Web Trades, Performance, Journal, Reports | T2 | building | 1 | - | - |
-| P4-T15 | Web Settings | T2 | building | 1 | - | - |
-| P4-T16 | Web System | T2 | building | 1 | - | - |
-| P4-T17 | Docker image, supervisord, deploy scripts | T1, T2 | todo | 1 | - | - |
+| P4-T3 | API core, health, SPA serving | T1 | gauntlet | 1 | built (65 tests) | 26e2b78 |
+| P4-T4 | Auth (Argon2, sessions, CSRF, lockout, TOTP) | T1 | building | 1 | builder running | - |
+| P4-T5 | Dashboard and trading reads | T1 | building | 1 | builder running | - |
+| P4-T6 | Decisions (approve/reject, kill switches) | T1 | building | 1 | builder running | - |
+| P4-T7 | Performance, journal, CSV export | T1 | gauntlet | 1 | built (32 tests); T18 note: HistogramBinOut lo/hi need allow_inf_nan | eb6b57b |
+| P4-T8 | Settings and strategies | T1 | building | 1 | builder running | - |
+| P4-T9 | System, jobs, token paste, Telegram test | T1 | building | 1 | builder running | - |
+| P4-T10 | Watchlist CSV upload | T1 | building | 1 | builder running | - |
+| P4-T11 | Change feed and SSE | T1 | building | 1 | builder running | - |
+| P4-T12 | Web shell | T2 | gauntlet | 1 | built (75 tests); safe next, CSRF, 15s fallback; added to web gauntlet | 8246838 |
+| P4-T13 | Web Dashboard and Candidates | T2 | gauntlet | 1 | built (37 tests); one-tap approvals, safe links; 15s fallback moved to T12 | 6d00b00 |
+| P4-T14 | Web Trades, Performance, Journal, Reports | T2 | gauntlet | 1 | built (32 tests); note for P4-T7: histogram open-ended bin wire format | 8a5feb2 |
+| P4-T15 | Web Settings | T2 | gauntlet | 1 | built (57 tests) | 42d9d49 |
+| P4-T16 | Web System | T2 | fixing | 2 | web gauntlet: V✅ B❌ (38/40: secrets in mutation cache, candidates date) review 3 must-fix -> web fix round a2 | 02fca8a |
+| P4-T17 | Docker image, supervisord, deploy scripts | T1, T2 | building | 1 | builder running | - |
 | P4-T18 | Wiring | T3-T17 | todo | 1 | - | - |
 | P4-T19 | End to end + deploy trader-dev (LIVE) | T18 | todo | 1 | - | - |
 | P4-REVIEW | Phase 4 review | T19 | todo | 1 | - | - |
@@ -1394,3 +1394,90 @@ None open.
 - Gate: check.sh 1583 passed (baseline 1580 + 3 regression tests), tests/integration 10 passed
 - Findings fixed: 409 critical never relayed (source telegram), safety-event retries alerted every 120 s, unmasked exception text stored in job_runs/event_log/job detail
 - Left for orchestrator: flatten has one cron backup only (15:55/12:55) when the worker is down (should-fix, crontab/SPEC 9), nits on duplicated helpers and dead fields
+
+### 2026-09-27 13:23 MT · P4-T16 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-8 ticked
+- Commits: 219d6ce
+- Gate: check.sh passed (1580 pytest), npm run check passed (78 vitest, 38 new in pages/system)
+- Notes: added TokenPaste and TelegramTest components under pages/system (caller asked for them on the System page). The token is held only in the DOM input, never in React or mutation state
+
+### 2026-09-27 13:25 MT · P4-T13 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1 to 9 ticked
+- Commits: 6d00b00
+- Gate: npm run check green (115 web tests, 38 new for T13), check.sh green (1583 py tests)
+- Notes: the 15 s dashboard refetch while SSE is disconnected is left to the T12 shell, for example setQueryDefaults on the dashboard key
+
+### 2026-09-27 13:26 MT · P4-T14 · Builder · attempt 1 · finished
+- Result: done, tests 1-7 written first, all 8 boxes ticked
+- Commits: 8a5feb2
+- Gate: npm run check green (157 web tests after rebase, 32 of them P4-T14), check.sh 1580 py passed
+- Notes: Journal and Reports page tests live in web/src/pages/performance/ (the file map gives T14 only trades/* and performance/* for tests). Charts fall back to a fixed width when ResizeObserver is missing (jsdom).
+
+### 2026-09-27 13:36 MT · P4-T1 · Builder · attempt 1 · finished
+- Result: done, all 10 acceptance boxes ticked
+- Commits: b461e62
+- Gate: check.sh passed (1718 pytest, 40 vitest)
+- LIVE: trader_dev alembic current 0004 -> upgrade head -> 0005 (head), alembic check "No new upgrade operations detected", app role can read and write users, web_sessions, manual_watchlists
+- Notes: env key is trunk's TRADER_FINVIZ_CACHE_DIR (EnvSettings.finviz_cache_dir), not TRADER_CACHE_DIR; plan T1/T17/T18 updated. Additive names are listed in the plan's T1 build notes. The 64 schema models match web/src/api/types.ts field for field.
+
+### 2026-09-27 13:41 MT · P4-T15 · Builder · attempt 1 · finished
+- Result: done. Settings page: approval toggle (Auto confirms), grouped runtime settings and strategy forms from FieldOut descriptors, kill-switch panel (typed-reason reset + confirm, Pause confirm, Resume), Questrade token paste, Telegram test, security (password >= 8 typed twice, TOTP setup/confirm/disable). Plan boxes 1-9 ticked
+- Commits: 42d9d49
+- Gate: check.sh passed before commit (1580 pytest). npm run check on final trunk HEAD: tsc + 214 Vitest (57 new in src/pages/settings)
+- Notes: approval_mode is shown only in its own section, not repeated in the groups. Saves update the cached settings/strategies from the response and do not refetch them (SSE refreshes them). P4-T16 also added system/TokenPaste.tsx and system/TelegramTest.tsx, which the plan gives to T15 (T16's plan only links to /settings#questrade), so the two features now exist on both pages
+
+### 2026-09-27 13:29 MT · P4-T7 · Builder · attempt 1 · started
+- Notes: performance, journal and CSV export endpoints
+
+### 2026-09-27 13:30 MT · P4-T4 · Builder · attempt 1 · started
+- Scope: trader/api/auth.py, trader/api/routers/auth.py, tests/api/test_auth.py, tests/api/test_auth_routes.py
+
+### 2026-09-27 13:31 MT · P4-WEB (T2,T13-T16) · Verifier+Breaker+Reviewer · attempt 1 · started
+- Notes: combined web-pages gauntlet, live log agents/P4-WEB-gauntlet-a1.md
+
+### 2026-09-27 13:30 MT · P4-T5 · Builder · attempt 1 · started
+- Dashboard and trading reads (dashboard, candidates, orders, fills, positions, trades, quote cache)
+
+### 2026-09-27 13:30 MT · P4-T17 · Builder · attempt 1 · started
+- Result: started (Docker image, supervisord, entrypoint, compose, deploy.sh, smoke.sh)
+
+### 2026-09-27 13:29 MT · P4-T3 · Builder · attempt 1 · started
+- Notes: API core (app factory, errors, security headers, request log, health/meta, SPA, python -m trader.api)
+
+### 2026-09-27 13:31 MT · P4-T6 · Builder · attempt 1 · started
+- Notes: decisions (proposals approve/reject, kill switches, decided_at in Telegram), worktree agent-af99f786e4707e607
+
+### 2026-09-27 13:31 MT · P4-T11 · Builder · attempt 1 · started
+- Notes: change feed (PollingChangeFeed, watermarks) and GET /api/stream (SSE), live log agents/P4-T11-builder-a1.md
+
+### 2026-09-27 13:38 MT · P4-T12 · Builder · attempt 1 · finished
+- Result: done. HTTP client, AuthContext/RequireAuth/Layout/NotFound, Login, routes and deep links, LiveUpdatesProvider, tz check. Plan boxes 1-10 ticked
+- Commits: 8246838
+- Gate: check.sh passed on trunk 42d9d49+T12 (1718 pytest, 288 Vitest incl. 75 T12 tests), npm run build ok
+- Notes: useLiveUpdates() reads a context, LiveUpdatesProvider (in Layout) opens the one EventSource, so pages may call the hook safely. Dashboard polls 15 s while disconnected via setQueryDefaults plus updating mounted observers (coordinator request). safeNext rejects backslashes, //, encoded backslashes, control chars, absolute and javascript: URLs. Login renders without an AuthProvider so T2's render.test still passes; its heading is "Login"
+
+### 2026-09-27 13:34 MT · P4-T8 · Builder · attempt 1 · started
+- Notes: settings and strategies API with form descriptors (forms.py, routers settings/strategies), live log agents/P4-T8-builder-a1.md
+
+### 2026-09-27 13:49 MT · P4-WEB (T2,T12-T16) · Verifier+Breaker+Reviewer · attempt 1 · finished
+- Result: Verifier PASS (clean tree, check.sh python 1718 passed, web 288 passed without the breaker file, all boxes ticked), Breaker FAIL 2 of 40, Review 3 must-fix
+- Commits: 02fca8a (Trader/web/src/gauntlet/web_pages_breaker.test.tsx)
+- Findings: must-fix System duplicates TokenPaste and TelegramTest (ruling), Settings token and Security passwords kept in the TanStack mutation cache. should-fix Candidates sends a malformed ?date=, TimeZoneCard not reactive, a 401 on password or TOTP routes logs out, link and summary touch targets
+
+### 2026-09-27 13:47 MT · P4-WEB · Builder · attempt 2 · started
+- Result: fix round for gauntlet findings on P4-T2/T12-T16 web code
+
+### 2026-09-27 13:58 MT · P4-T7 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-9 ticked
+- Commits: eb6b57b
+- Gate: check.sh passed (1750 pytest + web check), 32 P4-T7 tests
+- Notes: R histogram open ends are Decimal -Infinity/Infinity (web histogramLabel reads them). HistogramBinOut refuses non-finite, so /metrics returns its own JSON. Suggest allow_inf_nan on lo/hi (T1 file) in T18
+
+### 2026-09-27 13:56 MT · P4-T9 · Builder · attempt 1 · started
+- Notes: system, events, jobs (history, manual run, SubprocessJobLauncher), Questrade token paste, Telegram test, worktree agent-a108d5408a95c01cb, live log agents/P4-T9-builder-a1.md
+
+### 2026-09-27 14:12 MT · P4-T3 · Builder · attempt 1 · finished
+- Result: done, all 10 checkboxes ticked
+- Commits: 26e2b78
+- Gate: check.sh passed (1783 pytest, 214 vitest), 65 new T3 tests
+- Notes: SPA served through the 404 handler (no catch-all route), so unknown /api paths are a JSON 404 for any method and wrong methods stay 405. Unhandled 500s are rendered in the request-log middleware so they carry X-Request-ID and the security headers. Additive names: main.request_log_level, is_api_path, RequestLogMiddleware, default_services, FEED_STOP_SECONDS, meta.db_check, meta.tz_iana_version. OpenAPI and docs are off.

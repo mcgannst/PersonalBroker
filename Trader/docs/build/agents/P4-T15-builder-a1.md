@@ -2,3 +2,5 @@
 - 13:07:45 MT started, read plan and T2 contracts (types.ts, client.ts) | next: read fixtures, fakeApi, ui.tsx, render helpers
 - 13:09:49 MT npm ci done, contracts read; design: FieldInput+validate, useDraft, Confirm, 8 components | next: write failing tests (TDD)
 - 13:13:23 MT wrote 10 test files under src/pages/settings, all red (modules missing) | next: implement validate, FieldInput, components, page
+- 13:18:11 MT implemented all components, settings tests 57/57 green, npm run check green (97 tests); plan boxes ticked | next: check.sh gate, commit, push
+- 13:27:57 MT committed and pushed 42d9d49 to trunk (rebased on P4-T1 b461e62); npm run check on final HEAD 214/214 | next: log finished, report

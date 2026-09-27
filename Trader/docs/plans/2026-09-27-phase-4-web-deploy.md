@@ -783,6 +783,12 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - `build_services` opens nothing eagerly that needs the network: the Questrade client connects on first quote; Telegram's client is entered on the stack only when configured.
 - If T18 adds the live-run guard (only when trunk has neither mechanism), its check is one query every 60 s of the clock; a DB error just skips that check.
 - `create-admin` never prints the password; `user-password` refuses fewer than 8 characters (`auth.MIN_PASSWORD_CHARS`).
+- **Orchestrator notes from the Phase 4 build (2026-09-27); each is a requirement:**
+  - The live run: trunk already exits 4 when it changes (`runtime.EXIT_LIVE_RUN_CHANGED`, P3-T12 fix round). T18 only pins it; add no guard.
+  - P4-T7: `HistogramBinOut.lo`/`hi` need `Field(allow_inf_nan=True)` (open bins are sent as `"-Infinity"`/`"Infinity"`); then drop T7's `model_construct` workaround in `routers/performance.py`, return a normal response model, and add a round-trip test.
+  - P4-T3: the health DB check needs a connect timeout (for example `connect_timeout=2` in the engine's connect args for that check), so an unreachable DB fails fast instead of hanging the container health check. Add `httpx2` to `quiet_http_loggers`.
+  - Web auth ruling: an authenticated request with a wrong current password or TOTP code gets 403 `bad_credentials` (or 422), never 401. The web client treats a 401 outside login as session expiry. The route sweep should assert no `/auth/password` or `/auth/totp/*` route returns 401 for a logged-in user.
+  - Every `ProposalService` in the API comes from `runtime.build_decider` (entry guard). The sweep test greps `trader/api` for `ProposalService(`.
 
 **Acceptance tests:**
 - [ ] 1. **Route sweep:** building the real app (`create_app` with `build_services` over a test `Core`, `FakeQuestrade` and `FakeTelegramApi` through monkeypatched `runtime` builders) and walking `app.routes`: every `/api` route except `POST /api/auth/login`, `GET /api/health` and `GET /api/meta` returns 401 without a cookie (path parameters filled with valid-looking values).

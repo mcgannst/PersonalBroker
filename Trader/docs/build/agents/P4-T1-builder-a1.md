@@ -4,3 +4,4 @@
 - 12:55:23 MT rebased onto 1befdf1 (P3-T12 fix round): trunk env TRADER_FINVIZ_CACHE_DIR (finviz dir itself), EXIT_LIVE_RUN_CHANGED=4, STOPPED_PHASES | next: adapt env field, finish tests
 - 13:06:53 MT contracts implemented (schemas, errors, deps, views, stubs, migration 0005, fakes); new tests green; ruff+mypy clean | next: full check.sh
 - 13:11:46 MT check.sh green (1700 passed, 1 xfailed); LIVE trader_dev: current 0004 -> upgrade head -> 0005 (head); alembic check: no new ops; app role reads/writes new tables | next: plan notes, commit, push
+- 13:27:55 MT committed and pushed b461e62 (P4-T1) to trunk; gate green (1718 pytest, 40 vitest) | next: finished entry, report

@@ -319,16 +319,34 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - **Scoped configs:** `_latest` (and therefore `current`, `enabled`, `instance`, `update`, `ensure_defaults`) only sees `scope = 'live'` rows. `create_replay_config` validates `{**base.params, **params}` with the plug-in's model, writes a row with `scope = 'replay'`, `revision = base.revision`, `version = base.version`, `created_by` as given, and no audit row (the replay's `replay.start` audit row describes it); it refuses a `base` that is not a `live` row of that key. `config_ids(key)` and `config_key(id)` include replay rows (so `on_fill` and `_event_strategies` resolve a replay's configs).
 
 **Acceptance tests (real DB; fake candle model unless stated):**
-- [ ] 1. A buy stop submitted at 09:35:05 gets the 09:35–09:36 bar (end after submission) and fills with `ts = now`; a stop submitted at exactly 15:50:00 ignores the 15:49 bar (end equal to submission) and fills on the 15:50 bar.
-- [ ] 2. A bar starting at 15:59 fills a working exit (inside regular hours) with `ts` 16:00:00; a bar starting at 16:00 fills nothing; an entry whose bar starts at or after `close − no_entry_before_close_minutes` is cancelled (`entry cutoff`), never filled.
-- [ ] 3. **Same-bar worst case:** one bar that triggers the buy stop entry (high ≥ entry) and has `low ≤ stop_loss`: `Engine.on_candles` returns the entry fill and then the protective stop's fill in the same call; the trade's `exit_reason` is `protective_stop`, its P&L is negative, and the stop fill price is `stop − slip − hs` with the real `CandleFillModel` (skipped while T3 is a stub).
-- [ ] 4. The same bar with `low > stop_loss` → only the entry fills, and the stop keeps working into the next bar.
-- [ ] 5. Two symbols in one call: each order gets its own symbol's bar; an order whose symbol has no bar is untouched; a failing order (fake model raising) is rolled back alone with one `error` event, and the other fills.
-- [ ] 6. `on_quotes` behaviour is unchanged (the P2 broker and engine tests pass), and a `QuoteFillModel` broker given candles raises `TypeError` from the model inside the per-order savepoint (logged, not crashing the call).
-- [ ] 7. `ProposalService(audit_auto=False)` in auto mode: the proposal is `auto_approved` / submitted with `decided_via = "auto"` and no `audit_log` row; with the default `True` the P2 audit row is still written.
-- [ ] 8. `create_replay_config` writes a `replay` row (revision equal to the base's) that `current`, `enabled`, `instance` and `update` never return; `update` of the live config afterwards creates live revision n+1 without conflict; invalid params raise `ValidationError`; a `replay` base is refused.
-- [ ] 9. `ensure_defaults` after a replay row exists creates or skips live rows exactly as before; `config_key(<replay row id>)` returns the key.
-- [ ] 10. Gate and commit `P5-T4: ...`.
+- [x] 1. A buy stop submitted at 09:35:05 gets the 09:35–09:36 bar (end after submission) and fills with `ts = now`; a stop submitted at exactly 15:50:00 ignores the 15:49 bar (end equal to submission) and fills on the 15:50 bar.
+- [x] 2. A bar starting at 15:59 fills a working exit (inside regular hours) with `ts` 16:00:00; a bar starting at 16:00 fills nothing; an entry whose bar starts at or after `close − no_entry_before_close_minutes` is cancelled (`entry cutoff`), never filled.
+- [x] 3. **Same-bar worst case:** one bar that triggers the buy stop entry (high ≥ entry) and has `low ≤ stop_loss`: `Engine.on_candles` returns the entry fill and then the protective stop's fill in the same call; the trade's `exit_reason` is `protective_stop`, its P&L is negative, and the stop fill price is `stop − slip − hs` with the real `CandleFillModel` (skipped while T3 is a stub).
+- [x] 4. The same bar with `low > stop_loss` → only the entry fills, and the stop keeps working into the next bar.
+- [x] 5. Two symbols in one call: each order gets its own symbol's bar; an order whose symbol has no bar is untouched; a failing order (fake model raising) is rolled back alone with one `error` event, and the other fills.
+- [x] 6. `on_quotes` behaviour is unchanged (the P2 broker and engine tests pass), and a `QuoteFillModel` broker given candles raises `TypeError` from the model inside the per-order savepoint (logged, not crashing the call).
+- [x] 7. `ProposalService(audit_auto=False)` in auto mode: the proposal is `auto_approved` / submitted with `decided_via = "auto"` and no `audit_log` row; with the default `True` the P2 audit row is still written.
+- [x] 8. `create_replay_config` writes a `replay` row (revision equal to the base's) that `current`, `enabled`, `instance` and `update` never return; `update` of the live config afterwards creates live revision n+1 without conflict; invalid params raise `ValidationError`; a `replay` base is refused.
+- [x] 9. `ensure_defaults` after a replay row exists creates or skips live rows exactly as before; `config_key(<replay row id>)` returns the key.
+- [x] 10. Gate and commit `P5-T4: ...`.
+
+**Build notes (P5-T4 builder, 2026-09-27; trunk 8ddff8e):**
+- `on_quotes` and `on_candles` share one per-order loop body (`SimBroker._guarded`, the savepoint and error
+  event) and one `_apply`, which gains the keywords `at` (the time the entry cutoff is checked against: the
+  bar's start for candles) and `in_hours`; for quotes both default to exactly the P2 values.
+- A bar's `NoFill` other than `QUIET_CANDLE_NO_FILL` (`not_triggered`, `above_limit`, `below_limit`) is logged
+  once per order per broker instance (an in-memory set, so one replay process logs it once); no staleness
+  bookkeeping (`stale_since` stays null).
+- `Engine.on_candles` finds each entry's stop through `open_positions()` (`stop_order_id`) and checks it is
+  still working; the reopened bar only changes `open` (`dataclasses.replace`). `on_quotes` now calls the same
+  `_follow_up` helper, with unchanged behaviour.
+- `create_replay_config` raises `ValueError` ("not a live ... config") for a base that is missing, of another
+  key or `replay`-scoped, `KeyError` for an unknown plug-in, `ValidationError` for bad params; its params base
+  is the stored live row's (not the caller's copy). Constants `LIVE_SCOPE` / `REPLAY_SCOPE` in the registry.
+- The real-`CandleFillModel` variant of test 3 is skipped while P5-T3's model is a stub; it runs as soon as
+  T3 lands (`tests/engine/test_engine_candles.py`).
+- For T7: `api/feed.py`'s `strategies` watermark is `max(strategy_configs.id)`, so a new `replay` row moves it
+  until T7 filters it (T7 test 9).
 
 ---
 

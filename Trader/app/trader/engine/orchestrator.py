@@ -201,6 +201,11 @@ class Engine:
 
     async def on_quotes(self, quotes: Sequence[QtQuote], now: datetime) -> list[FillEvent]:
         fills = self.broker.on_quotes(quotes, now)
+        await self._follow_up(fills)
+        return fills
+
+    async def _follow_up(self, fills: Sequence[FillEvent]) -> None:
+        """Each fill's follow-up (`_after_fill`), isolated: one failing follow-up never loses the others'."""
         for fill in fills:
             # the broker has already booked the fill: a failing follow-up must not lose the others'
             try:
@@ -226,12 +231,32 @@ class Engine:
                         "error": _describe(exc),
                     },
                 )
-        return fills
 
     async def on_candles(self, candles: Mapping[int, Candle], now: datetime) -> list[FillEvent]:
         """Replay (P5-T4): the candle twin of `on_quotes` (`broker.on_candles`, each fill's follow-up), then
-        the same-bar worst-case pass for this call's entry fills. Returns every fill in order."""
-        raise NotImplementedError("P5-T4")
+        the same-bar worst-case pass for this call's entry fills. Returns every fill in order.
+
+        Same-bar worst case (SPEC §7.4): an entry filled in bar `b` gets its protective stop from the normal
+        follow-up (submitted at `now` = `b.end`). That stop is then tried against `b` itself, reopened at the
+        entry's fill price, so a bar that touched both the entry and the stop is counted as entered and then
+        stopped out, never the favourable order."""
+        fills = self.broker.on_candles(candles, now)
+        await self._follow_up(fills)
+        out = list(fills)
+        entries = [f for f in fills if f.purpose == "entry" and f.symbol_id in candles]
+        if not entries:
+            return out
+        stops = {p.id: p.stop_order_id for p in self.broker.open_positions()}
+        working = {o.id for o in self.broker.working_orders()}
+        for fill in entries:
+            stop_id = stops.get(fill.position_id)
+            if stop_id is None or stop_id not in working:
+                continue
+            reopened = dataclasses.replace(candles[fill.symbol_id], open=fill.price)
+            same_bar = self.broker.on_candles({fill.symbol_id: reopened}, now, orders=[stop_id])
+            await self._follow_up(same_bar)
+            out += same_bar
+        return out
 
     async def poll_quotes(self) -> list[FillEvent]:
         ids = self.broker.working_symbol_ids()

@@ -80,8 +80,9 @@ class ProposalService:
         self._broker = broker
         self.run_id = run_id
         self._entry_blocked = entry_blocked
-        # False (replay only, P5-T4 makes it take effect): skip the automatic audit rows, so a replay never
-        # writes audit_log rows stamped with simulated past times.
+        # False (replay only): skip the automatic audit rows (proposal.auto_approve and
+        # proposal.auto_execute_on_expiry:*), so a replay never writes audit_log rows stamped with simulated
+        # past times. Human decisions (decide) are always audited.
         self._audit_auto = audit_auto
 
     def _log(self, s: Session, level: str, message: str, p: m.Proposal, **extra: Any) -> None:
@@ -148,15 +149,21 @@ class ProposalService:
                 p.decided_at, p.decided_via, p.decided_by = now, "auto", "auto"
                 p.decision_latency_ms = 0
                 blocked = self._approve(s, p, "auto_approved")
-                s.add(
-                    m.AuditLog(
-                        ts=now,
-                        actor="auto",
-                        action="proposal.auto_approve",
-                        before={"proposal_id": p.id, "status": "pending"},
-                        after={"status": p.status, "via": "auto", "order_id": p.order_id, "blocked": blocked},
+                if self._audit_auto:
+                    s.add(
+                        m.AuditLog(
+                            ts=now,
+                            actor="auto",
+                            action="proposal.auto_approve",
+                            before={"proposal_id": p.id, "status": "pending"},
+                            after={
+                                "status": p.status,
+                                "via": "auto",
+                                "order_id": p.order_id,
+                                "blocked": blocked,
+                            },
+                        )
                     )
-                )
             self._log(
                 s,
                 "warning" if blocked else "info",
@@ -332,15 +339,16 @@ class ProposalService:
             # decision_latency_ms stays empty: it measures how long a decision took, and nobody decided.
             p.decided_at, p.decided_via, p.decided_by = now, "auto", AUTO_FLATTEN_ACTOR
             self._execute(s, p)
-            s.add(
-                m.AuditLog(
-                    ts=now,
-                    actor=AUTO_FLATTEN_ACTOR,
-                    action=f"proposal.auto_execute_on_expiry:{p.kind}",
-                    before={"proposal_id": p.id, "status": "pending"},
-                    after={"status": p.status, "via": "auto", "order_id": p.order_id, "error": p.error},
+            if self._audit_auto:  # unreachable in a replay (auto mode), skipped there for safety
+                s.add(
+                    m.AuditLog(
+                        ts=now,
+                        actor=AUTO_FLATTEN_ACTOR,
+                        action=f"proposal.auto_execute_on_expiry:{p.kind}",
+                        before={"proposal_id": p.id, "status": "pending"},
+                        after={"status": p.status, "via": "auto", "order_id": p.order_id, "error": p.error},
+                    )
                 )
-            )
             self._log(s, "warning", f"{p.kind} proposal {p.id} expired and was executed automatically", p)
         elif p.kind == "exit":
             p.escalated_at, p.escalations = now, 1

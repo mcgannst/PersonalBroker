@@ -26,6 +26,8 @@ from trader.market.clock import Clock
 from trader.strategies.base import Strategy
 
 ENTRY_POINT_GROUP = "trader.strategies"
+LIVE_SCOPE = "live"
+REPLAY_SCOPE = "replay"
 KINDS = ("entry", "overlay")
 SOURCE = "strategies.registry"
 _REQUIRED = ("key", "version", "kind", "params_model", "schedule", "on_event", "on_fill")
@@ -151,9 +153,10 @@ class StrategyRegistry:
 
     @staticmethod
     def _latest(s: Session, key: str) -> m.StrategyConfig | None:
+        """The newest LIVE row of `key`. A replay's override rows (scope `replay`) are never live settings."""
         return s.execute(
             select(m.StrategyConfig)
-            .where(m.StrategyConfig.strategy_key == key)
+            .where(m.StrategyConfig.strategy_key == key, m.StrategyConfig.scope == LIVE_SCOPE)
             .order_by(m.StrategyConfig.revision.desc())
             .limit(1)
         ).scalar_one_or_none()
@@ -265,9 +268,32 @@ class StrategyRegistry:
         created_by: str,
     ) -> StrategyConfigView:
         """A `replay`-scoped row for a replay's parameter override (P5-T4): `{**base.params, **params}`
-        validated by the plug-in's model, the base live row's revision and version, no audit row. Live
-        settings never see it."""
-        raise NotImplementedError("P5-T4")
+        validated by the plug-in's model (ValidationError), the base live row's revision and version, no audit
+        row (the replay's `replay.start` audit row describes it). Live settings never see it. ValueError when
+        `base` is not a live row of `key`."""
+        cls = self.plugin_class(key)
+        now = self._clock.now()
+        with session_scope(self._factory) as s:
+            row = s.get(m.StrategyConfig, base.id)
+            if row is None or row.strategy_key != key or row.scope != LIVE_SCOPE:
+                raise ValueError(
+                    f"config {base.id} is not a live {key!r} config: a replay's base must be one"
+                )
+            merged = {**row.params, **params}
+            validated = cls.params_model.model_validate(merged).model_dump(mode="json")  # ValidationError
+            replay_row = m.StrategyConfig(
+                strategy_key=key,
+                version=row.version,
+                revision=row.revision,
+                params=validated,
+                enabled=enabled,
+                created_at=now,
+                created_by=created_by,
+                scope=REPLAY_SCOPE,
+            )
+            s.add(replay_row)
+            s.flush()
+            return _view(replay_row)
 
     def _build(self, key: str, cfg: StrategyConfigView) -> Strategy:
         cls = self.plugin_class(key)

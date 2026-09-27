@@ -3,8 +3,8 @@
 Each fill is one transaction: fill row, order status, ledger rows, position and trade. Working orders are
 locked FOR UPDATE SKIP LOCKED while quotes are applied, so two callers never fill one order twice.
 An entry met at or after the no-entry cutoff (close - no_entry_before_close_minutes) is cancelled, never
-filled (BR-42). The broker depends on the FillModel protocol only; P5-T2 adds on_candles() for replay,
-running the same per-order loop with a CandleFillModel.
+filled (BR-42). The broker depends on the FillModel protocol only; on_candles() (replay, P5-T4) runs the
+same per-order loop over 1-minute bars with a CandleFillModel.
 
 Hardening (P2-B1 fix round):
 - Each order in a quote batch runs in its own savepoint: an exception rolls back that order only, logs an
@@ -22,6 +22,7 @@ from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from functools import partial
 from typing import Any
 
 from sqlalchemy import func, select, text
@@ -53,6 +54,8 @@ from trader.market.types import Candle
 from trader.settings_store import RuntimeSettings
 
 UNUSABLE_QUOTE = frozenset({"stale_quote", "halted", "delayed_quote", "no_ask", "no_bid", "crossed_quote"})
+# Replay: a bar's ordinary "not yet" outcomes, never logged (any other NoFill is logged once per order).
+QUIET_CANDLE_NO_FILL = frozenset({"not_triggered", "above_limit", "below_limit"})
 STALE_ALERT_AFTER = timedelta(seconds=60)
 ENTRY_CUTOFF = "entry cutoff"
 POSITION_GONE = "position no longer open"
@@ -165,6 +168,7 @@ class SimBroker:
         self._currency = currency
         self._cal = calendar if calendar is not None else SessionCalendar()
         self._settings: Callable[[], RuntimeSettings] = settings if settings is not None else RuntimeSettings
+        self._candle_no_fill_logged: set[int] = set()  # replay: order ids whose unusable bar was logged
 
     def entry_cutoff(self, day: date) -> datetime | None:
         """The moment entries stop filling on `day`: session close - no_entry_before_close_minutes (BR-42)."""
@@ -310,21 +314,27 @@ class SimBroker:
                 .all()
             )
             for order in orders:
-                order_id = order.id
-                try:
-                    with s.begin_nested():  # one savepoint per order: a failure costs this order only
-                        event = self._apply(s, order, by_symbol[order.symbol_id], batch)
-                except Exception as exc:
-                    self._log(
-                        s,
-                        "error",
-                        f"order {order_id}: fill failed ({type(exc).__name__}), rolled back and skipped",
-                        {"order_id": order_id, "error_type": type(exc).__name__, "error": str(exc)[:500]},
-                    )
-                    continue
+                quote = by_symbol[order.symbol_id]
+                event = self._guarded(s, order, partial(self._apply, s, order, quote, batch))
                 if event is not None:
                     events.append(event)
         return events
+
+    def _guarded(self, s: Session, order: m.Order, apply: Callable[[], FillEvent | None]) -> FillEvent | None:
+        """Run `apply` for one order in its own savepoint: a failure rolls back this order only, is logged as
+        an error event and returns None, so the batch carries on."""
+        order_id = order.id
+        try:
+            with s.begin_nested():
+                return apply()
+        except Exception as exc:
+            self._log(
+                s,
+                "error",
+                f"order {order_id}: fill failed ({type(exc).__name__}), rolled back and skipped",
+                {"order_id": order_id, "error_type": type(exc).__name__, "error": str(exc)[:500]},
+            )
+            return None
 
     def on_candles(
         self, candles: Mapping[int, Candle], now: datetime, *, orders: Collection[int] | None = None
@@ -333,7 +343,47 @@ class SimBroker:
         order uses a bar only when `bar.end > order.submitted_at` (skipped for the ids in `orders`, which also
         limits the pass to them: the same-bar worst case); hours and the entry cutoff are checked against
         `bar.start`; every timestamp written is `now`."""
-        raise NotImplementedError("P5-T4")
+        only = None if orders is None else sorted(set(orders))
+        if not candles or only == []:
+            return []
+        events: list[FillEvent] = []
+        batch = _Batch(self, now)
+        in_hours = {sid: self.in_regular_hours(bar.start) for sid, bar in candles.items()}
+        with session_scope(self._factory) as s:
+            working = [
+                m.Order.run_id == self.run_id,
+                m.Order.status == "working",
+                m.Order.symbol_id.in_(sorted(candles)),
+            ]
+            if only is not None:
+                working.append(m.Order.id.in_(only))
+            # Lock order as on_quotes: positions (by id), then the orders, then the cash lock.
+            batch.positions = self._lock_positions(s, select(m.Order.position_id).where(*working))
+            rows = (
+                s.execute(
+                    select(m.Order).where(*working).order_by(m.Order.id).with_for_update(skip_locked=True)
+                )
+                .scalars()
+                .all()
+            )
+            for order in rows:
+                bar = candles[order.symbol_id]
+                if only is None and not bar.end > order.submitted_at:
+                    continue  # the bar was over before the order existed
+                apply = partial(
+                    self._apply,
+                    s,
+                    order,
+                    bar,
+                    batch,
+                    at=bar.start,
+                    in_hours=in_hours[order.symbol_id],
+                    candle=True,
+                )
+                event = self._guarded(s, order, apply)
+                if event is not None:
+                    events.append(event)
+        return events
 
     def _lock_positions(self, s: Session, position_ids: Any) -> dict[int, m.Position]:
         """Lock (FOR UPDATE, by id) the positions named by `position_ids` (a select of ids)."""
@@ -357,17 +407,30 @@ class SimBroker:
     def read_settings(self) -> RuntimeSettings:
         return self._settings()
 
-    def _apply(self, s: Session, order: m.Order, quote: QtQuote, batch: "_Batch") -> FillEvent | None:
-        """Apply one quote to one locked working order. Runs inside the order's savepoint."""
+    def _apply(
+        self,
+        s: Session,
+        order: m.Order,
+        market: QtQuote | Candle,
+        batch: "_Batch",
+        *,
+        at: datetime | None = None,
+        in_hours: bool | None = None,
+        candle: bool = False,
+    ) -> FillEvent | None:
+        """Apply one quote (or, in replay, one 1-minute bar) to one locked working order. Runs inside the
+        order's savepoint. `at` is the market time the hours and the entry cutoff are checked against (the
+        batch time for a quote, the bar's start for a candle); every timestamp written is `batch.now`."""
         now = batch.now
+        at = now if at is None else at
         if order.status != "working":  # cancelled earlier in this batch (position closed)
             return None
         if order.purpose == "entry":
             cutoff = batch.cutoff()
-            if cutoff is None or now >= cutoff or order.session_date != batch.today:
+            if cutoff is None or at >= cutoff or order.session_date != batch.today:
                 self._refuse_late_entry(s, order, now, cutoff)
                 return None
-        if not batch.in_hours:  # regular hours only: the order stays working until the open
+        if not (batch.in_hours if in_hours is None else in_hours):  # regular hours only: it keeps working
             return None
         pos: m.Position | None = None
         if order.side == "sell":
@@ -378,9 +441,12 @@ class SimBroker:
             if pos is None or pos.run_id != self.run_id or pos.closed_at is not None or pos.qty != order.qty:
                 self._refuse_orphan_sell(s, order, now, pos)
                 return None
-        outcome = self._fill_model.assess(_spec(order), quote, now)
+        outcome = self._fill_model.assess(_spec(order), market, now)
         if isinstance(outcome, NoFill):
-            self._no_fill(s, order, outcome, now)
+            if candle:
+                self._no_fill_candle(s, order, outcome)
+            else:
+                self._no_fill(s, order, outcome, now)
             return None
         if order.side == "buy" and not self._affordable(s, order, outcome, batch):
             return None
@@ -436,6 +502,19 @@ class SimBroker:
                 "cutoff": cutoff.isoformat() if cutoff else None,
                 "order_session": order.session_date.isoformat(),
             },
+        )
+
+    def _no_fill_candle(self, s: Session, order: m.Order, outcome: NoFill) -> None:
+        """Replay: a bar that can't fill (bad bar, no volume, ...) is data, not an outage. It is logged once
+        per order at info; the quote-staleness bookkeeping doesn't apply to candles."""
+        if outcome.reason in QUIET_CANDLE_NO_FILL or order.id in self._candle_no_fill_logged:
+            return
+        self._candle_no_fill_logged.add(order.id)
+        self._log(
+            s,
+            "info",
+            f"order {order.id}: bar not usable ({outcome.reason}), not filling",
+            {"order_id": order.id, "reason": outcome.reason, "detail": outcome.detail},
         )
 
     def _no_fill(self, s: Session, order: m.Order, outcome: NoFill, now: datetime) -> None:

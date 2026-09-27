@@ -7,7 +7,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 2 (P2-T0 planning finishing) |
-| Current task | B1+T12 gauntlets; T8, T9, T10→T11 building; P3-T0 planning |
+| Current task | fixes: B1, T12; gauntlets: T6/T7, T10/T11; building: T9, T14; P3-T0 planning |
 | Gauntlet stage | Breaker + reviewers |
 | Last updated (UTC) | 2026-09-27T04:44:00Z |
 | Last pushed commit | d64518b |
@@ -38,8 +38,8 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P2-T1 | Migration 0002: trading tables, views, ledger trigger, factories | P1 | gauntlet | 1 | V✅ (Breaker+review folded into P2-B1 gauntlet) | 2cab471 |
 | P2-B1 | Batch 1: T2 runs/settings, T3 ledger, T4 fill model, T5 sim broker | P2-T1, plan fix | fixing | 2 | V✅ B❌(3/35) S+C❌(1 must, 6 should) | 1ef2f6d |
 | P2-B2 | Batch 2: T6 framework, T7 market data, T8 orb_sip, T9 spy_overlay | B1 V✅ | building | 1 | T6, T7 done; T8 + T9 building in parallel |  |
-| P2-B3 | Batch 3: T10 risk/kill switches, T11 proposals, T12 Claude catalysts | B2 V✅ | building | 1 | T12 built (gauntlet running); T10→T11 building |  |
-| P2-B4 | Batch 4: T13 orchestrator, T14 premarket (LIVE), T15 full day | B3 V✅ | todo | 0 | | |
+| P2-B3 | Batch 3: T10 risk/kill switches, T11 proposals, T12 Claude catalysts | B2 V✅ | gauntlet | 1 | T10, T11 built (0dde785); B+review running; T12 fixing | 0dde785 |
+| P2-B4 | Batch 4: T13 orchestrator, T14 premarket (LIVE), T15 full day | B3 V✅ | building | 1 | T14 building; T13 starts when T9 lands |  |
 | P2-T2 | Runs, sim account, full runtime settings | T1 | todo | 0 | | |
 | P2-T3 | Ledger with T+1 settlement | T1, T2 | todo | 0 | | |
 | P2-T4 | Broker value types + quote fill model | T2 | todo | 0 | | |
@@ -50,7 +50,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P2-T9 | spy_overlay 1.0.0 | T6, T7 | todo | 0 | | |
 | P2-T10 | Risk manager + kill switches | T5 | todo | 0 | | |
 | P2-T11 | Proposal service | T5, T10 | todo | 0 | | |
-| P2-T12 | Claude catalyst classifier, store, service | T2 | gauntlet | 1 | built; B + review running | e4c9f39 |
+| P2-T12 | Claude catalyst classifier, store, service | T2 | fixing | 2 | V✅ B❌(2) S+C✅(3 should) | 17a37e6 |
 | P2-T13 | Engine orchestrator | T8–T12 | todo | 0 | | |
 | P2-T14 | Pre-market job + premarket CLI | T7, T12 | todo | 0 | | |
 | P2-T15 | Integration: one full simulated day | T13, T14 | todo | 0 | | |
@@ -793,3 +793,33 @@ None open.
 - Commits: 17a37e6
 - Gate: check.sh passed before the new tests (456 tests)
 - Findings: test_racing_gets_for_one_name_never_lose_a_calls_cost (two concurrent get() calls for one name both call Claude and the second call's cost is dropped by the on-conflict WHERE, so spent under-reports), test_headline_prompt_injection_stays_data (headline titles with newlines can forge Ticker/Pre-market gap/Earnings date lines in the prompt)
+
+### 2026-09-27 00:39 MT · P2-B1 · Builder · attempt 2 · started
+- Notes: fix round for Breaker (pre-market fill, crossed quotes) and Spec+Code findings (exit_reason length, per-order savepoints, RTH, atomic account_state, lock order, sell guard, buying-power backstop, nits) via migration 0003
+
+### 2026-09-27 00:39 MT · P2-T8 · builder · attempt 1 · finished
+- Result: orb_sip 1.0.0 plug-in and 23 scenario tests applied verbatim from the plan, all steps ticked
+- Commits: 898ce26
+- Gate: check.sh green before rebase (515 passed). After rebase 591 passed, 5 failed, all in other tasks' breaker files (test_p2_b1_breaker x3, test_p2_t12_breaker x2)
+- Notes: no deviations. pyproject entry points for orb_sip/spy_overlay were already on trunk
+
+### 2026-09-27 00:39 MT · P2-B3 (P2-T10, P2-T11) · builder · attempt 1 · finished
+- Result: T10 and T11 built as planned, no deviations.
+- Commits: 4755163 (P2-T10), 0dde785 (P2-T11)
+- Gate: check.sh green before each commit (506, then 531 passed). On trunk after rebase, 607 pass and 5 fail, all in other agents' breaker files (test_p2_b1_breaker.py x3, test_p2_t12_breaker.py x2).
+- Notes: 23 new T10 tests (13 risk, 10 killswitch), 16 new T11 tests.
+
+### 2026-09-27 00:39 MT · P2-T9 · builder · attempt 1 · finished
+- Result: spy_overlay 1.0.0 plug-in applied from plan, 13 new tests pass, all 5 steps ticked
+- Commits: c3bcee4
+- Gate: ruff, mypy pass. pytest 581 passed, 5 failed, all in other agents' breaker files (test_p2_b1_breaker.py x3, test_p2_t12_breaker.py x2)
+- Notes: no deviations beyond ruff formatting. Entry point was already in pyproject.toml
+
+### 2026-09-27 00:40 MT · P2-T12 · Builder · attempt 2 · started
+- Result: fix round started (breaker tests, spend accounting, prompt injection, budget alert, nits)
+
+### 2026-09-27 00:39 MT · P2-T6+T7 · Spec+Code reviewer · attempt 1 · finished
+- Result: PASS (0 must-fix, 5 should-fix, 8 nits)
+- Commits reviewed: 6dd8a25 (P2-T6), 8e7d8a1 (P2-T7), both match the plan code
+- Findings (should-fix): no failure isolation in the registry (one bad plug-in or stale params stops all strategies, overlay and flatten included). candles() caches the in-progress bar, and a later cache-complete read returns it as final. No deadline on the 9:35 opening_bars fetch (retries and a 30 s HTTP timeout are unbounded against the 60 s budget). StrategyContext is only read-only by convention (mutable dataclass, list fields, ctx.data exposes the DB factory and client). No test covers opening bars at universe scale against the rate limit
+- Notes: strategies can't size or place orders (intents only, no broker in ctx). The service uses the injected, token-caching QuestradeClient. 543 symbols at 20 req/s is about 28 s (S4: 694 in 35 s)

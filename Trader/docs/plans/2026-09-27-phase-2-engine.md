@@ -7594,7 +7594,7 @@ git push origin HEAD:trunk
   - `build_engine(core: Core, client: QuoteClient, catalysts: CatalystSource) -> Engine`: the live run, a registry with defaults, the market-data service, a sim broker with fill params from settings and the entry cutoff read live from the settings store (`calendar=core.calendar, settings=core.settings.load`). P3's worker uses it; the worker rebuilds it each session so fill settings changes apply.
   - Contexts: an entry strategy sees its own open positions and working orders (every revision of its config); an overlay sees every open position of the entry strategies. `entries_today` counts the strategy's entry proposals for the session in `pending`, `approved`, `auto_approved` or `submitted`, so a re-fired event can't open a second position.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `Trader/app/tests/engine/test_orchestrator.py`:
 ```python
@@ -7836,12 +7836,12 @@ async def test_build_engine_wires_a_live_run(db_factory: sessionmaker[Session], 
     assert keys == {"orb_sip", "spy_overlay"}
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `uv --directory Trader/app run pytest tests/engine/test_orchestrator.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.engine.orchestrator'`.
 
-- [ ] **Step 3: Implement `trader/engine/orchestrator.py`**
+- [x] **Step 3: Implement `trader/engine/orchestrator.py`**
 
 ```python
 """Engine orchestrator (SPEC §6): strategy → intent → risk → proposal → broker → fill → on_fill.
@@ -8258,12 +8258,12 @@ def build_engine(core: Core, client: QuoteClient, catalysts: CatalystSource) -> 
     )
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `uv --directory Trader/app run pytest tests/engine -q`
 Expected: all pass. The strategies are loaded through the real entry points (P2-T6), so `uv sync --reinstall-package trader` must have run after P2-T6.
 
-- [ ] **Step 5: Run the gate, commit and push**
+- [x] **Step 5: Run the gate, commit and push**
 
 Run: `uv --directory Trader/app run ruff format .` then `bash Trader/app/scripts/check.sh` → all pass.
 ```bash

@@ -27,7 +27,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T3 | Crypto and runtime settings store | T2 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 7b5eca2 |
 | P1-T4 | Market types, clock and session calendar | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 4af1355 |
 | P1-T5 | FinViz parser and scraper | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | b1d45e5 |
-| P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | fixing | 2 | V✅ B❌ S+C✅(3 should-fix) | 0e2cf5e |
+| P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | gauntlet | 2 | V✅ B❌ S+C✅ → fix 0607f11 (verify+review running) | 0607f11 |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | fixing | 2 | V✅ B❌ S+C❌ | 879520e |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | building | 1 |  |  |
@@ -534,3 +534,15 @@ None open.
 - Commits: reviewed 1dd3f8e, a51e0fb (code matches the plan verbatim, Interfaces all present)
 - Findings: MUST - client.py _get/candles_many: httpx.TransportError (timeout, reset) is neither retried nor captured per request, so one network error aborts the whole candles_many scan (Review Focus 4, SPEC 4.1 backoff). SHOULD - 429 wait is not shared across the bucket (a 429 storm under candles_many) and is not exponential. SHOULD - candles_many lets parse errors (KeyError, JSONDecodeError, ValueError on a bad X-RateLimit-Reset) escape. SHOULD - clamped startTime carries microseconds and +00:00, a format the spikes never tested (spikes used timespec=seconds, ET offset). SHOULD - questrade-check prints tracebacks on unknown symbol or auth failure instead of the err plus Exit(1) pattern of token-refresh.
 - Notes: tokens are never logged. to_thread use with the sync auth and the TokenBucket under concurrency are correct
+
+### 2026-09-27T05:08:49Z · P1-T7 · Builder · attempt 2 · started
+- Notes: fix round for gauntlet findings (transport retry, per-request parse errors, shared 429 pause, tz checks, CLI errors, delay None)
+
+### 2026-09-27T05:08:38Z · P1-T6 · Builder · attempt 2 · finished
+- Result: done. All 8 findings fixed (malformed 200 / network / 5xx recorded and throttled, blank seed rejected, keep_alive dead-chain check, hide_parameters plus type-only critical log, quiet httpx loggers, seed --force and token-refresh output). Plan updated.
+- Commits: 0607f11
+- Gate: check.sh 254 passed, 2 failed, and both failures are in tests/gauntlet/test_p1_t7_breaker.py (P1-T7's, known). All 12 P1-T6 breaker tests pass.
+- Notes: code-only. The live token chain was not touched.
+
+### 2026-09-27T05:10:07Z · P1-T6 · Verifier+Fix reviewer · attempt 2 · started
+- Notes: verifying trunk after fix commit 0607f11 and reviewing the fix against the findings

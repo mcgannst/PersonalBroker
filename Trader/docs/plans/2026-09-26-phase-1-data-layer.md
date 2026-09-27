@@ -3028,7 +3028,7 @@ Expected: three lines (server time, an SPY quote with `delay=0`, and remaining l
   - `is_doji(c: Candle, max_body_pct: Decimal = Decimal("0.10")) -> bool` (a zero-range bar counts as a doji).
   - `is_bearish(c: Candle) -> bool` (close < open).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `Trader/app/tests/market/test_indicators.py`:
 ```python
@@ -3112,12 +3112,12 @@ def test_doji_and_bearish() -> None:
     assert not is_bearish(bar(t, "10", "11", "9", "10"))
 ```
 
-- [ ] **Step 2: Run to see them fail**
+- [x] **Step 2: Run to see them fail**
 
 Run: `uv run pytest tests/market/test_indicators.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.market.indicators'`.
 
-- [ ] **Step 3: Implement `trader/market/indicators.py`**
+- [x] **Step 3: Implement `trader/market/indicators.py`**
 
 ```python
 """Pure indicator maths for the ORB strategy (SPEC §5.2). No I/O, no clock."""
@@ -3179,12 +3179,12 @@ def is_bearish(c: Candle) -> bool:
     return c.close < c.open
 ```
 
-- [ ] **Step 4: Run the tests, then the gate**
+- [x] **Step 4: Run the tests, then the gate**
 
 Run: `uv run pytest tests/market/test_indicators.py -q` → `7 passed`.
 Run: `uv run ruff format . && bash scripts/check.sh` → all pass.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 cd "/Users/stephen/Documents/Code/Claude Code/Trader"

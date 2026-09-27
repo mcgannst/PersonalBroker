@@ -272,17 +272,17 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 - Sends are spaced at least 1 s apart inside one notifier (Telegram's per-chat limit), using the injected sleep.
 
 **Acceptance tests (respx for the API client, `FakeTelegramApi` for the notifier):**
-- [ ] 1. `send_message` posts to the Telegram `sendMessage` endpoint with chat id, HTML parse mode and the inline keyboard, and returns the message id from the response.
-- [ ] 2. `get_updates` turns a callback-query update and a text update into `Update` values with the right chat ids, data and message id.
-- [ ] 3. A 400 response `{"ok": false, "description": "Bad Request: message is not modified"}` raises `TelegramApiError(400, ...)` with that description; a 429 with `retry_after: 3` gives `retry_after == 3`; a 409 gives 409.
-- [ ] 4. A transport error is raised as `TelegramApiError(None, ...)`, and neither its message nor any captured log line contains the token string.
-- [ ] 5. The notifier sends one message and records a `sent` row with the message id.
-- [ ] 6. The same `dedupe_key` sent twice (and from two notifier instances) reaches the API once.
-- [ ] 7. A 400 from the API → no exception, a `failed` row with `400 Bad Request: ...`, one `warning` event; a 429 then success → sent once after the (fake) wait.
-- [ ] 8. The API raising on every call, and the DB factory raising, both leave `send` returning normally.
-- [ ] 9. A 9,000-character message is sent as three parts, with the buttons only on the last.
-- [ ] 10. `NullNotifier.send` returns without error and logs once.
-- [ ] 11. Gate and commit `P3-T5: ...`.
+- [x] 1. `send_message` posts to the Telegram `sendMessage` endpoint with chat id, HTML parse mode and the inline keyboard, and returns the message id from the response.
+- [x] 2. `get_updates` turns a callback-query update and a text update into `Update` values with the right chat ids, data and message id.
+- [x] 3. A 400 response `{"ok": false, "description": "Bad Request: message is not modified"}` raises `TelegramApiError(400, ...)` with that description; a 429 with `retry_after: 3` gives `retry_after == 3`; a 409 gives 409.
+- [x] 4. A transport error is raised as `TelegramApiError(None, ...)`, and neither its message nor any captured log line contains the token string.
+- [x] 5. The notifier sends one message and records a `sent` row with the message id.
+- [x] 6. The same `dedupe_key` sent twice (and from two notifier instances) reaches the API once.
+- [x] 7. A 400 from the API → no exception, a `failed` row with `400 Bad Request: ...`, one `warning` event; a 429 then success → sent once after the (fake) wait.
+- [x] 8. The API raising on every call, and the DB factory raising, both leave `send` returning normally.
+- [x] 9. A 9,000-character message is sent as three parts, with the buttons only on the last.
+- [x] 10. `NullNotifier.send` returns without error and logs once.
+- [x] 11. Gate and commit `P3-T5: ...`.
 
 ---
 

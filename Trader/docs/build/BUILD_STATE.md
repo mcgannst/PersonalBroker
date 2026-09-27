@@ -7,7 +7,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 1 |
-| Current task | T3 fixing, T6 B+review, T7 building |
+| Current task | T6 fixing, T7 B+review, T9 building (incl. LIVE nightly) |
 | Gauntlet stage | Breaker + reviewers |
 | Last updated (UTC) | 2026-09-27T04:44:00Z |
 | Last pushed commit | d64518b |
@@ -28,9 +28,9 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T4 | Market types, clock and session calendar | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 4af1355 |
 | P1-T5 | FinViz parser and scraper | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | b1d45e5 |
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | fixing | 2 | V✅ B❌ S+C✅(3 should-fix) | 0e2cf5e |
-| P1-T7 | Questrade data client and `questrade-check` CLI | T6 | building | 1 |  |  |
+| P1-T7 | Questrade data client and `questrade-check` CLI | T6 | gauntlet | 1 | V✅ | a51e0fb |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
-| P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | todo | 0 | | |
+| P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | building | 1 |  |  |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | todo | 0 | | |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | todo | 0 | | |
 
@@ -497,3 +497,15 @@ None open.
   - SPY: last=771.35 bid=None ask=None delay=0 lastTradeTime=2026-09-25 04:00:00+00:00 age_s=175555.665569
   - rate limit remaining: account 29999, market 14999
 - Notes: code as in the plan. One deviation: the server-time echo line was 114 chars after ruff format (E501), so the skew moved into a local variable, same output. No tenacity. The weekend lastTradeTime is 00:00 ET Friday, not a real trade time, so S2 still needs the Monday rerun.
+
+### 2026-09-27T04:46:59Z · P1-T6 · Builder · attempt 2 · started
+- Result: fixing gauntlet findings (breaker + review should-fix items), code-only, no live token calls
+
+### 2026-09-27T05:02:19Z · P1-T7 · Verifier · attempt 1 · started
+- Notes: fresh verifier run (previous run died on a network error)
+
+### 2026-09-27T05:04:07Z · P1-T7 · Verifier · attempt 1 · finished
+- Result: PASS
+- Commits: verified at trunk 89c735a (P1-T7 commits 1dd3f8e, a51e0fb)
+- Gate: check.sh ruff/format/mypy clean, 224 passed, 4 failed - all 4 in tests/gauntlet/test_p1_t6_breaker.py (P1-T6 fix round, excluded)
+- Findings: steps 1-8 ticked, models.py, client.py, test_questrade_client.py and questrade-check CLI on trunk, all HTTP tests use respx.mock with FakeTokens (no real network)

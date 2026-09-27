@@ -2518,7 +2518,7 @@ git push origin HEAD:trunk
   - Behaviour: `submit` creates a `working` order and returns its id. Sells must name an open position of this run with exactly its quantity: larger is refused (long only), smaller is refused (no partial exits; partial fills are out of scope, SPEC §7.2). A `stop` order becomes the position's `stop_order_id` (a previous working stop is cancelled as "replaced") and ends its unprotected interval. `cancel` returns `False` unless the order is working; cancelling a position's stop restarts its unprotected interval. `on_quotes` locks this run's working orders for the quoted symbols (`FOR UPDATE SKIP LOCKED`, oldest first), so a concurrent caller can't fill one order twice. A fill writes, in one transaction: the `fills` row (with the quote snapshot), the order status, ledger rows (principal, then fees if any), and either a new position (entry) or the closed position, its `trades` row (pnl net of entry and exit fees, `pnl_r = pnl / planned_risk`, `planned_risk = (entry fill − stop_loss) × qty`, `slippage_total = (entry + exit slippage) × qty`) and the cancellation of every other working order on that position ("position closed"). An unusable quote (`stale_quote`, `halted`, `delayed_quote`, `no_ask`, `no_bid`) sets `orders.stale_since` and logs one warning; if it persists 60 s, one error event is logged and `stale_alerted` is set; a later usable quote clears `stale_since`. **Entry cutoff (BR-42, overnight hold):** before the fill model is asked, a working entry (buy-to-open) order met at or after `entry_cutoff(et_date(now))`, on a non-session day, or on a later session than its own is never filled: it is cancelled with reason `"entry cutoff"` and one `warning` event is logged (it could never fill legally, so it isn't left working). Stops and exits are never refused. `end_of_session` cancels every working order of the run with `session_date <= session_date`.
   - **P5 path (documented, not built in Phase 2):** P5-T2 adds `on_candles(candles: Mapping[int, Candle], now: datetime) -> list[FillEvent]`, which locks the same working orders and runs the same loop (entry cutoff, then `self._fill_model.assess(spec, candle, now)`, then `_no_fill` / `_fill`) with a `CandleFillModel`. Because `SimBroker` depends only on the `FillModel` protocol, nothing else in the broker changes.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `Trader/app/tests/broker/test_sim_broker.py`:
 ```python
@@ -2829,12 +2829,12 @@ def test_account_state_and_equity_snapshots(env: Env) -> None:
     ]
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `uv --directory Trader/app run pytest tests/broker/test_sim_broker.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.broker.base'`.
 
-- [ ] **Step 3: Implement `trader/broker/base.py`**
+- [x] **Step 3: Implement `trader/broker/base.py`**
 
 ```python
 """The broker seam (master plan §7.1): the simulated broker now, a live adapter one day (BRD O6)."""
@@ -2860,7 +2860,7 @@ class Broker(Protocol):
     def end_of_session(self, session_date: date) -> list[int]: ...
 ```
 
-- [ ] **Step 4: Implement `trader/broker/sim_broker.py`**
+- [x] **Step 4: Implement `trader/broker/sim_broker.py`**
 
 ```python
 """Simulated broker (SPEC §7, BR-20, BR-21, BR-23): orders, fills, positions, trades and cash.
@@ -3352,12 +3352,12 @@ class SimBroker:
             )
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `uv --directory Trader/app run pytest tests/broker -q`
 Expected: all pass. If `test_order_fills_only_once` shows 2 fills, the `with_for_update(skip_locked=True)` is missing from `on_quotes`.
 
-- [ ] **Step 6: Run the gate, commit and push**
+- [x] **Step 6: Run the gate, commit and push**
 
 Run: `uv --directory Trader/app run ruff format .` then `bash Trader/app/scripts/check.sh` → all pass.
 ```bash

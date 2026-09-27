@@ -7,9 +7,9 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 2 (P2-T0 planning finishing) |
-| Current task | fixes: B1, T12; gauntlets: T6/T7, T8/T9, T10/T11; building: T13, T14; P3-T0 planning |
+| Current task | P2-REVIEW; P3 building T3,T5-T11 (T2,T4 queued) |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-27T04:44:00Z |
+| Last updated (UTC) | 2026-09-27T16:54:31Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
 | Token last refreshed (UTC) | 2026-09-27T04:39:34Z (P1-T6 LIVE) |
@@ -17,6 +17,9 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Phase 1 estimate | COMPLETE at 00:08 MT Sep 27 (started 22:13 MT Sep 26): 1 h 55 min |
 | Times | Mountain Time (America/Edmonton, currently MDT = UTC−6) from 00:05 MT Sep 27; earlier entries are UTC |
 | Phase 2 estimate | Revised 00:25 MT for batch mode: finish ~02:30–03:00 MT (4 batches, gauntlet per batch) |
+| Phase 3 started | 01:05 MT; estimate ~3.5-4 h, finish ~04:30-05:00 MT (overlaps Phase 2 fix rounds) |
+| Paused | ~01:30-11:00 MT (blocking question, then 5 unreadable repo files; .env.dev rebuilt) |
+| Phase 3 estimate | revised 11:10 MT: finish ~14:30-15:00 MT |
 
 ## Task board
 
@@ -36,10 +39,10 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | accepted | 2 | review ✅ + should-fix round ✅ (orchestrator ran check.sh: 333 passed) | ad82bfa |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | accepted | 2 | review ❌ → fix ff0e1ce (plan code re-validated: 585 passed) | ff0e1ce |
 | P2-T1 | Migration 0002: trading tables, views, ledger trigger, factories | P1 | gauntlet | 1 | V✅ (Breaker+review folded into P2-B1 gauntlet) | 2cab471 |
-| P2-B1 | Batch 1: T2 runs/settings, T3 ledger, T4 fill model, T5 sim broker | P2-T1, plan fix | fixing | 2 | V✅ B❌(3/35) S+C❌(1 must, 6 should) | 1ef2f6d |
-| P2-B2 | Batch 2: T6 framework, T7 market data, T8 orb_sip, T9 spy_overlay | B1 V✅ | fixing | 2 | T6/T7 fix a2 running; T8/T9 breaker FAIL 7/25 (held names, stop<=0, stale SPY, dup exit) -> fix a2 running | 10101f8 |
-| P2-B3 | Batch 3: T10 risk/kill switches, T11 proposals, T12 Claude catalysts | B2 V✅ | fixing | 2 | T10/T11 breaker PASS (97ee3d2), review PASS; fix round a2 for should-fix + reset-holds ruling + entry guard | 97ee3d2 |
-| P2-B4 | Batch 4: T13 orchestrator, T14 premarket (LIVE), T15 full day | B3 V✅ | fixing | 2 | T13 breaker FAIL 4/14 + review must-fix -> fix a2 running; T15 built 6bda4a0; T14 LIVE running | abf6273 |
+| P2-B1 | Batch 1: T2 runs/settings, T3 ledger, T4 fill model, T5 sim broker | P2-T1, plan fix | accepted | 2 | fix round: breaker 35/35, +26 regression, migration 0003 LIVE | 9cfdcd4 |
+| P2-B2 | Batch 2: T6 framework, T7 market data, T8 orb_sip, T9 spy_overlay | B1 V✅ | accepted | 2 | T6/T7 (f4b2845, breaker 8/8) + T8/T9 (43264b9, breaker 25/25) accepted | f4b2845 |
+| P2-B3 | Batch 3: T10 risk/kill switches, T11 proposals, T12 Claude catalysts | B2 V✅ | accepted | 2 | T10/T11 fix (8e434ad): entry guard wired, resets hold, trip race locked; breaker 24/24; T12 accepted 2876de2 | 8e434ad |
+| P2-B4 | Batch 4: T13 orchestrator, T14 premarket (LIVE), T15 full day | B3 V✅ | accepted | 2 | T13 7095737, T14 0de6245 (breaker 16/16, 09-28 job_run superseded), T15 6bda4a0 | 0de6245 |
 | P2-T2 | Runs, sim account, full runtime settings | T1 | todo | 0 | | |
 | P2-T3 | Ledger with T+1 settlement | T1, T2 | todo | 0 | | |
 | P2-T4 | Broker value types + quote fill model | T2 | todo | 0 | | |
@@ -54,8 +57,22 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P2-T13 | Engine orchestrator | T8–T12 | todo | 0 | | |
 | P2-T14 | Pre-market job + premarket CLI | T7, T12 | todo | 0 | | |
 | P2-T15 | Integration: one full simulated day | T13, T14 | todo | 0 | | |
-| P2-REVIEW | Phase 2 whole-phase review | all P2 | todo | 0 | | |
+| P2-REVIEW | Phase 2 whole-phase review | all P2 | reviewing | 1 | restarted after pause; whole-phase review + earnings window |  |
 | P3-T0 | Write the Phase 3 plan | P2-REVIEW | accepted | 1 | plan verify+fix PASS (migration renumbered 0004, event settle rule, approval actor) | 37bef3b |
+| P3-T1 | Contracts, migration 0004 (LIVE), fakes | P2 verifiers, 0003 | accepted | 1 | contracts pinned by tests; 0004 LIVE; check.sh green except P2-T14 breaker (since fixed) | fcc813f |
+| P3-T2 | Logging unification | P3-T1 | pending | 0 | - | - |
+| P3-T3 | Session event scheduler + run_job_async | P3-T1 | building | 1 | builder running | - |
+| P3-T4 | Message renderer | P3-T1 | pending | 0 | - | - |
+| P3-T5 | Telegram API client + Notifier | P3-T1 | building | 1 | builder running | - |
+| P3-T6 | Telegram bot: updates, signed callbacks, approvals | P3-T1 | building | 1 | builder running | - |
+| P3-T7 | Telegram commands | P3-T1 | building | 1 | builder running | - |
+| P3-T8 | Notification relay | P3-T1 | building | 1 | builder running | - |
+| P3-T9 | Worker process | P3-T1 | building | 1 | builder running | - |
+| P3-T10 | Day jobs: preopen, checkin, event backup | P3-T1 | building | 1 | builder running | - |
+| P3-T11 | Post-close job + candle archive | P3-T1 | building | 1 | builder running | - |
+| P3-T12 | Wiring (runtime, CLI, crontab) + LIVE dev bot | P3-T2..T11 | pending | 0 | - | - |
+| P3-T13 | Integration: worker day with fake Telegram | P3-T12 | pending | 0 | - | - |
+| P3-REVIEW | Phase 3 review | P3-T13 | pending | 0 | - | - |
 
 ## Escalations
 
@@ -932,3 +949,105 @@ None open.
 - Commits: 37bef3b
 - Findings fixed: migration renumbered 0004 chained on the P2-B1 0003 with a build-time head check (must-fix). Missed or failing events re-fired every worker step, now settled keys (must-fix). T6 decide signature lacked actor, and nonce TTL contradicted test 6 (must-fix). Protocol names aligned to P2 Engine, auto-mode proposals relayed, overlay error notes, bot decider outside a session, LIVE worker smoke only outside the session, tests/notify init owned by T1, DST date (should-fix)
 - Notes: P2-T13 and P2-T15 not on trunk yet, names taken from the Phase 2 plan code
+
+### 2026-09-27 01:03 MT · P2-B1 · Builder · attempt 2 · finished
+- Result: done, all 10 orchestrator decisions applied, breaker file passes unedited (35 cases)
+- Commits: 4b4ee21, 9cfdcd4 (on trunk)
+- Gate: lint, format, mypy clean. 730 passed, 16 failed, all in other tasks' breaker files (t13, t6t7, t8t9). New: 28 regression cases in tests/broker/test_sim_broker_fixes.py and tests/db/test_migration_0003.py
+- LIVE: trader_dev alembic 0002 to 0003 (head), alembic check clean
+- Notes: the buying-power backstop now refuses the 2nd entry in T13 breaker test_each_fill_goes_to_the_owning_strategy_on_fill (two entries of about 711 USD each on 720 USD cash). The test needs more starting_cash. conftest cleanup TRUNCATE runs in replica mode (cash_ledger refuses TRUNCATE)
+
+### 2026-09-27 01:04 MT · P3-T1 · Builder · attempt 1 · started
+- Notes: contracts (migration 0004, settings, notify/Telegram types, stubs, fakes, PTB dependency)
+
+### 2026-09-27 01:05 MT · P2-T8/T9 · Builder · attempt 2 · finished
+- Result: all MUST FIX (1-5), should-fix 6 and nits done. Breaker file 20/20 green
+- Commits: 43264b9
+- Gate: ruff, format, mypy clean. pytest 773 passed, 9 failed, all in other tasks' breakers (T13 x5, T6/T7 x4)
+- Notes: breaker stop-below-zero case edited (stop_atr_fraction=5 is now invalid under le=1, so it uses 1 with ATR 6). Free slots = max_positions - max(entries_today, positions + working entries) to avoid double counting. Overlay param max_quote_age_seconds=120 added (stale_quote_seconds is not reachable from ctx)
+
+### 2026-09-27 01:20 MT · P2-T6/T7 · Builder · attempt 2 · finished
+- Result: done. All 9 must/should-fix items fixed plus the nits (StrategyContext immutability deferred as ruled)
+- Commits: f4b2845
+- Gate: ruff, format, mypy clean. T6/T7 suites and breaker all pass (8/8 breaker). Full run 750 passed, 12 failed, all in other tasks' breaker files (T13 x5, T8/T9 x7)
+- Notes: two breaker assertions updated to the rulings (load_all skips broken plug-ins, version bump adds an audit row so 5 becomes 6). test_candles_come_from_the_cache_when_complete clock moved to 13:45
+
+### 2026-09-27 01:12 MT · P2-T14 · Builder · attempt 1 · finished
+- Result: done, all 7 plan steps ticked
+- Commits: 55b4f8f (code), 61d5b58 (LIVE step tick)
+- Gate: check.sh 627 passed, 5 failed, all in other tasks' breaker files (p2_b1 x3, p2_t12 x2, before the T12 fix landed). Premarket, CLI and catalyst tests (55) pass on top of the T12 fix 2876de2
+- LIVE: `premarket` (Sunday) printed "not a trading session". First `--date 2026-09-28` failed with QuestradeAuthError login HTTP 500, a Questrade outage from about 00:52 to 01:07 MT (job_run 3 failed). Retry succeeded (job_run 4) with 0 candidates, 0 classified and $0 Claude cost. Rerun printed skipped. Both FinViz screens show in the brief as "failed", because FinViz renders an empty result as a "0 Total" page with no table and the P1-T5 scraper raises FinvizParseError for it. Gaps are 0 on a weekend. trader_dev_app has SELECT/INSERT/UPDATE on catalysts
+- Notes: AsyncAnthropic(timeout=30, max_retries=1). Suggest a P1-T5 follow-up so an empty screen ("0 Total") returns an empty page instead of an error
+
+### 2026-09-27 01:08 MT · P2-T10T11 · Builder · attempt 2 · finished
+- Result: all 6 fixes, 5 nits and the coordinator's stop_loss<=0 item done, with regression tests
+- Commits: 8e434ad
+- Gate: ruff, format, mypy clean. pytest 816 passed, 5 failed, all in tests/gauntlet/test_p2_t13_breaker.py (they fail the same way with the pre-fix T10/T11 code, so they are T13's). T10/T11 breaker 24/24 green
+- Notes: blocked entries end `rejected` (error "entry blocked: ..."). reset() gains an optional equity kw. Reset baselines come from reset_at and event_log data, so no migration was needed
+
+### 2026-09-27 01:09 MT · P2-T14 · Spec+Code reviewer · attempt 1 · started
+- Result: reviewing 55b4f8f and 61d5b58 (pre-market job + premarket CLI), incl. FinViz zero-match finding
+
+### 2026-09-27 01:09 MT · P2-T14 · Verifier+Breaker · attempt 1 · started
+- Notes: verifying check.sh, then writing tests/gauntlet/test_p2_t14_breaker.py
+
+### 2026-09-27 01:24 MT · P2-T14 · Spec+Code reviewer · attempt 1 · finished
+- Result: FAIL (1 must-fix, 5 should-fix, nits)
+- Findings: must-fix: FinViz zero-match page ("0 Total", no table) raises FinvizParseError in scraper.py:106 and again at :276, so a quiet day reads as "screens failed" (fix is in the P1-T5 scraper/parser). should-fix: an ignored premarket filter isn't detected (the baseline is the whole market, not the universe), premarket screens cached 12 h with no ET-date key, --date/off-window runs use wall-clock FinViz and quote data yet record success and block the real run (dev DB now has a succeeded premarket run for 2026-09-28 built on Sunday), a Questrade quote failure kills the whole brief, --date isn't validated
+- Notes: Clock, Decimal, AsyncAnthropic(timeout=30, max_retries=1), resource cleanup and secrets are all OK
+
+### 2026-09-27 01:12 MT · P2-T13 · Builder · attempt 2 · finished
+- Result: done. All 8 findings and the nits fixed. The T13 breaker now passes 14/14. There are 8 new regression tests in tests/engine/test_orchestrator.py, which now has 17 tests.
+- Commits: 6004057, 7095737 (pushed to trunk)
+- Gate: check.sh passed, 829 tests. tests/integration passed.
+- Notes: T13 breaker tests 5 and 6 now use starting_cash 2000 and risk_pct 0.002, because the B1 buying-power backstop cancelled the second entry. The coordinator authorised this. duplicate_symbol is cast to RiskCheck, which is P2-T10's Literal in risk.py and doesn't list it yet. The build_engine changes from T10/T11 are kept as they were.
+
+### 2026-09-27 01:15 MT · P2-T14 · Verifier+Breaker · attempt 1 · finished
+- Result: Verify PASS for T14 (tree clean, all 7 T14 boxes ticked, ruff/format/mypy clean, T14 tests green). Breaker FAIL (3 of 16)
+- Commits: 6a2105f (P2-B4: T14 gauntlet breaker tests)
+- Gate: pytest 816 passed, 5 failed before my file, all 5 in tests/gauntlet/test_p2_t13_breaker.py (P2-T13, not T14)
+- Findings: (1) FinViz "0 Total" empty screen is reported as a failed screen (P1-T5 _checked_screener raises on no table). (2) Questrade quotes outage crashes run_premarket instead of briefing the news/earnings names with gap n/a. (3) a multi-line Claude/FinViz error text adds forged lines to the brief
+- Notes: passing: one screen down, partial quotes, over-cap incl cap 0, budget mid-run, one Claude error, outside-universe/SPY/BF-B/duplicates, early close, holiday/weekend CLI, rerun skip vs --force, gap edge cases and Decimal, no secrets
+
+### 2026-09-27 01:17 MT · P2-T14 · Builder · attempt 2 · started
+- Result: fix round started (breaker + reviewer findings, P1-T5 FinViz zero-match, P2-T12 budget race, stale job_run)
+
+### 2026-09-27 01:23 MT · P3-T1 · Builder · attempt 1 · finished
+- Result: done. Contracts, migration 0004, settings, sessions helpers, notify and Telegram types, 14 stub modules, fakes, PTB 21.11.1
+- Commits: fcc813f
+- Gate: ruff, format, mypy clean. pytest 959 passed, 3 failed, all in tests/gauntlet/test_p2_t14_breaker.py, the P2-B4 breaker tests awaiting their fix round, not T1 code
+- LIVE: trader_dev alembic current was 0003, upgrade head applied, current now 0004 head. alembic check says No new upgrade operations detected. The app role has DML on the 4 new tables
+- Notes: head was 0003 so no renumbering. Plan refinements recorded in the plan: PositionLine.stop_working bool as last field, and async status_view, position_lines, pnl_view because quotes is async. Extras: Buttons alias, MissedEvent, EVENT_KEY_PATTERN, FireResult.detail default
+
+### 2026-09-27 01:58 MT · P2-T14 · Builder · attempt 2 · finished
+- Result: done. All 16 cases in test_p2_t14_breaker.py pass. Items 1-8 and all nits fixed (earningsdate filter unchanged)
+- Commits: 0de6245
+- Gate: check.sh passed (995 tests after rebase), tests/integration 2 passed
+- Notes: LIVE, 1 FinViz fetch (f=cap_mega,sh_price_u1): '0 Total' page with no table, saved as tests/fixtures/finviz/raw_screener_zero.html. trader_dev: job_runs id 4 (premarket 2026-09-28, succeeded from Sunday data) set to status 'superseded' by trader_dev_app (it has UPDATE), 1 row, confirmed by SELECT. The Monday 08:00 ET run will not be skipped
+
+### 2026-09-27 10:51 MT · P3-T9 · Builder · attempt 1 · started
+- Result: started (worker process, trader/worker.py and tests/test_worker.py)
+
+### 2026-09-27 10:51 MT · P3-T11 · Builder · attempt 1 · started
+- Result: started post-close job + candle archive
+
+### 2026-09-27 10:51 MT · P2-REVIEW · Phase reviewer (review+fix) · attempt 1 · started
+- Result: in progress (earnings window change, RiskCheck duplicate_symbol, whole-phase review, §7.1 update)
+
+### 2026-09-27 10:52 MT · P3-T8 · Builder · attempt 1 · started
+- Notes: notification relay (trader/notify/relay.py, tests/notify/test_relay.py)
+
+### 2026-09-27 10:52 MT · P3-T6 · Builder · attempt 1 · started
+- Result: started (Telegram bot: callbacks.py, bot.py and their tests)
+
+### 2026-09-27 10:52 MT · P3-T3 · Builder · attempt 1 · started
+- Notes: session event scheduler, run_job_async, clean exit on unrecordable success
+
+### 2026-09-27 10:52 MT · P3-T5 · Builder · attempt 1 · started
+- Telegram API client (PtbTelegramApi) and TelegramNotifier/NullNotifier, TDD
+
+### 2026-09-27 10:52 MT · P3-T7 · Builder · attempt 1 · started
+- Result: building Telegram commands (trader/adapters/telegram/commands.py) TDD
+
+### 2026-09-27 10:52 MT · P3-T10 · Builder · attempt 1 · started
+- Notes: day-level jobs (preopen, checkin, event backup) TDD

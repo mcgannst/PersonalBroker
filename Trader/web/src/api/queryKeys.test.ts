@@ -26,4 +26,8 @@ describe("query keys", () => {
     expect(TOPIC_KEYS.proposals).toEqual(["dashboard", "proposals", "proposal", "position"]);
     expect(prefixesFor(["proposals", "killswitch"])).toEqual(["dashboard", "proposals", "proposal", "position", "killswitches"]);
   });
+
+  it("a new trade refreshes the journal (its days show trade counts and realized P&L)", () => {
+    expect(TOPIC_KEYS.trades).toContain("journal");
+  });
 });

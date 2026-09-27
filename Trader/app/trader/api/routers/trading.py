@@ -7,7 +7,8 @@ come from `trader.notify.views.position_lines`, the builder behind Telegram's `/
 Telegram show the same numbers. A symbol missing from the database shows ticker `?`.
 
 Routes that need quotes or candles are `async` and run their database work in a worker thread; the quote
-and candle fetches run on the event loop, so the shared `CachedQuotes` stays on one loop. The candle fallback
+and candle fetches run on the event loop, so the shared `CachedQuotes` stays on one loop (their own database
+steps run in a thread: `services.OffLoopMarketData`). The candle fallback
 of the position detail is bounded by `CANDLE_TIMEOUT_SECONDS` (a timeout is a `chart_error`).
 
 Integer query and path values are bounded (`MAX_OFFSET`, `MAX_ID`) so none can overflow a bigint.

@@ -46,7 +46,8 @@ export const TOPIC_KEYS: Record<Topic, readonly string[]> = {
   orders: ["dashboard", "positions", "position", "trades", "metrics", "equity"],
   fills: ["dashboard", "positions", "position", "trades", "metrics", "equity"],
   positions: ["dashboard", "positions", "position", "trades", "metrics", "equity"],
-  trades: ["dashboard", "positions", "position", "trades", "metrics", "equity"],
+  // A closed trade also changes the journal day's trade count and realized P&L (`JournalDayOut`).
+  trades: ["dashboard", "positions", "position", "trades", "metrics", "equity", "journal"],
   candidates: ["dashboard", "candidates"],
   killswitch: ["dashboard", "killswitches"],
   events: ["dashboard", "events", "system"],

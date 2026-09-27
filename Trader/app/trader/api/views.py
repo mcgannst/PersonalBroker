@@ -70,18 +70,20 @@ def worker_out(factory: sessionmaker[Session], now: datetime, stale_seconds: int
             session_date=row.session_date,
             pid=row.pid,
             host=row.host,
-            detail=row.detail if isinstance(row.detail, dict) else None,
+            detail=redacted_json(row.detail) if isinstance(row.detail, dict) else None,
         )
 
 
-def _redacted(value: Any) -> Any:
+def redacted_json(value: Any) -> Any:
     """A copy with every string masked by pattern and every secret-named key's value replaced."""
     if isinstance(value, str):
         return redact_text(value)
     if isinstance(value, Mapping):
-        return {k: REDACTED if is_secret_key(k) and v is not None else _redacted(v) for k, v in value.items()}
+        return {
+            k: REDACTED if is_secret_key(k) and v is not None else redacted_json(v) for k, v in value.items()
+        }
     if isinstance(value, list | tuple):
-        return [_redacted(v) for v in value]
+        return [redacted_json(v) for v in value]
     return value
 
 
@@ -91,9 +93,9 @@ def event_out(row: m.EventLog) -> EventOut:
     if row.data is None:
         data = None
     elif isinstance(row.data, Mapping):
-        data = _redacted(row.data)
+        data = redacted_json(row.data)
     else:
-        data = {"value": _redacted(row.data)}
+        data = {"value": redacted_json(row.data)}
     return EventOut(
         id=row.id,
         ts=row.ts,

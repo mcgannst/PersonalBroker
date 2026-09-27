@@ -310,14 +310,6 @@ def _totp_match(secret: str, code: str | None, now: datetime) -> int | None:
     return matched
 
 
-def _totp_step(secret: str, code: str | None, now: datetime, last_step: int | None) -> int | None:
-    """The step a code matches (±1 step, later than `last_step`), else None."""
-    matched = _totp_match(secret, code, now)
-    if matched is None or (last_step is not None and matched <= last_step):
-        return None
-    return matched
-
-
 def _decrypt(services: ApiServices, value: str | None) -> str | None:
     return services.core.crypto.decrypt(value)
 

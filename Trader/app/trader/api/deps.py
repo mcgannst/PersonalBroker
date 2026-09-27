@@ -14,7 +14,7 @@ Routers take what they need through FastAPI dependencies:
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Annotated, Any, Literal, Protocol
 
@@ -46,7 +46,7 @@ class AuthUser:
     id: int
     username: str
     session_id: int
-    csrf_token: str
+    csrf_token: str = field(repr=False)  # never in a log line or traceback
 
 
 def actor(user: AuthUser) -> str:

@@ -29,9 +29,10 @@ def _retrieve(task: "asyncio.Task[Mapping[int, QtQuote]]") -> None:
 
 class CachedQuotes:
     """Satisfies `trader.notify.views.Quotes`. Entries are keyed by the sorted distinct symbol ids; the TTL
-    is read on every call (a settings change applies at once). Only the last result per key is kept, and
-    keys whose entry expired are dropped on the next call, so the cache stays as small as the set of pages
-    in use."""
+    is read on every call through `ttl_seconds` (in the API, the shared `QuietSettings`, which serves a
+    value cached for up to 5 s, so a settings change applies within about 5 s). Only the last result per
+    key is kept, and keys whose entry expired are dropped on the next call, so the cache stays as small as
+    the set of pages in use."""
 
     def __init__(self, fetch: Quotes, clock: Clock, ttl_seconds: Callable[[], float]) -> None:
         self._fetch = fetch

@@ -7,10 +7,10 @@ Only complete bars (end <= clock.now()) are ever written to the candle cache.
 
 import asyncio
 import dataclasses
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
-from typing import Protocol
+from typing import Any, Protocol
 
 import structlog
 from sqlalchemy import select
@@ -82,6 +82,12 @@ class MarketDataService:
         # symbols.id -> questrade_id for quotes(), kept for the process lifetime; an entry is dropped when
         # Questrade returns no quote for it, so a re-mapped symbol is re-read from the database.
         self._quote_qids: dict[int, int] = {}
+
+    async def _db[T](self, step: Callable[..., T], *args: Any) -> T:
+        """Runs one synchronous database step of `quotes()` or `candles()`. Inline here (the worker and the
+        jobs); the API's subclass (`trader.api.services.OffLoopMarketData`) runs it in a worker thread, so the
+        API's event loop never waits on the database (P4-REVIEW)."""
+        return step(*args)
 
     # --- cache-only reads ---------------------------------------------------------------------------------
     async def universe(self, session_date: date) -> list[UniverseMember]:
@@ -172,7 +178,7 @@ class MarketDataService:
         wanted = list(dict.fromkeys(symbol_ids))
         uncached = [sid for sid in wanted if sid not in self._quote_qids]
         if uncached:
-            self._quote_qids.update(self._questrade_ids(uncached))
+            self._quote_qids.update(await self._db(self._questrade_ids, uncached))
         qids = {sid: self._quote_qids[sid] for sid in wanted if sid in self._quote_qids}
         if not qids:
             return {}
@@ -261,21 +267,10 @@ class MarketDataService:
         cached: list[Candle] = []
         if interval != "OneDay":
             expected = int((end - start) / step)
-            with self._factory() as s:
-                rows = s.execute(
-                    select(m.IntradayCandle)
-                    .where(
-                        m.IntradayCandle.symbol_id == symbol_id,
-                        m.IntradayCandle.interval == INTERVAL_CODES[interval],
-                        m.IntradayCandle.ts >= start,
-                        m.IntradayCandle.ts < end,
-                    )
-                    .order_by(m.IntradayCandle.ts)
-                ).scalars()
-                cached = [_from_row(r, step) for r in rows]
+            cached = await self._db(self._cached_candles, symbol_id, start, end, interval)
             if expected > 0 and len(cached) >= expected:
                 return cached
-        qids = self._questrade_ids([symbol_id])
+        qids = await self._db(self._questrade_ids, [symbol_id])
         if symbol_id not in qids:
             return cached
         try:
@@ -293,9 +288,29 @@ class MarketDataService:
             now = self._clock.now()
             complete = [c for c in fetched if max(c.end, c.start + step) <= now]
             if complete:
-                with session_scope(self._factory) as s:
-                    repo.upsert_intraday_candles(s, symbol_id, INTERVAL_CODES[interval], complete)
+                await self._db(self._store_candles, symbol_id, interval, complete)
         return fetched
+
+    def _cached_candles(
+        self, symbol_id: int, start: datetime, end: datetime, interval: Interval
+    ) -> list[Candle]:
+        step = STEP[interval]
+        with self._factory() as s:
+            rows = s.execute(
+                select(m.IntradayCandle)
+                .where(
+                    m.IntradayCandle.symbol_id == symbol_id,
+                    m.IntradayCandle.interval == INTERVAL_CODES[interval],
+                    m.IntradayCandle.ts >= start,
+                    m.IntradayCandle.ts < end,
+                )
+                .order_by(m.IntradayCandle.ts)
+            ).scalars()
+            return [_from_row(r, step) for r in rows]
+
+    def _store_candles(self, symbol_id: int, interval: Interval, candles: list[Candle]) -> None:
+        with session_scope(self._factory) as s:
+            repo.upsert_intraday_candles(s, symbol_id, INTERVAL_CODES[interval], candles)
 
     async def prior_close(self, symbol_id: int, session_date: date) -> Decimal | None:
         prev = self._cal.previous_session(session_date)

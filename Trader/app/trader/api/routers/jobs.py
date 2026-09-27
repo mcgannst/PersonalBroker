@@ -17,6 +17,7 @@ from sqlalchemy import select
 from trader.api.deps import CsrfUser, CurrentUser, Services, actor
 from trader.api.launcher import already_running, check_request
 from trader.api.schemas import Items, JobLaunchOut, JobRunIn, JobRunOut
+from trader.api.views import redacted_json
 from trader.db import models as m
 from trader.logging_setup import redact_text
 
@@ -26,7 +27,7 @@ MAX_LIMIT = 500
 
 
 def job_run_out(row: m.JobRun) -> JobRunOut:
-    """One `job_runs` row; its error masked, its duration in seconds once it finished."""
+    """One `job_runs` row; its error and detail masked, its duration in seconds once it finished."""
     duration = (row.finished_at - row.started_at).total_seconds() if row.finished_at is not None else None
     return JobRunOut(
         id=row.id,
@@ -36,7 +37,7 @@ def job_run_out(row: m.JobRun) -> JobRunOut:
         finished_at=row.finished_at,
         status=row.status,
         error=redact_text(row.error) if row.error is not None else None,
-        detail=row.detail if isinstance(row.detail, dict) else None,
+        detail=redacted_json(row.detail) if isinstance(row.detail, dict) else None,
         duration_seconds=duration,
     )
 

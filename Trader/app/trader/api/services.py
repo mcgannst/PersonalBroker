@@ -14,7 +14,10 @@ the change feed and the day plan.
   `GuardedSettings` alerts once per streak, so a web click never writes a relayed `settings` alert. A read
   on the event loop never touches the database: the guard keeps its value for `SETTINGS_MAX_AGE_S` and
   refreshes a stale one in a worker thread (`asyncio.to_thread`) while serving the cached value. A read from
-  a worker thread (a sync route) refreshes in place.
+  a worker thread (a sync route) refreshes in place. A TTL or poll-interval change therefore reaches the API
+  within about `SETTINGS_MAX_AGE_S` (on the first read after the background refresh has finished).
+- **Market data off the loop (P4-REVIEW):** quotes and candles come from `OffLoopMarketData`, whose database
+  steps run in a worker thread; only the Questrade calls run on the event loop.
 - **Decisions on a bad row:** `ProposalService.decide` still reads the store directly and fails closed. The
   API answers that failure with a 503 `settings_unreadable` (the invalid keys are logged, never the values),
   not an unhandled 500.
@@ -26,6 +29,7 @@ import time
 from collections.abc import Callable
 from contextlib import AsyncExitStack
 from datetime import datetime
+from typing import Any
 
 import structlog
 from pydantic import ValidationError
@@ -47,7 +51,9 @@ from trader.strategies.registry import StrategyRegistry
 log = structlog.get_logger("api.services")
 
 CANDLE_INTERVAL: Interval = "FiveMinutes"  # the position-detail chart (SPEC §12, Trades)
-SETTINGS_MAX_AGE_S = 5.0  # a settings change reaches the API's loops within this (monotonic seconds)
+# How long a settings value is served before it is re-read (monotonic seconds): a change reaches the API's
+# loops on the first read after the refresh that follows, so within about this long while they are busy.
+SETTINGS_MAX_AGE_S = 5.0
 SETTINGS_UNREADABLE = "settings_unreadable"
 
 Decide = Callable[[int, Decision, Via, str], DecisionResult]
@@ -128,6 +134,15 @@ class QuietSettings:
         return self._current
 
 
+class OffLoopMarketData(MarketDataService):
+    """The API's `MarketDataService`: the database steps of `quotes()` and `candles()` (symbol id lookups,
+    the candle cache read and write) run in a worker thread, so the API's event loop never waits on the
+    database; the Questrade calls stay on the loop (P4-REVIEW)."""
+
+    async def _db[T](self, step: Callable[..., T], *args: Any) -> T:
+        return await asyncio.to_thread(step, *args)
+
+
 def guarded_decider(core: Core, settings: Callable[[], RuntimeSettings]) -> Callable[[int], Decide]:
     """`decider_for`: `runtime.build_decider` with the shared quiet settings guard (no relayed alert per
     click). A decision that fails because the stored settings are unusable is a 503 `settings_unreadable`
@@ -159,7 +174,7 @@ async def build_services(core: Core, stack: AsyncExitStack) -> ApiServices:
     await asyncio.to_thread(registry.ensure_defaults)  # once per process (the day plan needs them)
     settings = QuietSettings(core)
     await asyncio.to_thread(settings.refresh)  # primed off the loop
-    data = MarketDataService(factory, clock, core.calendar, runtime.LazyQuestrade(core, stack))
+    data = OffLoopMarketData(factory, clock, core.calendar, runtime.LazyQuestrade(core, stack))
 
     async def candles(symbol_id: int, start: datetime, end: datetime) -> list[Candle]:
         return await data.candles(symbol_id, start, end, CANDLE_INTERVAL)

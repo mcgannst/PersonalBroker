@@ -901,8 +901,8 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - Credentials for LIVE come from `TRADER_WEB_USER`/`TRADER_WEB_PASSWORD` when set, else `ADMIN_USERNAME`/`ADMIN_PASSWORD_INITIAL`, all from the process environment (loaded from the main checkout's `docker/.env.dev` by `uv run --env-file`, LIVE 7); never printed, never in a command line, never in a trace (Playwright traces are recorded only on failure and for the local mode only).
 
 **Acceptance tests:**
-- [ ] 1. `bash Trader/docker/smoke.sh` → the local Playwright run passes (login, approve, detail, system, logout; no horizontal scroll) and the stack is removed afterwards (`docker ps -a --filter name=trader-smoke` empty).
-- [ ] 2. `seed_smoke` run twice leaves one pending proposal (idempotent).
+- [x] 1. `bash Trader/docker/smoke.sh` → the local Playwright run passes (login, approve, detail, system, logout; no horizontal scroll) and the stack is removed afterwards (`docker ps -a --filter name=trader-smoke` empty).
+- [x] 2. `seed_smoke` run twice leaves one pending proposal (idempotent).
 - [ ] 3. Gate and commit `P4-T19: ...` (the LIVE results below go in the activity log and this file's LIVE notes).
 
 **LIVE steps** (dev only; Questrade read-only; no fake rows in `trader_dev`; never print a secret):

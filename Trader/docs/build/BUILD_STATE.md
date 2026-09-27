@@ -7,7 +7,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 2 (P2-T0 planning finishing) |
-| Current task | P2-T0 plan fix round; then P2-B1 |
+| Current task | P2-B1 building (T2-T5) |
 | Gauntlet stage | Breaker + reviewers |
 | Last updated (UTC) | 2026-09-27T04:44:00Z |
 | Last pushed commit | d64518b |
@@ -34,9 +34,9 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 42bd500 |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | accepted | 2 | review ✅ + should-fix round ✅ (orchestrator ran check.sh: 333 passed) | ad82bfa |
-| P2-T0 | Write the Phase 2 plan | P1-REVIEW | fixing | 2 | V+S ❌ (M1 dep, S1 overnight-hold) | 89356c6 |
+| P2-T0 | Write the Phase 2 plan | P1-REVIEW | accepted | 2 | review ❌ → fix ff0e1ce (plan code re-validated: 585 passed) | ff0e1ce |
 | P2-T1 | Migration 0002: trading tables, views, ledger trigger, factories | P1 | gauntlet | 1 | V✅ (Breaker+review folded into P2-B1 gauntlet) | 2cab471 |
-| P2-B1 | Batch 1: T2 runs/settings, T3 ledger, T4 fill model, T5 sim broker | P2-T1, plan fix | todo | 0 | | |
+| P2-B1 | Batch 1: T2 runs/settings, T3 ledger, T4 fill model, T5 sim broker | P2-T1, plan fix | building | 1 |  |  |
 | P2-B2 | Batch 2: T6 framework, T7 market data, T8 orb_sip, T9 spy_overlay | B1 V✅ | todo | 0 | | |
 | P2-B3 | Batch 3: T10 risk/kill switches, T11 proposals, T12 Claude catalysts | B2 V✅ | todo | 0 | | |
 | P2-B4 | Batch 4: T13 orchestrator, T14 premarket (LIVE), T15 full day | B3 V✅ | todo | 0 | | |
@@ -706,3 +706,9 @@ None open.
 ### 2026-09-27 00:25 MT · PHASE 2 · Orchestrator · attempt 1 · finished
 - Result: Stephen chose batch mode (B). P2-T2..T15 now build as 4 batches (master plan §4.1); the per-task rows below stay for reference and are ticked as each batch lands.
 - Notes: Phase 2 estimate revised to finish ~02:30-03:00 MT.
+
+### 2026-09-27 00:24 MT · P2-T0 · Planner · attempt 2 · finished
+- Result: done. Fixed M1 (T10 depends on T5, T6), S1 (broker cancels late entries with reason "entry cutoff", expired cancel auto-executes when auto_flatten_on_expiry is on, new tests in T5 and T11, Review Focus 4 updated), S2 (staleness assumption noted), S3 (FillModel protocol with evaluate and assess, SimBroker typed to it, on_candles path documented for P5), S4 (master plan 7.1 and SPEC 5.2 and 10 synced), S5 (test_cli.py in T14 files)
+- Commits: ff0e1ce (the rebased 8d337f2)
+- Gate: plan code from P2-T2 onwards laid over trunk c36f03e in a scratch copy outside the repo. check.sh green, 585 passed
+- Notes: P2-T1 section unchanged

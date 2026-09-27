@@ -4,6 +4,10 @@ Page markers relied on (spike S5): table.screener_table with a <th> header row; 
 td[data-boxover-ticker]; ".count-text" containing "#1 / N Total"; table#news-table rows whose
 first cell is "Sep-25-26 04:18PM", "Today 06:07AM" or just "04:02PM"; a.tab-link-news headlines;
 the source in a span inside div.news-link-right.
+
+The parser never raises on odd HTML. Instead it reports what it could not read (ScreenerPage.bad_rows,
+NewsPage.problem) so the scraper can turn a layout change into an error instead of a silently
+short result.
 """
 
 import re
@@ -19,6 +23,8 @@ BASE = "https://finviz.com"
 _TOTAL_RE = re.compile(r"/\s*([\d,]+)\s*Total")
 _DATE_RE = re.compile(r"^(?:(Today)|([A-Z][a-z]{2}-\d{2}-\d{2}))?\s*(\d{1,2}:\d{2}[AP]M)$")
 _BLOCK_MARKERS = ("just a moment", "cf-challenge", "captcha", "attention required")
+MIN_PAGE_BYTES = 1000  # anything shorter is an empty body, not a real FinViz page
+UNIVERSE_COLUMNS = ("Ticker", "Company", "Sector", "Industry", "Price", "Volume")
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +32,7 @@ class ScreenerPage:
     total: int
     header: list[str]
     rows: list[dict[str, str]]
+    bad_rows: int = 0  # data rows whose cell count differed from the header (not in `rows`)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,15 +53,26 @@ class Headline:
     url: str
 
 
+@dataclass(frozen=True, slots=True)
+class NewsPage:
+    headlines: list[Headline]
+    problem: str | None  # set when the page looks like a layout change rather than "no news"
+
+
 def to_questrade_ticker(ticker: str) -> str:
     """FinViz writes share classes with '-', Questrade with '.' (spike S4: BF-B -> BF.B)."""
     return ticker.strip().replace("-", ".")
 
 
+def to_finviz_ticker(ticker: str) -> str:
+    """The inverse of to_questrade_ticker: BF.B -> BF-B, BRK.B -> BRK-B."""
+    return ticker.strip().replace(".", "-")
+
+
 def blocked_reason(status: int, body: str) -> str | None:
     if status in (403, 429, 503):
         return f"HTTP {status}"
-    if len(body) < 1000:
+    if len(body) < MIN_PAGE_BYTES:
         return f"empty body ({len(body)} bytes)"
     head = body[:5000].lower()
     for marker in _BLOCK_MARKERS:
@@ -81,9 +99,11 @@ def parse_screener(html: str) -> ScreenerPage:
     trs = table.css("tr")
     header = [_cell_text(th) for th in trs[0].css("th")] if trs else []
     rows: list[dict[str, str]] = []
+    bad_rows = 0
     for tr in trs[1:]:
         tds = tr.css("td")
         if len(tds) != len(header):
+            bad_rows += 1
             continue
         rec: dict[str, str] = {}
         for name, td in zip(header, tds, strict=True):
@@ -92,14 +112,18 @@ def parse_screener(html: str) -> ScreenerPage:
             else:
                 rec[name] = _cell_text(td)
         rows.append(rec)
-    return ScreenerPage(total, header, rows)
+    return ScreenerPage(total, header, rows, bad_rows)
 
 
 def _decimal(text: str) -> Decimal | None:
+    """A finite Decimal, or None for blank, "-", garbage, NaN and Infinity."""
+    if text in ("", "-"):
+        return None
     try:
-        return Decimal(text.replace(",", "")) if text not in ("", "-") else None
+        value = Decimal(text.replace(",", ""))
     except InvalidOperation:
         return None
+    return value if value.is_finite() else None
 
 
 def parse_universe_row(rec: dict[str, str]) -> UniverseRow:
@@ -115,15 +139,29 @@ def parse_universe_row(rec: dict[str, str]) -> UniverseRow:
 
 
 def parse_news(html: str, today_et: date) -> list[Headline]:
-    """FinViz shows the date only on each day's first row; later rows carry it forward."""
+    """The headlines only; use parse_news_page to also learn whether the layout looked wrong."""
+    return parse_news_page(html, today_et).headlines
+
+
+def parse_news_page(html: str, today_et: date) -> NewsPage:
+    """FinViz shows the date only on each day's first row; later rows carry it forward.
+
+    "Today" means `today_et`, which must be the ET date the page was fetched. A problem is
+    reported when a real page (≥ MIN_PAGE_BYTES) has no news table, or when the table has
+    headline rows but none of them parse.
+    """
     table = HTMLParser(html).css_first("table#news-table")
     if table is None:
-        return []
+        problem = "no table#news-table" if len(html) >= MIN_PAGE_BYTES else None
+        return NewsPage([], problem)
     out: list[Headline] = []
     current: date | None = None
+    headline_rows = 0
     for tr in table.css("tr"):
         tds = tr.css("td")
         link = tr.css_first("a.tab-link-news")
+        if link is not None:
+            headline_rows += 1
         if len(tds) < 2 or link is None:
             continue
         m = _DATE_RE.match(_cell_text(tds[0]))
@@ -146,4 +184,6 @@ def parse_news(html: str, today_et: date) -> list[Headline]:
                 url=BASE + href if href.startswith("/") else href,
             )
         )
-    return out
+    if headline_rows and not out:
+        return NewsPage([], f"none of {headline_rows} headline rows parsed")
+    return NewsPage(out, None)

@@ -5,8 +5,10 @@ from pathlib import Path
 from trader.adapters.finviz.parser import (
     blocked_reason,
     parse_news,
+    parse_news_page,
     parse_screener,
     parse_universe_row,
+    to_finviz_ticker,
     to_questrade_ticker,
 )
 
@@ -94,3 +96,81 @@ def test_empty_body_is_blocked() -> None:
 def test_ticker_mapping() -> None:
     assert to_questrade_ticker("BF-B") == "BF.B"
     assert to_questrade_ticker("AAPL") == "AAPL"
+
+
+# --- gauntlet fix round (attempt 2): layout changes must be detectable, never silently skipped ---
+
+PAD = "<!--" + "x" * 2000 + "-->"
+
+
+def news_page(rows: list[tuple[str, str]]) -> str:
+    body = "".join(
+        f'<tr><td>{when}</td><td><a class="tab-link-news" href="/news/{i}">{title}</a></td></tr>'
+        for i, (when, title) in enumerate(rows)
+    )
+    return f'<html><body>{PAD}<table id="news-table">{body}</table></body></html>'
+
+
+def test_screener_counts_rows_whose_cell_count_differs_from_header() -> None:
+    html = (
+        '<div class="count-text">#1 / 2 Total</div><table class="screener_table">'
+        "<tr><th>No.</th><th>Ticker</th></tr>"
+        '<tr><td>1</td><td data-boxover-ticker="A">A</td></tr>'
+        '<tr><td>2</td><td data-boxover-ticker="B">B</td><td>extra</td></tr></table>'
+    )
+    page = parse_screener(html)
+    assert [r["Ticker"] for r in page.rows] == ["A"]
+    assert page.bad_rows == 1
+
+
+def test_screener_fixture_has_no_bad_rows() -> None:
+    assert parse_screener((FIX / "raw_screener_p1.html").read_text()).bad_rows == 0
+
+
+def test_decimal_rejects_nan_and_infinity() -> None:
+    for bad in ("NaN", "nan", "Infinity", "-Infinity", "inf", "sNaN"):
+        row = parse_universe_row(
+            {"Ticker": "X", "Company": "", "Sector": "", "Industry": "", "Price": bad, "Volume": bad}
+        )
+        assert row.price is None, bad
+        assert row.volume is None, bad
+
+
+def test_to_finviz_ticker_maps_questrade_share_classes_back() -> None:
+    assert to_finviz_ticker("BF.B") == "BF-B"
+    assert to_finviz_ticker("BRK.B") == "BRK-B"
+    assert to_finviz_ticker(" AAPL ") == "AAPL"
+    assert to_finviz_ticker(to_questrade_ticker("BRK-B")) == "BRK-B"
+
+
+def test_news_page_fixture_has_no_problem() -> None:
+    page = parse_news_page((FIX / "raw_quote_AAPL.html").read_text(), today_et=date(2026, 9, 26))
+    assert page.problem is None
+    assert len(page.headlines) >= 10
+
+
+def test_news_page_without_table_is_a_problem_when_the_page_is_real() -> None:
+    page = parse_news_page(f"<html><body>{PAD}no table here</body></html>", today_et=date(2026, 9, 26))
+    assert page.headlines == []
+    assert page.problem is not None and "news-table" in page.problem
+
+
+def test_news_page_whose_headlines_all_fail_to_parse_is_a_problem() -> None:
+    html = news_page([("yesterday-ish", "a"), ("25 Sep 2026 16:18", "b")])
+    page = parse_news_page(html, today_et=date(2026, 9, 26))
+    assert page.headlines == []
+    assert page.problem is not None and "2 headline rows" in page.problem
+
+
+def test_news_page_with_no_headline_rows_is_empty_not_a_problem() -> None:
+    html = f'<html><body>{PAD}<table id="news-table"></table></body></html>'
+    page = parse_news_page(html, today_et=date(2026, 9, 26))
+    assert page.headlines == [] and page.problem is None
+
+
+def test_news_page_with_some_unparseable_rows_keeps_the_good_ones() -> None:
+    html = news_page([("Sep-25-26 04:18PM", "good"), ("garbage", "bad")])
+    page = parse_news_page(html, today_et=date(2026, 9, 26))
+    assert [h.title for h in page.headlines] == ["good"]
+    assert page.problem is None
+    assert page.headlines[0].url == "https://finviz.com/news/0"

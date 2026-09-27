@@ -293,7 +293,7 @@ Run: `chmod +x scripts/check.sh scripts/trader-dev.sh`
 Run: `uv run ruff format . && bash scripts/check.sh`
 Expected: ruff and mypy report no errors; `4 passed`.
 
-- [ ] **Step 8: Prepare `docker/.env.dev` keys (no values printed)**
+- [x] **Step 8: Prepare `docker/.env.dev` keys (no values printed)**
 
 The SPEC names the owner URL `MIGRATION_DATABASE_URL` (the file currently calls it `DATABASE_OWNER_URL`) and needs `APP_ENCRYPTION_KEY` and `SESSION_SECRET`. Create `Trader/build/env_setup.py`:
 ```python
@@ -338,7 +338,7 @@ if __name__ == "__main__":
 Run (from `Trader/`): `python3 build/env_setup.py`
 Expected: `changed: MIGRATION_DATABASE_URL (renamed), APP_ENCRYPTION_KEY, SESSION_SECRET`. Running it again prints `changed: nothing`.
 
-- [ ] **Step 9: Create the orchestrator's notify script**
+- [x] **Step 9: Create the orchestrator's notify script**
 
 `Trader/build/notify.py`:
 ```python
@@ -377,7 +377,7 @@ if __name__ == "__main__":
 Run (from `Trader/`): `python3 build/notify.py "P1-T1 toolchain ready"`
 Expected: `sent`.
 
-- [ ] **Step 10: Commit and push**
+- [x] **Step 10: Commit and push**
 
 ```bash
 cd "/Users/stephen/Documents/Code/Claude Code/Trader"

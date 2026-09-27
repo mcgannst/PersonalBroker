@@ -33,8 +33,8 @@ from trader.broker.types import AccountState, FillEvent, PositionView
 from trader.db import models as m
 from trader.db.session import session_scope
 from trader.engine.killswitch import KillSwitches, KillSwitchInputs
-from trader.engine.proposals import ProposalService
-from trader.engine.risk import Rejection, RiskContext, RiskManager, SizedOrder
+from trader.engine.proposals import ProposalService, ProposalStatus
+from trader.engine.risk import Rejection, RiskCheck, RiskContext, RiskManager, SizedOrder
 from trader.engine.runs import get_live_run
 from trader.events import log_event
 from trader.market.calendar import SessionCalendar
@@ -63,7 +63,8 @@ INTENT_LOCK = "engine.intents"
 
 _log = logging.getLogger(__name__)
 
-ProposalStatus = Literal["pending", "approved", "auto_approved", "submitted", "failed", "rejected", "expired"]
+# the orchestrator's own check (fix-round ruling). RiskCheck is P2-T10's Literal and does not list it yet
+DUPLICATE_SYMBOL = cast(RiskCheck, "duplicate_symbol")
 OutcomeStatus = ProposalStatus | Literal["rejected_by_risk", "skipped_duplicate", "error"]
 
 
@@ -556,7 +557,7 @@ class Engine:
             )
             if v is not None
         )
-        return Rejection(intent, "duplicate_symbol", f"symbol {sid} already has {what}", found)
+        return Rejection(intent, DUPLICATE_SYMBOL, f"symbol {sid} already has {what}", found)
 
     def _live_duplicate(self, s: Session, intent: Intent) -> dict[str, Any] | None:
         """A re-fired market Exit or Cancel whose earlier proposal or order is still live.

@@ -39,7 +39,7 @@ Run on Saturday 2026-09-26 against the Trader-dev Questrade app, FinViz, the dev
 - The first S6 attempt's `answerCallbackQuery` returned HTTP 400 (the reason wasn't captured). The rerun, without an emoji in the toast text, worked. The bot should log Telegram's error body and never let a failed acknowledgement block the decision itself, which is already saved by then.
 - Each Telegram call costs ~0.57 s, so the worker should acknowledge the button first and edit the message afterwards.
 
-## Open decisions
+## Decisions (made 2026-09-26)
 
-1. **Archive intraday candles nightly?** Needed if replay should ever cover more than the most recent ~3 months. Five-minute bars for ~700 symbols are about 55,000 rows a day (~14 million a year); one-minute bars are about 5 times that.
-2. **Keep or drop ETFs** (153 of 695) in the universe.
+1. **Archive intraday candles nightly?** **Decided: save what replay needs** (the 9:30–9:35 bar for every symbol, plus 1-min candles for the top 20 and SPY; SPEC §8). Needed if replay should ever cover more than the most recent ~3 months. Five-minute bars for ~700 symbols are about 55,000 rows a day (~14 million a year); one-minute bars are about 5 times that.
+2. **Keep or drop ETFs** (153 of 695) in the universe. **Decided: drop** with `ind_stocksonly` (542 stocks).

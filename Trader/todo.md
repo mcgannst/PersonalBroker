@@ -41,5 +41,5 @@ Results and scripts are in [`spikes/`](spikes/README.md). Run 2026-09-26.
 
 ## Decisions from Phase 0 (Stephen)
 
-- [ ] **Archive intraday candles nightly?** Questrade only keeps ~3 months of intraday history, so replay can't go further back unless Trader stores bars itself.
-- [ ] **Keep or drop ETFs** in the universe (153 of 695 tickers).
+- [x] **Archive intraday candles nightly?** Decided 2026-09-26: save what replay needs: the 9:30–9:35 bar for every universe symbol, plus 1-min regular-hours candles for the top 20 candidates and SPY each day (SPEC §8, `candle_archive`).
+- [x] **Keep or drop ETFs** in the universe. Decided 2026-09-26: drop them with FinViz's `ind_stocksonly` filter (542 stocks when tested). SPY is still fetched for the overlay.

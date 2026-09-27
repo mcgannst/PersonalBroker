@@ -150,7 +150,7 @@ The docs don't say whether these limits apply per app or per login. ⚠ VERIFY i
 
 ### 4.2 FinViz scraper
 
-- **Universe (nightly):** the screener URL is built from settings, for example `https://finviz.com/screener.ashx?v=111&f=sh_price_5to50,sh_avgvol_o1000,ta_averagetruerange_o0.5,geo_usa`. It pages through the results 20 rows at a time and parses the ticker, price, volume and sector.
+- **Universe (nightly):** the screener URL is built from settings, for example `https://finviz.com/screener.ashx?v=111&f=ind_stocksonly,sh_price_5to50,sh_avgvol_o1000,ta_averagetruerange_o0.5,geo_usa`. **`ind_stocksonly` excludes ETFs and other funds** (decided 2026-09-26: 542 stocks instead of 695 when tested). SPY is fetched separately for the overlay. It pages through the results 20 rows at a time and parses the ticker, price, volume and sector. FinViz ignores unknown filter codes and returns the unfiltered list, so a result count equal to the unfiltered count is treated as an error. Ticker share classes are mapped to Questrade's form (`BF-B` → `BF.B`).
 - **Pre-market (08:00 ET):** candidate tickers come from (a) a FinViz "news today / earnings today" screen and (b) a Questrade quote check on the universe for pre-market change ≥ 3% (⚠ VERIFY pre-market data). Headlines come from each ticker's FinViz quote page.
 - **Politeness:** at most 1 request per 2 seconds, a browser User-Agent, results cached for 12 hours, and backoff when blocked.
 - **Isolation:** all HTML parsing lives in `finviz/parser.py`, with tests against saved HTML samples. A parse failure triggers an alert and falls back to the previous night's universe.
@@ -355,7 +355,8 @@ It's used because past quotes aren't available. It uses 1-minute candles in time
 - **Input:** date range, strategy settings snapshot, fill-model settings, starting capital. Started from the web app or with `trader replay --from --to`.
 - **Execution:** creates a `runs` row with `mode=replay`, then steps a `ReplayClock` through each session, running the same strategies, risk manager and ledger. Approvals are **always automatic** in replay.
 - **Data:**
-  - It uses cached candles first and fetches from Questrade what's missing.
+  - It uses archived candles first and fetches from Questrade what's missing. Questrade keeps only about 3 months of intraday candles (S3), so older days depend on the **candle archive** (below).
+  - **Candle archive** (decided 2026-09-26): each session, Trader keeps (a) the 9:30–9:35 five-minute bar for every universe symbol, which the 9:35 scan already fetches, and (b) 1-minute regular-hours candles for that day's top 20 candidates plus SPY, saved by the post-close job. About 8,500 rows a day. This lets replay rank the universe and simulate fills for any day since launch. A new strategy that would pick different stocks can only be replayed over Questrade's rolling ~3 months.
   - It rebuilds each past day's universe from the stored nightly snapshots. Where no snapshot exists, it uses the current universe as a stand-in. **That introduces survivorship bias, so the result is labelled "biased universe".**
 - **Output:** the same trades, fills and metrics tables, filtered by `run_id`. The UI compares a replay against the live run.
 - **Determinism:** the same inputs must give the same results. Replay makes no Claude calls; it uses stored catalysts or treats every catalyst as `unknown` (setting `replay_catalyst_mode`).
@@ -374,7 +375,7 @@ All times are **ET**, from supercronic with `CRON_TZ=America/New_York`. Every jo
 | 11:30 / 13:30 | 09:30 / 11:30 | Check-ins: status push; entry-cancel event at 11:30 | `trader checkin` |
 | 15:30 | 13:30 | SPY overlay (worker) | — |
 | 15:50 | 13:50 | Flatten (worker); cron backup at 15:55 | `trader event flatten` |
-| 16:15 Mon–Fri | 14:15 | Post-close: end-of-day orders, journal, metrics, equity snapshot, daily summary | `trader postclose` |
+| 16:15 Mon–Fri | 14:15 | Post-close: end-of-day orders, journal, metrics, equity snapshot, **candle archive** (1-min RTH bars for the top 20 + SPY), daily summary | `trader postclose` |
 | Sat 09:00 | 07:00 | Weekly report + Claude commentary | `trader weekly` |
 
 Each job records a `job_runs` row with status, start and end time, and any error. Jobs can safely be re-run: they're keyed by `(job, session_date)`.
@@ -392,6 +393,7 @@ Timestamps are `timestamptz` in UTC. Money is `numeric(14,4)`. Primary keys are 
 | `strategy_configs` | id, strategy_key, version, params jsonb, enabled, created_at | Versioned settings; trades reference the config id |
 | `symbols` | id, ticker, exchange, questrade_id, currency, name | Symbol master |
 | `universe_snapshots` | session_date, symbol_id, price, avg_volume, atr14, source | Nightly FinViz universe (kept for replay) |
+| `candle_archive` | symbol_id, interval (`1m`/`5m`), start_ts, open, high, low, close, volume, vwap; PK (symbol_id, interval, start_ts) | Candles kept beyond Questrade's ~3-month limit, for replay (§8) |
 | `daily_candles` | symbol_id, date, o,h,l,c, volume, vwap | Cache |
 | `intraday_candles` | symbol_id, ts, interval, o,h,l,c, volume, vwap | Cache (5m, 1m); partitioned by month |
 | `open_bar_stats` | symbol_id, session_date, avg_open_vol_14d, atr14 | Precomputed each night |

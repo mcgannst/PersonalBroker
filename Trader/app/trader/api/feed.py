@@ -5,6 +5,10 @@ messages (decision "SSE by polling, not LISTEN/NOTIFY").
 - `watermarks(s)` reads every topic's watermark with ONE statement of scalar subqueries. The `max(id)` ones
   use primary keys; the timestamp ones scan tables that stay small; `events` is `max(id)` only, so the growing
   `event_log` is never scanned.
+- Replay rows stay out of the live views (P5-T7): the trading topics (`proposals` to `events`) and the
+  `events` messages count only rows without a run or of a `live` run (`live_or_unscoped`), so a running
+  replay never makes every open live page refetch; `strategies` counts only `live`-scoped config rows.
+  `replays` follows the replay runs (`max(id)`, `max(updated_at)`) and `reports` the weekly reports.
 - `PollingChangeFeed.run(stop)` polls only while someone is subscribed. The baseline is read when the first
   subscriber arrives (before its stream sends the full `invalidate`, so nothing changed after the client's
   refetch can be missed); with no subscribers the loop sleeps without querying. A DB error is logged once per
@@ -19,7 +23,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
 
 import structlog
-from sqlalchemy import Select, func, select
+from sqlalchemy import ColumnElement, Select, func, or_, select
 from sqlalchemy.orm import InstrumentedAttribute, Session, sessionmaker
 
 from trader.api.deps import FeedMessage
@@ -47,6 +51,8 @@ WATERMARK_TOPICS: tuple[Topic, ...] = (
     "settings",
     "strategies",
     "system",
+    "replays",
+    "reports",
 )
 
 MAX_EVENTS = 50  # new event_log rows per `events` message (the newest ones)
@@ -54,32 +60,58 @@ EVENT_LEVELS = ("info", "warning", "error", "critical")  # `debug` rows are neve
 DEFAULT_POLL_SECONDS = 1.0
 
 
-def _max(col: InstrumentedAttribute[Any]) -> Select[Any]:
-    return select(func.max(col))
+def _max(col: InstrumentedAttribute[Any], *where: ColumnElement[bool]) -> Select[Any]:
+    return select(func.max(col)).where(*where)
+
+
+def live_or_unscoped(run_id: InstrumentedAttribute[Any]) -> ColumnElement[bool]:
+    """Rows without a run or of a `live` run: never a replay's (contract refinement 8). Shared by the
+    feed, the Dashboard events and the System events and errors."""
+    return or_(run_id.is_(None), run_id.in_(select(m.Run.id).where(m.Run.mode == "live")))
 
 
 def _watermark_columns() -> dict[Topic, tuple[Select[Any], ...]]:
     hb = m.WorkerHeartbeat
     worker = hb.process == WORKER_PROCESS
+    p, o, f, pos, t, c, ks, ev = (
+        m.Proposal,
+        m.Order,
+        m.Fill,
+        m.Position,
+        m.Trade,
+        m.Candidate,
+        m.KillSwitchEvent,
+        m.EventLog,
+    )
+    replay = m.Run.mode == "replay"
     return {
         "proposals": (
-            _max(m.Proposal.id),
-            _max(m.Proposal.decided_at),
-            _max(m.Proposal.expired_at),
-            select(func.count()).select_from(m.Proposal).where(m.Proposal.status == "pending"),
+            _max(p.id, live_or_unscoped(p.run_id)),
+            _max(p.decided_at, live_or_unscoped(p.run_id)),
+            _max(p.expired_at, live_or_unscoped(p.run_id)),
+            select(func.count()).select_from(p).where(p.status == "pending", live_or_unscoped(p.run_id)),
         ),
-        "orders": (_max(m.Order.id), _max(m.Order.closed_at)),
-        "fills": (_max(m.Fill.id),),
-        "positions": (_max(m.Position.id), _max(m.Position.closed_at), _max(m.Position.unprotected_since)),
-        "trades": (_max(m.Trade.id),),
-        "candidates": (_max(m.Candidate.id),),
-        "killswitch": (_max(m.KillSwitchEvent.id), _max(m.KillSwitchEvent.reset_at)),
-        "events": (_max(m.EventLog.id),),
+        "orders": (_max(o.id, live_or_unscoped(o.run_id)), _max(o.closed_at, live_or_unscoped(o.run_id))),
+        "fills": (_max(f.id, live_or_unscoped(f.run_id)),),
+        "positions": (
+            _max(pos.id, live_or_unscoped(pos.run_id)),
+            _max(pos.closed_at, live_or_unscoped(pos.run_id)),
+            _max(pos.unprotected_since, live_or_unscoped(pos.run_id)),
+        ),
+        "trades": (_max(t.id, live_or_unscoped(t.run_id)),),
+        "candidates": (_max(c.id, live_or_unscoped(c.run_id)),),
+        "killswitch": (
+            _max(ks.id, live_or_unscoped(ks.run_id)),
+            _max(ks.reset_at, live_or_unscoped(ks.run_id)),
+        ),
+        "events": (_max(ev.id, live_or_unscoped(ev.run_id)),),
         "journal": (_max(m.Journal.updated_at),),
         "jobs": (_max(m.JobRun.id), _max(m.JobRun.finished_at)),
         "settings": (_max(m.Setting.updated_at),),
-        "strategies": (_max(m.StrategyConfig.id),),
+        "strategies": (_max(m.StrategyConfig.id, m.StrategyConfig.scope == "live"),),
         "system": (select(hb.phase).where(worker), select(hb.beat_at).where(worker)),
+        "replays": (_max(m.Run.id, replay), _max(m.Run.updated_at, replay)),
+        "reports": (_max(m.WeeklyReport.updated_at),),
     }
 
 
@@ -98,12 +130,17 @@ def watermarks(s: Session) -> dict[Topic, tuple[Any, ...]]:
 
 
 def _new_events(s: Session, after_id: int, up_to_id: int) -> list[dict[str, Any]]:
-    """The newest `MAX_EVENTS` rows with `after_id < id <= up_to_id` at level info or above, oldest first,
-    as JSON-ready `EventOut` dicts (masked by `event_out`)."""
+    """The newest `MAX_EVENTS` rows with `after_id < id <= up_to_id` at level info or above and not of a
+    replay run, oldest first, as JSON-ready `EventOut` dicts (masked by `event_out`)."""
     rows = (
         s.execute(
             select(m.EventLog)
-            .where(m.EventLog.id > after_id, m.EventLog.id <= up_to_id, m.EventLog.level.in_(EVENT_LEVELS))
+            .where(
+                m.EventLog.id > after_id,
+                m.EventLog.id <= up_to_id,
+                m.EventLog.level.in_(EVENT_LEVELS),
+                live_or_unscoped(m.EventLog.run_id),
+            )
             .order_by(m.EventLog.id.desc())
             .limit(MAX_EVENTS)
         )

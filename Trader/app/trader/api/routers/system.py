@@ -7,6 +7,8 @@
   revision, the pip tzdata release in use and the manual jobs the page can start.
 - **Events:** newest first (`before` pages backwards); with `since`, the ids after it oldest first (catch-up);
   `level` keeps that level and above; every message and data value is masked (`views.event_out`).
+- Rows of a replay run are never listed, in the events or the errors (P5-T7: `feed.live_or_unscoped`); a
+  replay's events are on its own page (`GET /api/replays/{id}`).
 - **Telegram test:** 409 when Telegram is not configured; else one `reply` message through the notifier
   (the `trader telegram-test` text, saying it came from the web app). `Notifier.send` never raises.
 
@@ -27,6 +29,7 @@ from sqlalchemy.orm import Session
 from trader.api import views
 from trader.api.deps import CsrfUser, CurrentUser, Services, actor
 from trader.api.errors import ApiError
+from trader.api.feed import live_or_unscoped
 from trader.api.launcher import CLI_ARGS
 from trader.api.routers.jobs import job_run_out
 from trader.api.routers.meta import tz_iana_version
@@ -83,7 +86,7 @@ def _last_runs(s: Session, now: datetime) -> list[JobRunOut]:
 def _errors(s: Session) -> list[EventOut]:
     rows = s.scalars(
         select(m.EventLog)
-        .where(m.EventLog.level.in_(ERROR_LEVELS))
+        .where(m.EventLog.level.in_(ERROR_LEVELS), live_or_unscoped(m.EventLog.run_id))
         .order_by(m.EventLog.id.desc())
         .limit(MAX_ERRORS)
     )
@@ -175,7 +178,7 @@ def list_events(
     source: Annotated[str | None, Query(max_length=50)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_EVENTS)] = 100,
 ) -> Items[EventOut]:
-    stmt = select(m.EventLog)
+    stmt = select(m.EventLog).where(live_or_unscoped(m.EventLog.run_id))  # a replay's events: its own page
     if since is not None:
         stmt = stmt.where(m.EventLog.id > since).order_by(m.EventLog.id.asc())
     else:

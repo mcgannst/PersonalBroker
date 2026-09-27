@@ -6,7 +6,8 @@ the P&L from `trader.notify.views.pnl_view` (what `/pnl` shows), pending proposa
 `notify.views.proposal_view`, kill switches, token and worker through `trader.api.views`.
 
 The dashboard is live-only: it takes `run=live` (SPEC §11 lists the parameter; it is also the default) and
-answers 422 for any other value, since a replay run has no "today".
+answers 422 for any other value, since a replay run has no "today". Its events leave out every row of a
+replay run (P5-T7: `feed.live_or_unscoped`).
 
 The timeline (session days only) lists the crontab's day-level jobs (`DAY_JOBS`, checked against
 `docker/crontab` by a test) and the day plan's events, each with its status from `job_runs`; the first
@@ -25,6 +26,7 @@ from sqlalchemy import func, select
 
 from trader.api import views as api_views
 from trader.api.deps import ApiServices, Services, _settings, current_user, live_run_id
+from trader.api.feed import live_or_unscoped
 from trader.api.routers.trading import candidate_out, open_positions
 from trader.api.schemas import (
     CandidateOut,
@@ -270,7 +272,9 @@ def _stored(services: ApiServices, now: datetime) -> _Stored:
             api_views.event_out(e)
             for e in s.execute(
                 select(m.EventLog)
-                .where(m.EventLog.level.in_(EVENT_LEVELS))
+                .where(
+                    m.EventLog.level.in_(EVENT_LEVELS), live_or_unscoped(m.EventLog.run_id)
+                )  # no replay rows
                 .order_by(m.EventLog.ts.desc(), m.EventLog.id.desc())
                 .limit(EVENTS_SHOWN)
             ).scalars()

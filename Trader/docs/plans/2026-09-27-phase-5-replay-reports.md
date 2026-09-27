@@ -416,16 +416,35 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - Every change route needs the CSRF header and writes its audit row through `create_replay` / `request_cancel`.
 
 **Acceptance tests (real DB; `make_client`; `FakeReplayLauncher`):**
-- [ ] 1. `POST /api/replays` with a valid body → 202, a `queued` run, `launch(run_id)` called once, the audit row with actor `web:stephen`; without the CSRF header → 403; without a session → 401.
-- [ ] 2. Invalid bodies (from after to, unknown override key, bad plug-in params) → 422 whose `fields` name the location and never echo the value; a busy system → 409.
-- [ ] 3. `GET /api/replays` lists replay runs only, newest first, with trade counts and totals; `limit` 201 → 422.
-- [ ] 4. `GET /api/replays/{id}` for a completed seeded replay returns its strategies, progress, `biased` true with its days, `metrics` of the replay and `live_metrics` over the same dates, and the last events; a running one has null metrics; the live run's id → 404.
-- [ ] 5. Cancel of a running replay → `cancel_requested` true; of a completed one → 409.
-- [ ] 6. `GET /api/replays/options` returns the keys, dates and flags above from seeded data and a fixed clock (10:00 ET on a session day → `offline_now` true).
-- [ ] 7. `SubprocessReplayLauncher` spawns exactly `trader replay --run 7` (fake spawn records argv), reaps the child, and a child exiting 1 writes one `warning` event with the run id.
-- [ ] 8. **Live views:** with events of the live run, of a replay run and without a run seeded, the Dashboard events, `/api/events` and the System errors list contain no replay row; the SSE `events` message after inserting a replay event carries nothing, while a live one is carried.
-- [ ] 9. The feed emits `invalidate` with `replays` when a replay's `updated_at` changes and with `reports` when a `weekly_reports` row is written; inserting a replay run's order, fill, trade, event and a `replay`-scoped strategy config changes no trading-topic or `strategies` watermark, while the same rows of the live run still do (the P4 feed tests pass).
-- [ ] 10. Gate and commit `P5-T7: ...`.
+- [x] 1. `POST /api/replays` with a valid body → 202, a `queued` run, `launch(run_id)` called once, the audit row with actor `web:stephen`; without the CSRF header → 403; without a session → 401.
+- [x] 2. Invalid bodies (from after to, unknown override key, bad plug-in params) → 422 whose `fields` name the location and never echo the value; a busy system → 409.
+- [x] 3. `GET /api/replays` lists replay runs only, newest first, with trade counts and totals; `limit` 201 → 422.
+- [x] 4. `GET /api/replays/{id}` for a completed seeded replay returns its strategies, progress, `biased` true with its days, `metrics` of the replay and `live_metrics` over the same dates, and the last events; a running one has null metrics; the live run's id → 404.
+- [x] 5. Cancel of a running replay → `cancel_requested` true; of a completed one → 409.
+- [x] 6. `GET /api/replays/options` returns the keys, dates and flags above from seeded data and a fixed clock (10:00 ET on a session day → `offline_now` true).
+- [x] 7. `SubprocessReplayLauncher` spawns exactly `trader replay --run 7` (fake spawn records argv), reaps the child, and a child exiting 1 writes one `warning` event with the run id.
+- [x] 8. **Live views:** with events of the live run, of a replay run and without a run seeded, the Dashboard events, `/api/events` and the System errors list contain no replay row; the SSE `events` message after inserting a replay event carries nothing, while a live one is carried.
+- [x] 9. The feed emits `invalidate` with `replays` when a replay's `updated_at` changes and with `reports` when a `weekly_reports` row is written; inserting a replay run's order, fill, trade, event and a `replay`-scoped strategy config changes no trading-topic or `strategies` watermark, while the same rows of the live run still do (the P4 feed tests pass).
+- [x] 10. Gate and commit `P5-T7: ...`.
+
+**Build notes (P5-T7 builder, 2026-09-27; trunk 97416bc):**
+- Replay rows are excluded with one shared filter, `trader.api.feed.live_or_unscoped(run_id)` = `run_id IS NULL
+  OR run_id IN (SELECT id FROM runs WHERE mode = 'live')`, used by the feed watermarks, the SSE `events`
+  messages, the Dashboard events and `/api/events` + the System errors. This matches the plan's "null or of a
+  live run" and excludes every replay row; it differs from "`= <live run id>`" only for rows of an older,
+  non-active live run (still shown), and needs no live-run lookup (so `/api/system` creates no run).
+- `offline_now` and `latest_allowed` are computed in the router (09:15 inclusive to 16:30 exclusive ET on a
+  session day; close + 15 min inclusive). T6's `create_replay` decides the stored data mode itself; T17 may
+  share one helper.
+- `SubprocessReplayLauncher.launch` first checks that the run is a `queued` replay (`ReplayNotFound` /
+  `ValueError`, nothing spawned), and a lost child (`wait()` failed) writes the same `replay.launcher`
+  warning with `exit_code: null` and the error type.
+- List rows are mapped from `runs.params` directly (the settings snapshot is not parsed), so one unreadable
+  snapshot cannot break the list; `expectancy_r` is the mean of the trades with an R, 4 dp half-up;
+  `trades` 0 gives null `expectancy_r` and `total_pnl`.
+- `GET /api/replays/{id}` masks `error` with `redact_text`; ids outside 1..2^63-1 are 422.
+- `tests/api/test_web_client_contract.py` (P4 review): the five replay client methods were removed from
+  `PENDING_ROUTES` (coordinator's instruction), so the contract test covers them.
 
 ---
 

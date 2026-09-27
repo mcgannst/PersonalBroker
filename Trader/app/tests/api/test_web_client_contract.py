@@ -33,9 +33,7 @@ CLIENT_TS = WEB_API / "client.ts"
 NOT_ROUTES = {"csrfToken", "setCsrfToken"}  # accessors of the client itself
 # Client methods declared by the P5-T1 contracts whose routes a later Phase 5 task registers: skipped until
 # the route exists, checked like every other method from then on. Remove a name once its route is wired.
-PENDING_ROUTES = frozenset(
-    {"replayOptions", "replays", "replay", "startReplay", "cancelReplay", "weeklyReport"}
-)
+PENDING_ROUTES = frozenset({"weeklyReport"})
 
 _CALL = re.compile(r"\b(get|post|put|del)<[^(]*?>\(\s*[`\"]([^`\"]+)[`\"]")
 _REQUEST = re.compile(r'request<[^(]*?>\(\{\s*method:\s*"(\w+)",\s*path:\s*[`"]([^`"]+)[`"]')

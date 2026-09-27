@@ -54,11 +54,11 @@ Phases follow the BRD delivery plan (§11). Each phase ends with a working, test
 | Phase | Deliverable | Detailed plan |
 |---|---|---|
 | 1 | Data layer: toolchain, DB schema and migrations, calendar and clock, settings, FinViz scraper, Questrade auth and client, indicators, nightly job, CLI | [`2026-09-26-phase-1-data-layer.md`](2026-09-26-phase-1-data-layer.md) (written) |
-| 2 | Engine: strategy framework, `orb_sip` and `spy_overlay`, risk manager and kill-switch checks, proposal service, simulated broker, fill model, ledger, Claude catalysts, pre-market job | written at phase start (P2-T0) |
-| 3 | Worker, Telegram bot and commands, event scheduler, cron schedule, remaining jobs (preopen, checkin, postclose incl. candle archive, token keep-alive) | written at phase start (P3-T0) |
-| 4 | REST API, auth, React web app, Docker image, deploy script, deploy to `trader-dev` | written at phase start (P4-T0) |
-| 5 | Replay mode, metrics and reports (daily, weekly, CSV), kill-switch reset flow, hardening | written at phase start (P5-T0) |
-| 6 | Dev soak (10 trading days) and promotion to prod | written at phase start (P6-T0); needs Stephen |
+| 2 | Engine: strategy framework, `orb_sip` and `spy_overlay`, risk manager and kill-switch checks, proposal service, simulated broker, fill model, ledger, Claude catalysts, pre-market job | outline §7.2; detail written at phase start (P2-T0) |
+| 3 | Worker, Telegram bot and commands, event scheduler, cron schedule, remaining jobs (preopen, checkin, postclose incl. candle archive, token keep-alive) | outline §7.3; detail at phase start (P3-T0) |
+| 4 | REST API, auth, React web app, Docker image, deploy script, deploy to `trader-dev` | outline §7.4; detail at phase start (P4-T0) |
+| 5 | Replay mode, metrics and reports (daily, weekly, CSV), kill-switch reset flow, hardening | outline §7.5; detail at phase start (P5-T0) |
+| 6 | Dev soak (10 trading days) and promotion to prod | outline §7.6; detail at phase start (P6-T0); needs Stephen |
 
 ## 2. Roles
 
@@ -212,54 +212,119 @@ Write the detailed plan for Phase <n> using the superpowers:writing-plans skill,
 Trader/docs/plans/<date>-phase-<n>-<name>.md. It must follow the structure of the Phase 1 plan:
 tasks with Files, Interfaces (exact names and types, reusing what earlier phases produced; read the real
 code, not just the earlier plans), bite-sized TDD steps with full code, commit steps, dependencies and
-parallel lanes. Cover every requirement assigned to Phase <n> in §7 of the master plan. Add the task rows
-to the task board is the orchestrator's job; list them at the top of your plan instead.
+parallel lanes. Implement the task outline for Phase <n> in §7 of the master plan, keeping the §7.1 cross-phase contracts. List the phase's task IDs at the top of your plan;
+the orchestrator adds them to the task board.
 ```
 
-## 7. Phase scopes for the plans still to be written
+## 7. Task outlines for Phases 2–6
 
-Each later phase's Planner must cover all of these. The interfaces listed are the contracts other phases rely on. Keep the names; types may be refined if the real Phase 1 code requires it, and the Planner must say so.
+These outlines fix each later phase's **task boundaries, files, cross-phase interfaces and test obligations**. The Planner of each phase (`Pn-T0`) turns them into a detailed plan with code, reading the real code built so far. The Planner may split or merge tasks, and may refine types where the real code requires it, but must keep the **cross-phase contracts** below (names, arguments and meaning), or escalate if one can't work.
 
-### Phase 2: Engine (BRD BR-10–13, BR-20–23, BR-40–42; SPEC §3a, §4.3, §5, §6, §7.1–7.3, §10 trading tables)
+Conventions for all outlines: paths are under `Trader/app/` unless they start with `web/` or `docker/`; each task ends with `check.sh` passing and a commit; "Tests prove" lists what the tests must show, and the Breaker adds its own on top.
 
-- Migration: `runs`, `sim_accounts`, `strategy_configs`, `catalysts`, `candidates`, `signals`, `proposals`, `orders`, `fills`, `positions`, `trades`, `cash_ledger`, `equity_snapshots`, `journal`, `kill_switch_events`, views `v_daily_pnl`, `v_trade_metrics`.
-- `trader/strategies/base.py`: `Strategy` protocol, `StrategyContext`, `ScheduledEvent(key, at: SessionOffset)`, intents `EnterLong`, `Exit`, `Cancel` exactly as SPEC §5.1; `SessionOffset.parse("open+5m")`.
-- `trader/strategies/registry.py`: entry-point discovery (`trader.strategies`), `load_enabled(session) -> list[tuple[Strategy, StrategyConfig]]`.
-- `trader/strategies/orb_sip.py` and `spy_overlay.py` per SPEC §5.2–5.3, tested against hand-built candle scenarios (breakout, no fill, stop hit, doji, bearish, early close).
-- `trader/engine/risk.py`: `RiskManager.evaluate(intent, account, clock) -> SizedIntent | Rejection` with the sizing formula and check order of SPEC §6.1; exits and cancels never blocked.
-- `trader/engine/killswitch.py`: `KillSwitches.check(run_id) -> list[TrippedSwitch]`, `trip`, `reset(switch, reason, actor)`, `pause`/`resume` (manual_pause) per SPEC §6.3.
-- `trader/engine/proposals.py`: `ProposalService.create(...)`, `decide(proposal_id, decision, via, actor) -> DecisionResult` (first decision wins), `expire_due(now)`, state machine and TTLs per SPEC §6.2, audit log.
-- `trader/broker/`: `Broker` protocol, `SimBroker.submit/cancel/on_quote`, `QuoteFillModel` (SPEC §7.2 table, slippage, stale quotes, fees, quote snapshot), `Ledger` (T+1 via `SessionCalendar.next_session`, settled cash, buying power, FX conversion).
-- `trader/adapters/claude/catalyst.py`: `classify(inputs) -> Catalyst` with JSON-schema structured output, daily budget, cost tracking; model from settings (`claude-sonnet-5` default).
-- `trader/engine/orchestrator.py`: wires intent → risk → proposal → broker → fill → `on_fill`.
-- `trader/jobs/premarket.py`: `trader premarket` (FinViz news/earnings screens, gap check from quotes, headlines, top-50 cap, catalysts, Telegram brief text returned for Phase 3 to send).
-- Integration test: a full simulated day with fake clock and fake data (SPEC §16).
+### 7.1 Cross-phase contracts
 
-### Phase 3: Worker, Telegram and schedule (BR-30–34, BR-60; SPEC §1 processes, §4.4, §9)
+These are the seams between phases. Changing one means updating every phase that uses it.
 
-- `trader/worker.py`: async loop; quote polling for working orders every `quote_poll_seconds`; proposal expiry; strategy events from `Strategy.schedule()` fired at session-relative times; `LISTEN/NOTIFY` wake-ups; heartbeat row; restart recovery during market hours.
-- `trader/adapters/telegram/bot.py`: long polling, chat-ID allow-list, signed callback data with nonce, Approve/Reject → `ProposalService.decide`, all message types in SPEC §4.4, commands `/status /positions /pnl /pending /pause /resume /help`, `/pause` confirmation. Acknowledge the button first, then edit the message (spike S6). Log Telegram error bodies; a failed acknowledgement never undoes a decision.
-- Jobs: `token-refresh`, `preopen`, `event <name>` (cron backups), `checkin`, `postclose` (end-of-day cancels, journal row, metrics, equity snapshot, **candle archive** of the 9:30–9:35 bar for every universe symbol plus 1-min RTH candles for the top 20 and SPY, daily summary).
-- `Trader/docker/crontab` exactly per SPEC §9 with `CRON_TZ=America/New_York`.
-- `trader notify` CLI command (replaces `Trader/build/notify.py`).
+| Contract | Defined in | Used by | Shape |
+|---|---|---|---|
+| Clock | P1-T4 | all | `Clock.now() -> datetime` (UTC). `ReplayClock` (P5) implements it |
+| Intents | P2-T6 | P2-T8/9 strategies → P2-T10 risk → P2-T13 engine | `EnterLong(symbol_id, order_type, stop, limit, stop_loss, reason, evidence)`, `Exit(position_id, order_type, stop, reason)`, `Cancel(order_id, reason)`; frozen dataclasses, prices `Decimal` |
+| Strategy | P2-T6 | P2-T8/9, P3-T1 scheduler, P5 replay | `Strategy` protocol exactly as SPEC §5.1; `ScheduledEvent(key: str, at: SessionOffset)`; `SessionOffset.parse("open+5m" \| "close-30m")`, `.resolve(cal, session) -> datetime` |
+| Risk | P2-T10 | P2-T13 | `RiskManager.evaluate(intent, ctx: RiskContext) -> SizedOrder \| Rejection` |
+| Proposals | P2-T11 | P2-T13, P3 bot, P4 API | `ProposalService.create(signal_id, sized: SizedOrder, kind) -> Proposal`; `decide(proposal_id, decision: Literal["approve","reject"], via: Literal["telegram","web","auto"], actor: str) -> DecisionResult(status, already_decided: bool)`; `expire_due(now) -> list[Proposal]` |
+| Broker | P2-T5 | P2-T13, P3 worker, P5 replay | `Broker.submit(OrderSpec) -> int` (order id); `cancel(order_id, reason)`; `on_quotes(quotes: Sequence[QtQuote], now) -> list[FillEvent]`; `end_of_session(session_date)` |
+| Fill model | P2-T4 (quotes), P5-T2 (candles) | SimBroker, replay | `FillModel.evaluate(order: OrderSpec, market: QtQuote \| Candle, now) -> FillDecision \| None` |
+| Market data | P2-T7 | strategies, jobs, worker | `MarketDataService` (async): `universe(session_date)`, `open_bar_stats(session_date)`, `opening_bars(session_date)`, `quotes(symbol_ids)`, `candles(symbol_id, start, end, interval)`; reads the DB cache first, Questrade second |
+| Notifier | P3-T3 | engine, jobs, worker, P5 reports | `Notifier.send(msg: OutboundMessage) -> None`; message builders are pure functions in `trader/notify/messages.py` |
+| Event firing | P3-T1 | worker, cron backups | `fire_event(key, session_date)` idempotent via `job_runs` row `event:<key>` |
 
-### Phase 4: API, web app and deployment (BR-50–56; SPEC §11, §12, §14, §15)
+### 7.2 Phase 2: Engine
 
-- FastAPI app with every endpoint in SPEC §11, session auth (Argon2, signed cookie, CSRF, rate-limited login, optional TOTP), SSE stream, JSON Schema forms for strategy settings.
-- React app with every page in SPEC §12, phone layout, America/Edmonton display, Vitest tests, a Playwright smoke test (login → dashboard → approve).
-- `Trader/docker/Dockerfile` (multi-stage), `supervisord.conf`, `docker-compose.dev.yml` (container `trader-dev`, networks `trader_internal` + external `proxy`, no published ports, volume `trader_dev_logs`), `deploy.sh dev|prod` following FinanceTracker's `scripts/deploy.sh`.
-- LIVE: deploy to `trader-dev`; `https://trader-dev.sunspinner.ca/api/health` returns 200 (NPM host, certificate and access list already exist).
+Requirements: BRD BR-03, BR-05, BR-10–13, BR-20–23, BR-40–42; SPEC §3a, §4.2 (pre-market), §4.3, §5, §6, §7.1–7.3, §10.
 
-### Phase 5: Replay, reports, hardening (BR-41, BR-52, BR-54, BR-60–62; SPEC §7.4, §8, §16)
+| ID | Task | Files | Tests prove | Depends on |
+|---|---|---|---|---|
+| P2-T0 | Write the Phase 2 detailed plan | `docs/plans/<date>-phase-2-engine.md` | (planning gauntlet, §5) | P1-REVIEW |
+| P2-T1 | Migration 0002: trading tables and views | `trader/db/models.py`, `trader/db/migrations/versions/0002_trading.py`, `tests/db/test_migration_0002.py` | Every §10 trading table exists with its keys; `run_id` on every trading row; `v_trade_metrics` gives the right win rate and expectancy for a hand-made set of trades | P1 |
+| P2-T2 | Runs, sim account and the full runtime settings set | `trader/engine/runs.py`, `trader/settings_store.py` | `get_live_run()` creates one live run and reuses it; the sim account applies the CAD→USD rate and 1.5% fee once; every §13 runtime key has a validated default (risk_pct 2%, slippage $0.01/5 bps, TTLs 5/3/5 min, kill-switch 5%/15%/50 trades, no_entry_before_close 30 min, quote_poll 2 s, stale_quote 10 s, auto_flatten_on_expiry true, Claude model/budget/cap) | T1 |
+| P2-T3 | Ledger with T+1 settlement | `trader/broker/ledger.py` | Cash settles on the next session (Fri → Mon, Wed before Thanksgiving → Fri); settled vs total cash; buying power follows `cash_account_mode`; ledger rows are append-only | T1, T2 |
+| P2-T4 | Quote-based fill model | `trader/broker/fill_model.py` | Every row of the SPEC §7.2 table, including stop-limit refusal above the limit; slippage = max(min, bps × price); stale quote (> 10 s) never fills; SEC fee on sells only; the quote snapshot is returned with each fill | T2 |
+| P2-T5 | Simulated broker, orders, positions, trades | `trader/broker/base.py`, `trader/broker/sim_broker.py` | Submit → working → filled; cancel; position opens and closes; trade row with P&L and R; end of session cancels every working order; long only (a sell larger than the position is refused) | T3, T4 |
+| P2-T6 | Strategy framework and registry | `trader/strategies/base.py`, `trader/strategies/registry.py`, `pyproject.toml` (entry points) | `SessionOffset` resolves on normal and early-close days; plug-ins found through the `trader.strategies` entry point; each settings change creates a new `strategy_configs` version; invalid params rejected by the plug-in's pydantic model | T1, T2 |
+| P2-T7 | Market data service | `trader/market/data_service.py` | Reads universe, stats and bars from the cache; falls back to Questrade; fetches 9:30–9:35 bars for the whole universe within the rate limit; missing bars reported per symbol, not raised (Review Focus 4) | T6 |
+| P2-T8 | `orb_sip` plug-in 1.0.0 | `trader/strategies/orb_sip.py`, `tests/strategies/scenarios/*.py` | Hand-built scenarios: breakout fills; no breakout, cancelled at 11:30; stop hit; doji skipped; bearish candle skipped; price/ATR out of range; catalyst missing or bearish; early close moves the flatten; every candidate saved with its reject reason; evidence recorded (BR-13) | T6, T7 |
+| P2-T9 | `spy_overlay` plug-in 1.0.0 | `trader/strategies/spy_overlay.py` | Negative SPY return from the prior close exits entry positions at 15:30; positive or zero holds; the decision is logged either way; uses `close-30m` on early-close days | T6, T7 |
+| P2-T10 | Risk manager and kill switches | `trader/engine/risk.py`, `trader/engine/killswitch.py` | Sizing formula and each of the six checks in SPEC §6.1 order; zero shares rejected; exits and cancels never blocked; daily loss resets next session; drawdown and expectancy need a manual reset with a reason; `manual_pause` blocks entries only; every trip writes `kill_switch_events` | T5 |
+| P2-T11 | Proposal service | `trader/engine/proposals.py` | Every state transition in SPEC §6.2; first decision wins, the second gets `already_decided`; expiry by kind and TTL; auto mode approves at once; expired protective stop records unprotected time and escalates; expired flatten auto-submits when enabled; decision latency stored; approval-mode changes audited | T5, T10 |
+| P2-T12 | Claude catalyst classifier | `trader/adapters/claude/catalyst.py` | JSON-schema structured output parsed and validated; daily budget stops calls and marks `unknown`; cost stored per call; the model comes from settings; the API is mocked (no network) | T2 |
+| P2-T13 | Engine orchestrator | `trader/engine/orchestrator.py` | Intent → risk → proposal → broker → fill → `on_fill` → protective stop, end to end with fakes; rejections logged; signals and candidates saved with the strategy config version | T8–T12 |
+| P2-T14 | Pre-market job | `trader/jobs/premarket.py`, `trader/cli.py` | FinViz news and earnings screens plus the ≥ 3% gap check from quotes; headlines per candidate; top 50 by gap classified, the rest marked "not classified (over cap)"; returns the brief text; idempotent per session | T7, T12 |
+| P2-T15 | Integration: one full simulated day | `tests/integration/test_simulated_day.py` | Fake clock and fake data from nightly to flatten: signal, proposal, auto-approval, fill, stop, flatten, trade and ledger rows correct; no position left open (BR-42) | T13, T14 |
 
-- `trader/replay/`: `ReplayClock`, candle fill model (SPEC §7.4, worst case when one bar hits both), runner using archived candles then Questrade, "biased universe" label, `replay_catalyst_mode`.
-- Replay determinism golden-file test.
-- `trader/reports/`: metrics (expectancy R, win rate, profit factor, drawdown, slippage, adherence), daily summary, weekly report with Claude commentary (no invented numbers), CSV export.
-- Kill-switch reset flow in the web app (reason required, audit-logged); alerts.
-- Hardening: job retries and alerts, structlog JSON mirrored to `event_log`, container runs non-root with a read-only root filesystem.
+Parallel lanes after T2: {T3, T4} then T5; {T6 → T7 → T8, T9}; T12 alone.
 
-### Phase 6: Soak and promotion (SPEC §15.1)
+### 7.3 Phase 3: Worker, Telegram and schedule
 
-- Rerun S2 and live S4 in market hours and record the results in `spikes/README.md`.
-- 10 consecutive trading days in dev with no failed jobs and no missed 9:35 events (tracked in `BUILD_STATE.md`).
-- Promotion steps, each needing Stephen: create the prod Questrade app, bot and Anthropic key; create `trader` DB and roles; `.env.prod`; `deploy.sh prod`; NPM host and Pi-hole record for `trader.sunspinner.ca`.
+Requirements: BRD BR-30–34, BR-60; SPEC §1 (processes), §4.4, §9; spike S6 findings.
+
+| ID | Task | Files | Tests prove | Depends on |
+|---|---|---|---|---|
+| P3-T0 | Write the Phase 3 detailed plan | `docs/plans/<date>-phase-3-worker-telegram.md` | (planning gauntlet) | P2 |
+| P3-T1 | Session event scheduler | `trader/engine/scheduler.py` | Today's events come from every enabled strategy's `schedule()`; resolved to real times on normal, early-close and holiday days; `fire_event` runs once per (key, session) even when the worker and the cron backup both fire | P2 |
+| P3-T2 | Worker process | `trader/worker.py`, migration `0003_worker.py` (heartbeat) | Quote polling only for symbols with working orders; fills flow to the engine; proposals expire on time; events fire at their times; heartbeat updated; after a restart mid-session it resumes working orders and pending proposals without duplicating anything | T1 |
+| P3-T3 | Notifier and message formats | `trader/notify/messages.py`, `trader/notify/notifier.py` | Every message type in SPEC §4.4 is self-contained (ticker, qty, prices, stop, P&L, reason) and includes the home-network link; sending failures are logged with Telegram's error body and never raise into the engine | P2 |
+| P3-T4 | Telegram bot: approvals | `trader/adapters/telegram/bot.py` | Only the configured chat ID is accepted; callback data is signed with a nonce, and a replayed or forged callback is refused; Approve/Reject call `ProposalService.decide`; the button is acknowledged before the message is edited; a failed acknowledgement doesn't undo the decision | T3 |
+| P3-T5 | Telegram commands | `trader/adapters/telegram/commands.py` | `/status`, `/positions`, `/pnl`, `/pending` output; `/pause` asks for confirmation, then blocks entries only and is audited; `/resume` lifts only the manual pause, never an automatic kill switch; other chats ignored and logged | T4 |
+| P3-T6 | Day-level jobs | `trader/jobs/{preopen,checkin,events}.py`, `trader/cli.py` | Each job does nothing on a holiday; `preopen` checks the token, data freshness, kill switches and worker heartbeat, and alerts on problems; cron backup `trader event <key>` is a no-op if the worker already fired it | T1, T3 |
+| P3-T7 | Post-close job and candle archive | `trader/jobs/postclose.py` | End-of-day cancels; equity snapshot; journal row; daily summary with the Rules-followed button; **candle archive**: the 9:30–9:35 bar for every universe symbol plus 1-minute regular-hours candles for the top 20 and SPY; idempotent | T3, T6 |
+| P3-T8 | Crontab | `docker/crontab`, `tests/test_crontab.py` | Every line matches the SPEC §9 table and parses; `CRON_TZ=America/New_York`; every command exists in the CLI | T6, T7 |
+| P3-T9 | Integration: worker day with fake Telegram | `tests/integration/test_worker_day.py` | Manual approval mode through a fake Telegram: proposal message, tap Approve, fill, stop, overlay decision, flatten, daily summary, all in order and on time with a fake clock | T2–T8 |
+
+### 7.4 Phase 4: API, web app and deployment
+
+Requirements: BRD BR-50–56, BR-62 (export route); SPEC §4.2 (manual CSV upload), §11, §12, §14, §15.
+
+| ID | Task | Files | Tests prove | Depends on |
+|---|---|---|---|---|
+| P4-T0 | Write the Phase 4 detailed plan | `docs/plans/<date>-phase-4-web-deploy.md` | (planning gauntlet) | P3 |
+| P4-T1 | API skeleton and health | `trader/api/main.py`, `trader/api/deps.py` | App factory wires `Core`; `/api/health` reports DB, token age and worker heartbeat without login; errors are JSON; serves the built web app | P3 |
+| P4-T2 | Authentication | `trader/api/auth.py`, migration `0004_users.py` | Argon2 hashes; HttpOnly, Secure, SameSite=Strict cookie; CSRF token required on changes; login rate limit and lockout; optional TOTP; the admin user is created from env on first start only | T1 |
+| P4-T3 | Read endpoints | `trader/api/routers/{dashboard,trading,metrics,system}.py`, `trader/api/schemas.py` | Every GET in SPEC §11 returns the documented data from a seeded DB; filters by run and date work; every endpoint needs the session cookie | T2 |
+| P4-T4 | Write endpoints | `trader/api/routers/{proposals,settings,strategies,journal,killswitch,jobs,credentials,watchlist}.py` | Approve/reject share `ProposalService.decide` with Telegram; settings validated and audited; strategy settings form schema is the plug-in's JSON Schema; kill-switch reset needs a reason; Questrade token paste reseeds `QuestradeAuth`; CSV watchlist upload (§4.2 manual fallback) | T3 |
+| P4-T5 | Live updates (SSE) | `trader/api/routers/stream.py` | A new proposal, fill or event reaches a connected client within 2 s (driven by `LISTEN/NOTIFY`) | T3 |
+| P4-T6 | Web app shell | `web/` (Vite, React 18, TypeScript, TanStack Query), `web/src/api.ts`, login page, layout | Login and logout; phone-width layout; times shown in America/Edmonton; Vitest component tests | T2 |
+| P4-T7 | Dashboard and Candidates pages | `web/src/pages/{Dashboard,Candidates}.tsx` | Session timeline, approval badge, pending approvals with countdowns and buttons, position card, kill-switch lights, events; ranking table with reject reasons | T5, T6 |
+| P4-T8 | Trades, Performance and Journal pages | `web/src/pages/{Trades,Performance,Journal}.tsx` | Trade detail chain (signal → proposal → decision → order → fill quote) with a 5-minute chart; equity curve, drawdown, R histogram and metric tiles; journal editing | T6 |
+| P4-T9 | Settings and System pages | `web/src/pages/{Settings,System}.tsx` | Approval-mode toggle; settings forms generated from JSON Schema; Telegram test button; job runs, token status, heartbeat, errors, rate-limit usage | T6 |
+| P4-T10 | Docker image and runtime | `docker/Dockerfile`, `docker/supervisord.conf`, `docker/entrypoint.sh`, `docker/docker-compose.dev.yml` | Multi-stage build (node:22-alpine → python:3.12-slim); non-root user; read-only root filesystem except `/tmp`; entrypoint runs `alembic upgrade head` as owner, creates the admin if missing, starts supervisord (api, worker, cron); no published ports; networks `trader_internal` + external `proxy`; volume `trader_dev_logs` | T1–T9 |
+| P4-T11 | Deploy script and LIVE deploy to dev | `docker/deploy.sh`, `web/tests/smoke.spec.ts` (Playwright) | `deploy.sh dev` builds amd64 on the Mac, ships to `192.168.68.73`, recreates `trader-dev`, and waits for `https://trader-dev.sunspinner.ca/api/health` = 200; Playwright smoke: login → dashboard → approve a seeded proposal | T10 |
+
+### 7.5 Phase 5: Replay, reports, hardening
+
+Requirements: BRD BR-41, BR-52, BR-54, BR-60–62, non-functional reliability; SPEC §7.4, §8, §16.
+
+| ID | Task | Files | Tests prove | Depends on |
+|---|---|---|---|---|
+| P5-T0 | Write the Phase 5 detailed plan | `docs/plans/<date>-phase-5-replay-reports.md` | (planning gauntlet) | P4 |
+| P5-T1 | Metrics | `trader/reports/metrics.py` | Expectancy in R, win rate, profit factor, max drawdown, average slippage and adherence % match hand calculations; per run and date range | P4 |
+| P5-T2 | Replay clock and candle fill model | `trader/replay/clock.py`, `trader/replay/candle_fill_model.py` | `ReplayClock` implements `Clock`; every SPEC §7.4 rule, including worst case when one bar touches both entry and stop, and the half-spread estimate | P4 |
+| P5-T3 | Replay data source | `trader/replay/data.py` | Candle archive first, Questrade second (inside its ~3-month window); universe from snapshots, else the current universe with the "biased universe" label; `replay_catalyst_mode` uses stored catalysts or `unknown`; no Claude calls | T2 |
+| P5-T4 | Replay runner, CLI and API | `trader/replay/runner.py`, `trader/cli.py`, API replay routes, `tests/replay/golden/` | `trader replay --from --to` creates a `replay` run with automatic approvals; results never mix with the live run; **determinism golden test**: the same inputs give identical trades | T1–T3 |
+| P5-T5 | Replay page | `web/src/pages/Replay.tsx` | Start a replay, watch progress, view results, compare with live | T4 |
+| P5-T6 | Reports and export | `trader/reports/{daily,weekly,export}.py`, `trader/jobs/weekly.py` | Daily summary content; weekly report on Saturday with Claude commentary whose numbers all appear in the metrics it was given (checked by the test); CSV export of all trades | T1 |
+| P5-T7 | Kill-switch reset flow and alerts | `web/src/pages/Settings.tsx` (reset panel), API | Reset needs a typed reason and is audited; each switch trips from realistic data and alerts on Telegram; the expectancy switch trips after N trades with expectancy ≤ threshold | T1 |
+| P5-T8 | Hardening | `trader/logging.py`, `trader/jobs/runner.py`, `docker/*` | structlog JSON to stdout mirrored to `event_log` with secrets redacted; a failed job retries and alerts; container restart during market hours recovers without duplicates; resource and log-volume limits set | T4–T7 |
+
+### 7.6 Phase 6: Soak and promotion
+
+Requirements: SPEC §15.1. Most of this phase is waiting and checking; the steps marked **Stephen** need him.
+
+| ID | Task | Files | Tests prove / done when | Depends on |
+|---|---|---|---|---|
+| P6-T0 | Write the Phase 6 detailed plan | `docs/plans/<date>-phase-6-promotion.md` | (planning gauntlet) | P5 |
+| P6-T1 | Live rechecks | `spikes/README.md` | S2 (quote timestamp within 2 s during market hours) and live S4 (9:35 scan under 60 s) run with `trader questrade-check` and a timed scan; results recorded | P5 |
+| P6-T2 | Soak report | `trader/jobs/soak.py`, `trader/cli.py` | `trader soak-report` lists, per trading day, failed jobs and missed 9:35 events; the orchestrator records a running count of consecutive clean days in `BUILD_STATE.md` | P5 |
+| P6-T3 | 10 clean trading days | `BUILD_STATE.md` | 10 consecutive trading days with no failed jobs and no missed 9:35 events; the full test suite and the determinism test pass on the tag to promote | T2 |
+| P6-T4 | Manual end-to-end check (**Stephen**) | `BUILD_STATE.md` | Stephen confirms one full simulated day in the web app: signal, approval, fill, stop, flatten, journal | T3 |
+| P6-T5 | Promote to prod (**Stephen** for credentials) | `docker/.env.prod` (git-ignored), NPM, Pi-hole | Prod Questrade app, bot and Anthropic key created by Stephen; `trader` database and roles; `deploy.sh prod`; NPM host, certificate and Pi-hole record for `trader.sunspinner.ca`; a fresh live run starts | T4 |

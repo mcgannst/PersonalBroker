@@ -230,14 +230,14 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - The `Money` type stays a string end to end; charts parse with `Number()` for plotting only.
 
 **Acceptance tests (Vitest):**
-- [ ] 1. `fmtTime("2026-10-06T13:35:05Z")` → `07:35 MT` in the fixed −360 mode; with `{ zone: "America/Denver" }` 2026-11-02T14:35:05Z → `07:35 MT` (a zone that still changes its clocks, as in P3-T4 test 7).
-- [ ] 2. `fmtMoney("-12.3")` → `-$12.30`; `fmtMoney(null)` → `n/a`; `fmtPct("0.0123")` → `+1.23%`; `fmtR("2.1700")` → `+2.17R`; `fmtPrice("21.5600")` → `21.56`, `fmtPrice("21.5608")` → `21.5608`; `fmtDuration(200)` → `3m 20s`.
-- [ ] 3. `secondsUntil` uses the server skew: expires in 120 s by the server's clock with the browser 30 s fast gives 120.
-- [ ] 4. `Button` with `busy` is disabled and at least 44 px tall (inline style or class checked); `ErrorBox` shows an `ApiError`'s message and a Retry button that calls `onRetry`.
-- [ ] 5. `FakeApiClient` satisfies `ApiClient` (`tsc`), records calls, and `fail("approve", new ApiError(...))` makes `approve` reject.
-- [ ] 6. `renderWithProviders(<Dashboard />)` renders the stub title (the harness works).
-- [ ] 7. `npm run build` produces `dist/index.html` and hashed assets.
-- [ ] 8. Gate: `bash Trader/app/scripts/check.sh` passes (it runs `npm run check`); commit `P4-T2: ...` and push.
+- [x] 1. `fmtTime("2026-10-06T13:35:05Z")` → `07:35 MT` in the fixed −360 mode; with `{ zone: "America/Denver" }` 2026-11-02T14:35:05Z → `07:35 MT` (a zone that still changes its clocks, as in P3-T4 test 7).
+- [x] 2. `fmtMoney("-12.3")` → `-$12.30`; `fmtMoney(null)` → `n/a`; `fmtPct("0.0123")` → `+1.23%`; `fmtR("2.1700")` → `+2.17R`; `fmtPrice("21.5600")` → `21.56`, `fmtPrice("21.5608")` → `21.5608`; `fmtDuration(200)` → `3m 20s`.
+- [x] 3. `secondsUntil` uses the server skew: expires in 120 s by the server's clock with the browser 30 s fast gives 120.
+- [x] 4. `Button` with `busy` is disabled and at least 44 px tall (inline style or class checked); `ErrorBox` shows an `ApiError`'s message and a Retry button that calls `onRetry`.
+- [x] 5. `FakeApiClient` satisfies `ApiClient` (`tsc`), records calls, and `fail("approve", new ApiError(...))` makes `approve` reject.
+- [x] 6. `renderWithProviders(<Dashboard />)` renders the stub title (the harness works).
+- [x] 7. `npm run build` produces `dist/index.html` and hashed assets.
+- [x] 8. Gate: `bash Trader/app/scripts/check.sh` passes (it runs `npm run check`); commit `P4-T2: ...` and push.
 
 ---
 

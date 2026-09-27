@@ -3725,7 +3725,7 @@ async def run_nightly(deps: NightlyDeps, session_date: date) -> dict[str, Any]:
                 if isinstance(bars, list) else []
             repo.upsert_daily_candles(s, sid, daily_ok)
             repo.upsert_intraday_candles(s, sid, "5m", opening)
-            atr14 = atr(daily_ok[-15:], 14)
+            atr14 = atr(daily_ok, 14)  # full ~20-session history so Wilder smoothing applies
             avg_vol = average_volume(daily_ok[-14:])
             stats.append((sid, average_volume(opening), atr14))
             row = by_ticker.get(ticker)

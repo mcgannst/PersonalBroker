@@ -299,3 +299,13 @@ None open.
 ### 2026-09-27T05:45:00Z · P1-T1 · Orchestrator · attempt 2 · finished
 - Result: ACCEPTED. Fix round (3a3a50f) passed Verifier, breaker tests and focused fix review
 - Notes: nits logged only (plan code blocks for P1-T1 show pre-fix code; notify.py JSON decode error not caught)
+
+### 2026-09-27T04:31:34Z · P1-T5 · Builder · attempt 2 · started
+- Result: fixing gauntlet findings (silent empty/partial universe, HTTP errors, cache, client, tickers, plan updates)
+
+### 2026-09-27T04:31:50Z · P1-T2 · Code reviewer · attempt 1 · finished
+- Result: PASS (no must-fix). 3 should-fix, 7 nits
+- Commits reviewed: 3a5f493, 8cb3256
+- Gate: tests/db ran 4 passed on an exported copy of origin/trunk (1 DeprecationWarning from testcontainers.postgres)
+- Findings (should-fix): partition bounds are timezone-dependent (0001:111, confirmed shifted to 06:00Z when the DB timezone is America/Edmonton). Models and migration disagree on indexes (models.py:123 and 135 vs 0001:142 and 154). env.py has no include_object filter, so autogenerate would propose dropping all 34 intraday partitions
+- Notes: f-string SQL uses only module constants and metadata names, so it is safe

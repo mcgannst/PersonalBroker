@@ -35,7 +35,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 42bd500 |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | accepted | 2 | review ✅ + should-fix round ✅ (orchestrator ran check.sh: 333 passed) | ad82bfa |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | gauntlet | 1 | plan code test-run by planner: 564 passed; review running | 89356c6 |
-| P2-T1 | Migration 0002: trading tables, views, ledger trigger, factories | P1 | building | 1 | | |
+| P2-T1 | Migration 0002: trading tables, views, ledger trigger, factories | P1 | gauntlet | 1 |  | 2cab471 |
 | P2-T2 | Runs, sim account, full runtime settings | T1 | todo | 0 | | |
 | P2-T3 | Ledger with T+1 settlement | T1, T2 | todo | 0 | | |
 | P2-T4 | Broker value types + quote fill model | T2 | todo | 0 | | |
@@ -672,3 +672,12 @@ None open.
 
 ### 2026-09-27 00:07 MT · P2-T0 · Verifier + Spec reviewer · attempt 1 · started
 - Notes: reviewing docs/plans/2026-09-27-phase-2-engine.md at 89356c6 (structure, coverage, contract refinements, Review Focus)
+
+### 2026-09-27 00:07 MT · P2-T1 · Builder · attempt 1 · started
+- Notes: worktree agent-a27727dd23d5a90eb, synced to 89356c6
+
+### 2026-09-27 00:11 MT · P2-T1 · Builder · attempt 1 · finished
+- Result: done, all 8 plan steps ticked
+- Commits: e73ac57, 2cab471
+- Gate: check.sh passed (353 tests), new file tests/db/test_migration_0002.py has 20 tests
+- Notes: LIVE trader_dev upgraded 0001 to 0002 (head). App role trader_dev_app can SELECT the new tables and views and has INSERT/UPDATE via default privileges. No deviations from the plan code

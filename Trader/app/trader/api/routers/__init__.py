@@ -17,6 +17,8 @@ from trader.api.routers import (
     meta,
     performance,
     proposals,
+    replays,
+    reports,
     settings,
     strategies,
     stream,
@@ -40,5 +42,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     jobs.router,
     credentials.router,
     watchlist.router,
+    replays.router,
+    reports.router,
     stream.router,
 )

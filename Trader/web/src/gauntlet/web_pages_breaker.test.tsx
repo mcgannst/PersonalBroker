@@ -1239,7 +1239,7 @@ describe("phone tab bar (T12)", () => {
     expect(more).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(more);
     expect(more).toHaveAttribute("aria-expanded", "true");
-    expect(within(screen.getByRole("menu")).getAllByRole("menuitem").map((a) => a.textContent)).toEqual(["Performance", "Reports", "Settings", "System"]);
+    expect(within(screen.getByRole("menu")).getAllByRole("menuitem").map((a) => a.textContent)).toEqual(["Performance", "Reports", "Replay", "Settings", "System"]); // Replay: P5-T1
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
 

@@ -6,6 +6,8 @@
 - `FakeCredentialStore`, `FakeJobLauncher`, `FakeFeed`: the `CredentialStore`, `JobLauncher` and `ChangeFeed`
   protocols. `fake_quotes(prices)` and `fake_candles(candles)`: the `Quotes` and `CandleSource` callables.
 - `fixed_plan(*events)`: a day-plan builder that returns the same events for every date.
+- `FakeReplayLauncher` (P5-T1): the `ReplayLauncher` protocol; records `launch(run_id)`, `running()` is set by
+  hand, and `fail_with` makes the next launch raise (a spawn failure). `make_services` uses one by default.
 """
 
 import asyncio
@@ -242,6 +244,28 @@ class FakeFeed:
         return len(self._queues)
 
 
+# --- replays (P5) -------------------------------------------------------------------------------------------
+
+
+class FakeReplayLauncher:
+    """A `ReplayLauncher` that records the run ids it was asked to launch. Set `is_running` to make
+    `running()` true, or `fail_with` to make the next `launch` raise it (then it is cleared)."""
+
+    def __init__(self, *, is_running: bool = False) -> None:
+        self.launched: list[int] = []
+        self.is_running = is_running
+        self.fail_with: BaseException | None = None
+
+    async def launch(self, run_id: int) -> None:
+        if self.fail_with is not None:
+            exc, self.fail_with = self.fail_with, None
+            raise exc
+        self.launched.append(run_id)
+
+    def running(self) -> bool:
+        return self.is_running
+
+
 # --- the day plan -------------------------------------------------------------------------------------------
 
 
@@ -282,5 +306,6 @@ def make_services(core: Core, **overrides: Any) -> ApiServices:
         feed=FakeFeed(),
         plan=fixed_plan(),
         fired=lambda d: set(),
+        replays=FakeReplayLauncher(),
     )
     return dataclasses.replace(services, **overrides)

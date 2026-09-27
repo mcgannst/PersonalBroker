@@ -242,6 +242,7 @@ VIEW_FIELDS: dict[type, list[str]] = {
         "unprotected_seconds",
         "blocking_switches",
         "archive",
+        "run_to_date",  # P5-T1 (defaulted, last)
     ],
     nt.Check: ["name", "ok", "level", "detail"],
     nt.PreopenView: ["session_date", "approval_mode", "checks"],

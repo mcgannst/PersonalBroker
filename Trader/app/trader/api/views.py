@@ -13,11 +13,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from trader.adapters.questrade.auth import TokenHealth
 from trader.adapters.telegram.commands import _reset_hint
-from trader.api.schemas import EventOut, KillSwitchOut, TokenOut, WorkerOut
+from trader.api.schemas import EventOut, HistogramBinOut, KillSwitchOut, MetricsOut, TokenOut, WorkerOut
 from trader.db import models as m
 from trader.engine.killswitch import SWITCHES, KillSwitches
 from trader.logging_setup import REDACTED, is_secret_key, redact_text
 from trader.notify.views import STOPPED_PHASES, WORKER_PROCESS, token_state
+from trader.reports.metrics import Metrics
 
 KILLSWITCH_LABELS: Mapping[str, str] = {
     "daily_loss_pct": "Daily loss",
@@ -143,3 +144,29 @@ def killswitch_states(
             )
         )
     return out
+
+
+def metrics_out(mt: Metrics) -> MetricsOut:
+    """The `/api/metrics` response (and a replay's comparison) from `trader.reports.metrics`, field by field.
+    The histogram's open ends stay the `-Infinity` / `Infinity` sentinels of the P4-T7 wire format."""
+    return MetricsOut(
+        run_id=mt.run_id,
+        from_date=mt.date_from,
+        to_date=mt.date_to,
+        trades=mt.trades,
+        wins=mt.wins,
+        win_rate=mt.win_rate,
+        avg_win_r=mt.avg_win_r,
+        avg_loss_r=mt.avg_loss_r,
+        expectancy_r=mt.expectancy_r,
+        profit_factor=mt.profit_factor,
+        avg_slippage=mt.avg_slippage,
+        max_drawdown_pct=mt.max_drawdown_pct,
+        adherence_pct=mt.adherence_pct,
+        total_pnl=mt.total_pnl,
+        r_histogram=[HistogramBinOut(lo=b.lo, hi=b.hi, count=b.count) for b in mt.r_histogram],
+        losses=mt.losses,
+        total_fees=mt.total_fees,
+        avg_slippage_per_share=mt.avg_slippage_per_share,
+        trades_without_r=mt.trades_without_r,
+    )

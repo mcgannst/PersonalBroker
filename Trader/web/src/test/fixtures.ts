@@ -30,6 +30,9 @@ import type {
   PositionDetailOut,
   PositionOut,
   ProposalOut,
+  ReplayOptionsOut,
+  ReplayOut,
+  ReplaySummaryOut,
   SessionOut,
   SettingOut,
   SettingsOut,
@@ -43,6 +46,7 @@ import type {
   TradeOut,
   WatchlistOut,
   WatchlistUploadOut,
+  WeeklyReportOut,
   WorkerOut,
 } from "../api/types";
 
@@ -669,6 +673,10 @@ export const metricsOut: MetricsOut = {
     { lo: "0.5", hi: "1.0", count: 1 },
     { lo: "2.0", hi: "2.5", count: 1 },
   ],
+  losses: 2,
+  total_fees: "0.0412",
+  avg_slippage_per_share: "0.0003",
+  trades_without_r: 0,
 };
 
 export const emptyMetrics: MetricsOut = {
@@ -685,6 +693,10 @@ export const emptyMetrics: MetricsOut = {
   adherence_pct: null,
   total_pnl: "0.0000",
   r_histogram: [],
+  losses: 0,
+  total_fees: "0.0000",
+  avg_slippage_per_share: null,
+  trades_without_r: 0,
 };
 
 export const equityOut: EquityOut = {
@@ -882,4 +894,285 @@ export const watchlistUploadOut: WatchlistUploadOut = {
     { row: 5, value: "$$$", reason: "invalid ticker" },
   ],
   launched: null,
+};
+
+// ---------------------------------------------------------------- replays (P5)
+// A replay of the week 2026-11-23..2026-11-27 (Thanksgiving on the 26th, so 4 sessions); the 23rd had no
+// universe snapshot, so it is a biased day.
+
+export const replayOptions: ReplayOptionsOut = {
+  override_keys: [
+    "cash_account_mode",
+    "fees.commission",
+    "fees.sec_rate",
+    "killswitch.daily_loss_pct",
+    "killswitch.expectancy_min_trades",
+    "killswitch.expectancy_threshold_r",
+    "killswitch.max_drawdown_pct",
+    "no_entry_before_close_minutes",
+    "replay.catalyst_mode",
+    "replay.half_spread_bps",
+    "risk_pct",
+    "slippage_bps",
+    "slippage_min",
+    "starting_cash",
+  ],
+  max_sessions: 130,
+  latest_allowed: "2026-11-27",
+  questrade_from: "2026-09-03",
+  archive_from: "2026-10-06",
+  snapshots_from: "2026-09-28",
+  busy: false,
+  offline_now: false,
+};
+
+const replayBase: ReplayOut = {
+  id: 12,
+  label: "Thanksgiving week",
+  status: "queued",
+  date_from: "2026-11-23",
+  date_to: "2026-11-27",
+  created_at: "2026-11-28T15:00:00Z",
+  finished_at: null,
+  data_mode: "full",
+  catalyst_mode: "stored",
+  half_spread_bps: "5",
+  overrides: {},
+  strategies: [
+    { key: "orb_sip", config_id: 3, revision: 2, version: "1.0.0", scope: "live", enabled: true, params: { top_n: 20, require_catalyst: true } },
+    { key: "spy_overlay", config_id: 4, revision: 1, version: "1.0.0", scope: "live", enabled: true, params: {} },
+  ],
+  progress: {
+    sessions_total: 4,
+    sessions_done: 0,
+    current_date: null,
+    trades: 0,
+    forced_closes: 0,
+    biased_days: [],
+    missing_opening_bars: 0,
+    missing_minute_bars: 0,
+    questrade_requests: 0,
+  },
+  biased: false,
+  cancel_requested: false,
+  error: null,
+  metrics: null,
+  live_metrics: null,
+  events: [],
+};
+
+export const replayQueued: ReplayOut = replayBase;
+
+export const replayRunning: ReplayOut = {
+  ...replayBase,
+  id: 13,
+  label: "Risk 1%",
+  status: "running",
+  overrides: { risk_pct: "0.01" },
+  progress: {
+    ...replayBase.progress,
+    sessions_total: 10,
+    sessions_done: 3,
+    current_date: "2026-11-18",
+    trades: 2,
+    questrade_requests: 41,
+  },
+};
+
+export const replayCompleted: ReplayOut = {
+  ...replayBase,
+  id: 11,
+  label: "Thanksgiving week (biased universe)",
+  status: "completed",
+  finished_at: "2026-11-28T15:04:30Z",
+  strategies: [
+    { key: "orb_sip", config_id: 9, revision: 2, version: "1.0.0", scope: "replay", enabled: true, params: { top_n: 10, require_catalyst: true } },
+    { key: "spy_overlay", config_id: 4, revision: 1, version: "1.0.0", scope: "live", enabled: true, params: {} },
+  ],
+  progress: {
+    sessions_total: 4,
+    sessions_done: 4,
+    current_date: "2026-11-27",
+    trades: 5,
+    forced_closes: 1,
+    biased_days: ["2026-11-23"],
+    missing_opening_bars: 2,
+    missing_minute_bars: 1,
+    questrade_requests: 64,
+  },
+  biased: true,
+  metrics: {
+    run_id: 11,
+    from_date: "2026-11-23",
+    to_date: "2026-11-27",
+    trades: 5,
+    wins: 2,
+    win_rate: "0.4000",
+    avg_win_r: "1.2500",
+    avg_loss_r: "-1.0000",
+    expectancy_r: "0.1250",
+    profit_factor: "1.0870",
+    avg_slippage: "0.2000",
+    max_drawdown_pct: "0.0310",
+    adherence_pct: null,
+    total_pnl: "2.0000",
+    r_histogram: [
+      { lo: "-1.0", hi: "-0.5", count: 2 },
+      { lo: "0.5", hi: "1.0", count: 1 },
+      { lo: "2.0", hi: "2.5", count: 1 },
+    ],
+    losses: 3,
+    total_fees: "0.0412",
+    avg_slippage_per_share: "0.0100",
+    trades_without_r: 1,
+  },
+  live_metrics: {
+    run_id: RUN_ID,
+    from_date: "2026-11-23",
+    to_date: "2026-11-27",
+    trades: 4,
+    wins: 2,
+    win_rate: "0.5000",
+    avg_win_r: "1.1000",
+    avg_loss_r: "-0.9000",
+    expectancy_r: "0.1000",
+    profit_factor: "1.2000",
+    avg_slippage: "0.1500",
+    max_drawdown_pct: "0.0250",
+    adherence_pct: "0.7500",
+    total_pnl: "4.1000",
+    r_histogram: [],
+    losses: 2,
+    total_fees: "0.0330",
+    avg_slippage_per_share: "0.0080",
+    trades_without_r: 0,
+  },
+  events: [
+    {
+      id: 5012,
+      ts: "2026-11-27T17:50:00Z",
+      level: "info",
+      source: "replay",
+      message: "Forced close of 1 position at 12:59 ET",
+      data: { forced_closes: 1 },
+    },
+    {
+      id: 5003,
+      ts: "2026-11-23T14:35:05Z",
+      level: "warning",
+      source: "replay.data",
+      message: "2 opening bars missing on 2026-11-23",
+      data: { missing: 2 },
+    },
+  ],
+};
+
+export const replaySummaries: ReplaySummaryOut[] = [
+  {
+    id: 13,
+    label: "Risk 1%",
+    status: "running",
+    date_from: "2026-11-09",
+    date_to: "2026-11-20",
+    created_at: "2026-11-28T15:10:00Z",
+    finished_at: null,
+    data_mode: "full",
+    biased: false,
+    trades: 2,
+    expectancy_r: null,
+    total_pnl: null,
+  },
+  {
+    id: 11,
+    label: "Thanksgiving week (biased universe)",
+    status: "completed",
+    date_from: "2026-11-23",
+    date_to: "2026-11-27",
+    created_at: "2026-11-28T15:00:00Z",
+    finished_at: "2026-11-28T15:04:30Z",
+    data_mode: "full",
+    biased: true,
+    trades: 5,
+    expectancy_r: "0.1250",
+    total_pnl: "2.0000",
+  },
+  {
+    id: 10,
+    label: "replay 2026-11-02..2026-11-06",
+    status: "failed",
+    date_from: "2026-11-02",
+    date_to: "2026-11-06",
+    created_at: "2026-11-27T22:00:00Z",
+    finished_at: "2026-11-27T22:01:00Z",
+    data_mode: "offline",
+    biased: false,
+    trades: 0,
+    expectancy_r: null,
+    total_pnl: null,
+  },
+  {
+    id: 9,
+    label: "Cancelled test",
+    status: "cancelled",
+    date_from: "2026-10-26",
+    date_to: "2026-10-30",
+    created_at: "2026-11-27T21:00:00Z",
+    finished_at: "2026-11-27T21:02:00Z",
+    data_mode: "offline",
+    biased: false,
+    trades: 1,
+    expectancy_r: "-1.0000",
+    total_pnl: "-7.2000",
+  },
+];
+
+// ---------------------------------------------------------------- weekly report (P5)
+// The week 2026-11-23..2026-11-27; the commentary quotes only numbers from its facts.
+
+const weeklyFacts = {
+  week: { start: "2026-11-23", end: "2026-11-27", sessions: 4 },
+  week_metrics: {
+    trades: 4,
+    wins: 2,
+    losses: 2,
+    win_rate: "0.5000",
+    expectancy_r: "0.1250",
+    avg_win_r: "1.2500",
+    avg_loss_r: "-1.0000",
+    profit_factor: "1.2500",
+    total_pnl: "5.00",
+    total_fees: "0.0412",
+    avg_slippage: "0.0075",
+    max_drawdown_pct: "0.0210",
+    adherence_pct: "0.7500",
+  },
+  kill_switch_trips: [],
+  expectancy_switch: { closed_trades: 12, min_trades: 50 },
+};
+
+export const weeklyReportOk: WeeklyReportOut = {
+  week_start: "2026-11-23",
+  week_ending: "2026-11-27",
+  run_id: RUN_ID,
+  created_at: "2026-11-28T14:00:20Z",
+  updated_at: "2026-11-28T14:00:20Z",
+  commentary:
+    "A short holiday week with 4 sessions and 4 trades. Two were winners, a 50% win rate, and the expectancy " +
+    "was 0.1250R per trade for a P&L of $5.00.\n\nRisk stayed small: the largest drawdown was 2.1% and no kill " +
+    "switch tripped. You followed your rules on 75% of the answered days.",
+  commentary_status: "ok",
+  commentary_error: null,
+  model: "claude-sonnet-5",
+  cost_usd: "0.012300",
+  facts: weeklyFacts,
+  telegram_status: "sent",
+};
+
+export const weeklyReportBudget: WeeklyReportOut = {
+  ...weeklyReportOk,
+  commentary: null,
+  commentary_status: "budget",
+  commentary_error: "daily Claude budget used up",
+  model: null,
+  cost_usd: "0.000000",
 };

@@ -77,6 +77,15 @@ class JobLauncher(Protocol):
     def running(self, job: str) -> bool: ...
 
 
+class ReplayLauncher(Protocol):
+    """Starts a queued replay run in its own process (P5-T7 `SubprocessReplayLauncher`: `trader replay --run
+    <id>`). `running()` is True while a child it started is still alive."""
+
+    async def launch(self, run_id: int) -> None: ...
+
+    def running(self) -> bool: ...
+
+
 @dataclass(frozen=True, slots=True)
 class FeedMessage:
     """One change-feed message: `hello`, `invalidate` (data `{"topics": [...]}`) or `events`
@@ -121,6 +130,7 @@ class ApiServices:
     feed: ChangeFeed
     plan: Callable[[date], DayPlan]
     fired: Callable[[date], set[str]]
+    replays: ReplayLauncher | None = None  # P5: None until wired (P5-T17); the replay routes then answer 503
 
 
 # --- dependencies -------------------------------------------------------------------------------------------

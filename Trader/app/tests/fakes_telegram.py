@@ -26,6 +26,7 @@ from trader.notify.types import (
     PreopenView,
     ProposalView,
     StatusView,
+    WeeklyReportView,
 )
 
 
@@ -199,6 +200,9 @@ class FakeRenderer:
 
     def weekly_link(self, week_ending: date) -> OutboundMessage:
         return self._msg("weekly_link", "weekly_report", week_ending)
+
+    def weekly_report(self, v: WeeklyReportView) -> OutboundMessage:
+        return self._msg("weekly_report", "weekly_report", v)
 
 
 class FakeIssuer:

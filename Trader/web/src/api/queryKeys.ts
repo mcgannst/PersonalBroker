@@ -8,6 +8,7 @@ import type {
   EquityQuery,
   PositionsQuery,
   ProposalsQuery,
+  ReplaysQuery,
   TradesQuery,
 } from "./client";
 import type { IsoDate, Topic } from "./types";
@@ -32,6 +33,11 @@ export const qk = {
   watchlist: (date?: IsoDate) => ["watchlist", date ?? null] as const,
   me: () => ["me"] as const,
   meta: () => ["meta"] as const,
+  // Phase 5
+  replayOptions: () => ["replayOptions"] as const,
+  replays: (q: ReplaysQuery = {}) => ["replays", q] as const,
+  replay: (id: number) => ["replay", id] as const,
+  weeklyReport: (week: IsoDate) => ["weeklyReport", week] as const,
 };
 
 /** The resource-name prefixes each SSE `invalidate` topic refreshes. */
@@ -49,6 +55,8 @@ export const TOPIC_KEYS: Record<Topic, readonly string[]> = {
   settings: ["settings", "dashboard"],
   strategies: ["strategies", "dashboard"],
   system: ["system", "dashboard"],
+  replays: ["replays", "replay", "replayOptions"],
+  reports: ["weeklyReport"],
 };
 
 /** The distinct prefixes to invalidate for a set of topics. */

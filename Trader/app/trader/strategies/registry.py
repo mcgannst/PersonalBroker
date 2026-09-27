@@ -88,11 +88,19 @@ class StrategyConfigView:
     params: dict[str, Any]
     enabled: bool
     created_at: datetime
+    scope: str = "live"  # live | replay (migration 0006): a replay's override row is never a live setting
 
 
 def _view(row: m.StrategyConfig) -> StrategyConfigView:
     return StrategyConfigView(
-        row.id, row.strategy_key, row.version, row.revision, dict(row.params), row.enabled, row.created_at
+        row.id,
+        row.strategy_key,
+        row.version,
+        row.revision,
+        dict(row.params),
+        row.enabled,
+        row.created_at,
+        row.scope,
     )
 
 
@@ -246,6 +254,20 @@ class StrategyRegistry:
                 )
             )
             return _view(row)
+
+    def create_replay_config(
+        self,
+        key: str,
+        *,
+        base: StrategyConfigView,
+        params: Mapping[str, Any],
+        enabled: bool,
+        created_by: str,
+    ) -> StrategyConfigView:
+        """A `replay`-scoped row for a replay's parameter override (P5-T4): `{**base.params, **params}`
+        validated by the plug-in's model, the base live row's revision and version, no audit row. Live
+        settings never see it."""
+        raise NotImplementedError("P5-T4")
 
     def _build(self, key: str, cfg: StrategyConfigView) -> Strategy:
         cls = self.plugin_class(key)

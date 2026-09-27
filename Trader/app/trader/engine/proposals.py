@@ -72,6 +72,7 @@ class ProposalService:
         run_id: int,
         *,
         entry_blocked: Callable[[int], str | None] | None = None,
+        audit_auto: bool = True,
     ) -> None:
         self._factory = factory
         self._clock = clock
@@ -79,6 +80,9 @@ class ProposalService:
         self._broker = broker
         self.run_id = run_id
         self._entry_blocked = entry_blocked
+        # False (replay only, P5-T4 makes it take effect): skip the automatic audit rows, so a replay never
+        # writes audit_log rows stamped with simulated past times.
+        self._audit_auto = audit_auto
 
     def _log(self, s: Session, level: str, message: str, p: m.Proposal, **extra: Any) -> None:
         data = {

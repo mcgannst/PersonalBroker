@@ -142,6 +142,8 @@ ROUTER_ORDER = [
     "jobs",
     "credentials",
     "watchlist",
+    "replays",  # P5-T1
+    "reports",  # P5-T1
     "stream",
 ]
 
@@ -220,8 +222,8 @@ def test_every_contract_module_imports_with_its_names(module: str) -> None:
     assert missing == []
 
 
-def test_routers_are_the_fifteen_in_order() -> None:
-    assert len(ROUTERS) == 15
+def test_routers_are_the_seventeen_in_order() -> None:
+    assert len(ROUTERS) == 17  # Phase 5 added replays and reports (P5-T1)
     assert all(isinstance(r, APIRouter) for r in ROUTERS)
     for name, router in zip(ROUTER_ORDER, ROUTERS, strict=True):
         assert router is importlib.import_module(f"trader.api.routers.{name}").router
@@ -245,6 +247,8 @@ def test_schema_models_and_literals() -> None:
         "settings",
         "strategies",
         "system",
+        "replays",  # P5-T1
+        "reports",  # P5-T1
     )
     assert schemas.ManualJob.__args__ == (  # type: ignore[attr-defined]
         "nightly",
@@ -252,6 +256,7 @@ def test_schema_models_and_literals() -> None:
         "preopen",
         "postclose",
         "token-refresh",
+        "weekly",  # P5-T1
     )
     assert set(schemas.TimelineStatus.__args__) == {  # type: ignore[attr-defined]
         "done",
@@ -546,6 +551,7 @@ def test_api_services_fields() -> None:
         "feed",
         "plan",
         "fired",
+        "replays",  # P5-T1: ReplayLauncher | None = None
     ]
     assert ApiServices.__dataclass_params__.frozen  # type: ignore[attr-defined]
 

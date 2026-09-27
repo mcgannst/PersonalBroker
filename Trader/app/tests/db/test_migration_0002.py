@@ -63,7 +63,10 @@ def test_keys(migrated_engine: Engine) -> None:
         for t in ("sim_accounts", "strategy_configs", "catalysts", "candidates", "fills", "trades")
     }
     assert ["run_id"] in uniques["sim_accounts"]
-    assert ["strategy_key", "revision"] in uniques["strategy_configs"]
+    # Migration 0006 replaced this constraint by the partial unique index over `live` rows.
+    config_indexes = {i["name"]: i for i in insp.get_indexes("strategy_configs", schema="trader")}
+    live_revisions = config_indexes["uq_strategy_configs_key_revision_live"]
+    assert live_revisions["unique"] and live_revisions["column_names"] == ["strategy_key", "revision"]
     assert ["symbol_id", "session_date"] in uniques["catalysts"]
     assert ["run_id", "session_date", "strategy_key", "symbol_id"] in uniques["candidates"]
     assert ["order_id"] in uniques["fills"]

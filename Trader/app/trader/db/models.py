@@ -1,5 +1,6 @@
 """ORM models (SPEC §10). Phase 1 tables, the Phase 2 trading tables (migration 0002), the Phase 3
-worker and Telegram tables (migration 0004), then the Phase 4 web tables (migration 0005)."""
+worker and Telegram tables (migration 0004), the Phase 4 web tables (migration 0005), then the Phase 5
+replay columns and weekly reports (migration 0006)."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -173,13 +174,21 @@ class Run(Base):
             unique=True,
             postgresql_where=text("mode = 'live' AND status = 'active'"),
         ),
+        Index("ix_runs_mode_status", "mode", "status"),  # migration 0006
     )
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     mode: Mapped[str] = mapped_column(String(10))  # live | replay
     started_at: Mapped[datetime] = mapped_column(TS)
     params: Mapped[Any] = mapped_column(JSONB, nullable=False)
-    status: Mapped[str] = mapped_column(String(20))  # active | completed | failed
+    # live: active | completed | failed; replay: queued | running | completed | failed | cancelled
+    status: Mapped[str] = mapped_column(String(20))
     label: Mapped[str | None] = mapped_column(String(200))
+    # Replay lifecycle (migration 0006); the live run leaves them null / false.
+    finished_at: Mapped[datetime | None] = mapped_column(TS)
+    updated_at: Mapped[datetime | None] = mapped_column(TS)
+    progress: Mapped[Any] = mapped_column(JSONB, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
 
 
 class SimAccount(Base):
@@ -197,7 +206,18 @@ class SimAccount(Base):
 
 class StrategyConfig(Base):
     __tablename__ = "strategy_configs"
-    __table_args__ = (UniqueConstraint("strategy_key", "revision", name="uq_strategy_configs_key_revision"),)
+    # Migration 0006: a replay override is a `replay` row with the base live revision, so revisions are
+    # unique among `live` rows only.
+    __table_args__ = (
+        CheckConstraint("scope IN ('live', 'replay')", name="ck_strategy_configs_scope"),
+        Index(
+            "uq_strategy_configs_key_revision_live",
+            "strategy_key",
+            "revision",
+            unique=True,
+            postgresql_where=text("scope = 'live'"),
+        ),
+    )
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     strategy_key: Mapped[str] = mapped_column(String(50))
     version: Mapped[str] = mapped_column(String(20))
@@ -206,6 +226,9 @@ class StrategyConfig(Base):
     enabled: Mapped[bool] = mapped_column(Boolean)
     created_at: Mapped[datetime] = mapped_column(TS)
     created_by: Mapped[str] = mapped_column(String(50))
+    scope: Mapped[str] = mapped_column(
+        String(10), default="live", server_default=text("'live'")
+    )  # live | replay
 
 
 class Catalyst(Base):
@@ -525,3 +548,21 @@ class ManualWatchlist(Base):
     filename: Mapped[str | None] = mapped_column(String(200))
     uploaded_at: Mapped[datetime] = mapped_column(TS)
     uploaded_by: Mapped[str] = mapped_column(String(50))
+
+
+# --- Phase 5: weekly reports (migration 0006). Operational data about the live run, not a trading row. -----
+class WeeklyReport(Base):
+    __tablename__ = "weekly_reports"
+    week_ending: Mapped[date] = mapped_column(Date, primary_key=True)  # the week's last session date
+    week_start: Mapped[date] = mapped_column(Date)  # the Monday
+    run_id: Mapped[int] = mapped_column(ForeignKey(RUN_FK))  # the live run it describes
+    facts: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    commentary: Mapped[str | None] = mapped_column(Text)
+    commentary_status: Mapped[str] = mapped_column(String(20))  # ok | disabled | budget | rejected | error
+    commentary_error: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str | None] = mapped_column(String(60))
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), default=Decimal(0), server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(TS)
+    updated_at: Mapped[datetime] = mapped_column(TS)

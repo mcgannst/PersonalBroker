@@ -29,6 +29,7 @@ vi.mock("./pages/Trades", () => pageMock("Trades"));
 vi.mock("./pages/Performance", () => pageMock("Performance"));
 vi.mock("./pages/Journal", () => pageMock("Journal"));
 vi.mock("./pages/Reports", () => pageMock("Reports"));
+vi.mock("./pages/Replay", () => pageMock("Replay"));
 vi.mock("./pages/Settings", () => pageMock("Settings"));
 vi.mock("./pages/System", () => pageMock("System"));
 
@@ -275,7 +276,7 @@ describe("layout (tests 7 and 9)", () => {
     }
     await user.click(within(tabs).getByRole("button", { name: /more/i }));
     const more = screen.getByRole("menu");
-    for (const name of ["Performance", "Settings", "System", "Reports"]) {
+    for (const name of ["Performance", "Settings", "System", "Reports", "Replay"]) {
       expect(within(more).getByRole("menuitem", { name })).toBeInTheDocument();
     }
     await user.click(within(more).getByRole("menuitem", { name: "System" }));
@@ -284,7 +285,7 @@ describe("layout (tests 7 and 9)", () => {
     expect(screen.queryByRole("menu")).toBeNull();
 
     const side = screen.getByRole("navigation", { name: /main/i });
-    for (const name of ["Dashboard", "Candidates", "Trades", "Performance", "Journal", "Reports", "Settings", "System"]) {
+    for (const name of ["Dashboard", "Candidates", "Trades", "Performance", "Journal", "Reports", "Replay", "Settings", "System"]) {
       expect(within(side).getByRole("link", { name })).toBeInTheDocument();
     }
   });

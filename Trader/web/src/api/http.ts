@@ -27,6 +27,9 @@ import type {
   PositionDetailOut,
   PositionOut,
   ProposalOut,
+  ReplayOptionsOut,
+  ReplayOut,
+  ReplaySummaryOut,
   SessionOut,
   SettingOut,
   SettingsOut,
@@ -38,6 +41,7 @@ import type {
   TradeOut,
   WatchlistOut,
   WatchlistUploadOut,
+  WeeklyReportOut,
 } from "./types";
 
 export interface HttpClientOptions {
@@ -259,6 +263,23 @@ export function createHttpClient(opts: HttpClientOptions = {}): HttpApiClient {
       return post<WatchlistUploadOut>("/watchlist", form);
     },
     deleteWatchlist: (date) => del<OkOut>(`/watchlist/${seg(date)}`),
+
+    // replays (P5)
+    replayOptions: () => get<ReplayOptionsOut>("/replays/options"),
+    replays: (q) => get<Items<ReplaySummaryOut>>(`/replays${queryString(q)}`),
+    replay: (id) => get<ReplayOut>(`/replays/${seg(id)}`),
+    startReplay: (body) => post<ReplayOut>("/replays", body),
+    cancelReplay: (id) => post<ReplayOut>(`/replays/${seg(id)}/cancel`),
+
+    // reports (P5)
+    weeklyReport: async (week) => {
+      try {
+        return await get<WeeklyReportOut>(`/reports/weekly${queryString({ week })}`);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) return null;
+        throw err;
+      }
+    },
 
     // live updates
     streamUrl: () => url("/stream"),

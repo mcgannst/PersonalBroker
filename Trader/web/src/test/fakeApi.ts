@@ -13,6 +13,8 @@ import type {
   ManualJob,
   PasswordChangeIn,
   ProposalOut,
+  ReplayIn,
+  ReplayOut,
   ResetIn,
   SettingOut,
   StrategyIn,
@@ -86,8 +88,16 @@ export function defaultResponses(): FakeResponses {
     watchlist: fx.watchlistOut,
     uploadWatchlist: fx.watchlistUploadOut,
     deleteWatchlist: fx.okOut,
+    replayOptions: fx.replayOptions,
+    replays: { items: fx.replaySummaries },
+    replay: fx.replayCompleted,
+    startReplay: fx.replayQueued,
+    cancelReplay: { ...fx.replayRunning, cancel_requested: true },
+    weeklyReport: fx.weeklyReportOk,
   };
 }
+
+const KNOWN_REPLAYS: ReplayOut[] = [fx.replayCompleted, fx.replayRunning, fx.replayQueued];
 
 export class FakeApiClient implements ApiClient {
   /** Every call in order, as `[method, args]`. */
@@ -104,6 +114,13 @@ export class FakeApiClient implements ApiClient {
         const p = KNOWN_PROPOSALS.find((x) => x.id === id);
         if (!p) throw notFound(`Proposal ${id}`);
         return p;
+      });
+    }
+    if (!("replay" in overrides)) {
+      this.respond("replay", (id) => {
+        const r = KNOWN_REPLAYS.find((x) => x.id === id);
+        if (!r) throw notFound(`Replay ${id}`);
+        return r;
       });
     }
     if (!("position" in overrides)) {
@@ -288,6 +305,25 @@ export class FakeApiClient implements ApiClient {
   }
   deleteWatchlist(date: IsoDate) {
     return this.call("deleteWatchlist", [date]);
+  }
+  // replays and reports (P5)
+  replayOptions() {
+    return this.call("replayOptions", []);
+  }
+  replays(q: Parameters<ApiClient["replays"]>[0]) {
+    return this.call("replays", [q]);
+  }
+  replay(id: number) {
+    return this.call("replay", [id]);
+  }
+  startReplay(body: ReplayIn) {
+    return this.call("startReplay", [body]);
+  }
+  cancelReplay(id: number) {
+    return this.call("cancelReplay", [id]);
+  }
+  weeklyReport(week: IsoDate) {
+    return this.call("weeklyReport", [week]);
   }
   // live updates
   streamUrl(): string {

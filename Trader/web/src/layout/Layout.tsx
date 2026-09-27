@@ -26,6 +26,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { to: "/performance", label: "Performance" },
   { to: "/journal", label: "Journal" },
   { to: "/reports", label: "Reports" },
+  { to: "/replay", label: "Replay" },
   { to: "/settings", label: "Settings" },
   { to: "/system", label: "System" },
 ];

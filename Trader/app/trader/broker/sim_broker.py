@@ -18,7 +18,7 @@ Hardening (P2-B1 fix round):
 - account_state reads cash and positions in one REPEATABLE READ transaction.
 """
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -49,6 +49,7 @@ from trader.db.session import session_scope
 from trader.events import log_event
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock, et_date
+from trader.market.types import Candle
 from trader.settings_store import RuntimeSettings
 
 UNUSABLE_QUOTE = frozenset({"stale_quote", "halted", "delayed_quote", "no_ask", "no_bid", "crossed_quote"})
@@ -324,6 +325,15 @@ class SimBroker:
                 if event is not None:
                     events.append(event)
         return events
+
+    def on_candles(
+        self, candles: Mapping[int, Candle], now: datetime, *, orders: Collection[int] | None = None
+    ) -> list[FillEvent]:
+        """Replay (P5-T4): the per-order loop of `on_quotes` over 1-minute bars keyed by `symbols.id`. An
+        order uses a bar only when `bar.end > order.submitted_at` (skipped for the ids in `orders`, which also
+        limits the pass to them: the same-bar worst case); hours and the entry cutoff are checked against
+        `bar.start`; every timestamp written is `now`."""
+        raise NotImplementedError("P5-T4")
 
     def _lock_positions(self, s: Session, position_ids: Any) -> dict[int, m.Position]:
         """Lock (FOR UPDATE, by id) the positions named by `position_ids` (a select of ids)."""

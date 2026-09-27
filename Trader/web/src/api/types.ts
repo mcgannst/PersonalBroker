@@ -39,8 +39,16 @@ export type Topic =
   | "jobs"
   | "settings"
   | "strategies"
-  | "system";
-export type ManualJob = "nightly" | "premarket" | "preopen" | "postclose" | "token-refresh";
+  | "system"
+  | "replays"
+  | "reports";
+export type ManualJob = "nightly" | "premarket" | "preopen" | "postclose" | "token-refresh" | "weekly";
+/** `trader.replay.types.ReplayStatus` (re-exported by the schemas). */
+export type ReplayStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type DataMode = "full" | "offline";
+export type CatalystMode = "stored" | "unknown";
+/** The weekly report's commentary outcome. */
+export type CommentaryStatus = "ok" | "disabled" | "budget" | "rejected" | "error";
 
 /** Every `Topic`, in the schema's order (handy for exhaustive loops and tests). */
 export const TOPICS: readonly Topic[] = [
@@ -57,10 +65,19 @@ export const TOPICS: readonly Topic[] = [
   "settings",
   "strategies",
   "system",
+  "replays",
+  "reports",
 ];
 
 /** Every `ManualJob`, in the schema's order. */
-export const MANUAL_JOBS: readonly ManualJob[] = ["nightly", "premarket", "preopen", "postclose", "token-refresh"];
+export const MANUAL_JOBS: readonly ManualJob[] = [
+  "nightly",
+  "premarket",
+  "preopen",
+  "postclose",
+  "token-refresh",
+  "weekly",
+];
 
 // Value sets the backend uses in string fields (from trunk: trader.engine.risk, trader.engine.proposals,
 // trader.broker.types, trader.engine.killswitch). The schema fields themselves are plain strings.
@@ -489,6 +506,11 @@ export interface MetricsOut {
   adherence_pct: Money | null;
   total_pnl: Money;
   r_histogram: HistogramBinOut[];
+  // Phase 5 (trader.reports.metrics); always sent by the server.
+  losses: number;
+  total_fees: Money;
+  avg_slippage_per_share: Money | null;
+  trades_without_r: number;
 }
 
 export interface EquityPointOut {
@@ -659,6 +681,112 @@ export interface WatchlistUploadOut {
   watchlist: WatchlistOut;
   rejected: RejectedRowOut[];
   launched: JobLaunchOut | null;
+}
+
+// ---------------------------------------------------------------- replays
+
+/** One strategy's override in a replay request; only what is sent changes. */
+export interface ReplayStrategyIn {
+  enabled?: boolean | null;
+  params?: JsonObject | null;
+}
+
+export interface ReplayIn {
+  date_from: IsoDate;
+  date_to: IsoDate;
+  label?: string | null;
+  /** DB setting keys from `ReplayOptionsOut.override_keys`; only changed values are sent. */
+  overrides?: JsonObject;
+  strategies?: Record<string, ReplayStrategyIn>;
+  offline?: boolean;
+}
+
+export interface ReplayStrategyOut {
+  key: string;
+  config_id: number;
+  revision: number;
+  version: string;
+  scope: "live" | "replay";
+  enabled: boolean;
+  params: JsonObject;
+}
+
+export interface ReplayProgressOut {
+  sessions_total: number;
+  sessions_done: number;
+  current_date: IsoDate | null;
+  trades: number;
+  forced_closes: number;
+  biased_days: IsoDate[];
+  missing_opening_bars: number;
+  missing_minute_bars: number;
+  questrade_requests: number;
+}
+
+export interface ReplaySummaryOut {
+  id: number;
+  label: string | null;
+  status: ReplayStatus;
+  date_from: IsoDate;
+  date_to: IsoDate;
+  created_at: IsoTime;
+  finished_at: IsoTime | null;
+  data_mode: DataMode;
+  biased: boolean;
+  trades: number;
+  expectancy_r: Money | null;
+  total_pnl: Money | null;
+}
+
+export interface ReplayOut {
+  id: number;
+  label: string | null;
+  status: ReplayStatus;
+  date_from: IsoDate;
+  date_to: IsoDate;
+  created_at: IsoTime;
+  finished_at: IsoTime | null;
+  data_mode: DataMode;
+  catalyst_mode: CatalystMode;
+  half_spread_bps: Money;
+  overrides: JsonObject;
+  strategies: ReplayStrategyOut[];
+  progress: ReplayProgressOut;
+  biased: boolean;
+  cancel_requested: boolean;
+  error: string | null;
+  metrics: MetricsOut | null;
+  /** The live run over the same dates. */
+  live_metrics: MetricsOut | null;
+  events: EventOut[];
+}
+
+export interface ReplayOptionsOut {
+  override_keys: string[];
+  max_sessions: number;
+  latest_allowed: IsoDate;
+  questrade_from: IsoDate;
+  archive_from: IsoDate | null;
+  snapshots_from: IsoDate | null;
+  busy: boolean;
+  offline_now: boolean;
+}
+
+// ---------------------------------------------------------------- reports
+
+export interface WeeklyReportOut {
+  week_start: IsoDate;
+  week_ending: IsoDate;
+  run_id: number;
+  created_at: IsoTime;
+  updated_at: IsoTime;
+  commentary: string | null;
+  commentary_status: CommentaryStatus;
+  commentary_error: string | null;
+  model: string | null;
+  cost_usd: Money;
+  facts: JsonObject;
+  telegram_status: string | null;
 }
 
 // ---------------------------------------------------------------- stream (SSE `data:` payloads)

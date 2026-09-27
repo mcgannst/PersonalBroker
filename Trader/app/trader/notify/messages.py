@@ -31,6 +31,7 @@ from trader.notify.types import (
     ProposalView,
     Renderer,
     StatusView,
+    WeeklyReportView,
 )
 
 TELEGRAM_LIMIT = 4096
@@ -604,6 +605,10 @@ class MessageRenderer:
             "weekly_report",
             [f"<b>Weekly report</b> for the week ending {d}", self._link(f"/reports?week={d}", "Report")],
         )
+
+    def weekly_report(self, v: WeeklyReportView) -> OutboundMessage:
+        """The self-contained Saturday weekly report (headline numbers, commentary, link)."""
+        raise NotImplementedError("P5-T10")
 
 
 if TYPE_CHECKING:  # mypy verifies that MessageRenderer satisfies the Renderer protocol

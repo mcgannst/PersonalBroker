@@ -182,15 +182,42 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - The TypeScript mirror is written in the same commit as the Python schemas, so the P4-T18 mirror test passes at every commit.
 
 **Acceptance tests:**
-- [ ] 1. After `alembic upgrade head`: the new `runs` columns, `strategy_configs.scope` with its check, the partial unique index and `weekly_reports` exist with the keys above; two `live` rows with the same `(strategy_key, revision)` violate the index, while a `replay` row with the same pair is accepted; the ORM matches the migrated schema; downgrade to `0005` works on a database without replay rows and refuses with the documented message when one exists.
-- [ ] 2. Every new runtime setting has its default, rejects a value outside its bounds, and has a `SETTING_GROUPS` group (the P4 settings-page tests still pass).
-- [ ] 3. `ReplayProgress.to_json()` → `from_json()` round-trips (dates as ISO strings); `load_replay_run` reads a hand-written replay row with the params shape above, and raises `ReplayNotFound` for the live run and an unknown id.
-- [ ] 4. `metrics_out` maps every `Metrics` field; a `MetricsOut` built without the four new fields has their defaults; `model_dump(mode="json")` of a `ReplayOut` fixture has money as strings and dates as `YYYY-MM-DD`.
-- [ ] 5. The contract test imports every stub module; `ROUTERS` has 17 routers; `FakeReplayLauncher` satisfies `ReplayLauncher`, `FakeReplayMarket` satisfies `ReplayMarket`, `FakeReplayEngine` satisfies `ReplayEngine` (typed assignments, checked by mypy); `MessageRenderer` still satisfies `Renderer`; every stub raises `NotImplementedError` naming its owner.
-- [ ] 6. `run_job` with `retry=None` and with `RetryPolicy(attempts=1)` behaves exactly as before (the existing runner tests pass unchanged); `RetryPolicy.from_settings` reads `jobs.retry_attempts` and `jobs.retry_delay_seconds`.
-- [ ] 7. The P4-T18 TypeScript mirror test passes with the new models and literal values (`Topic`, `ManualJob`, `ReplayStatus`, `DataMode`, `CatalystMode`, `CommentaryStatus`).
-- [ ] 8. Web: `FakeApiClient` satisfies `ApiClient` (`tsc`); `createHttpClient` sends `POST /api/replays` with the CSRF header and the JSON body, and `weeklyReport` resolves `null` on a 404 (mocked `fetch`); `/replay` renders the stub title when logged in; the navigation shows "Replay".
-- [ ] 9. Gate: `bash Trader/build/gate.sh` passes (the shared test lane; never `check.sh` directly); commit `P5-T1: ...` and push.
+- [x] 1. After `alembic upgrade head`: the new `runs` columns, `strategy_configs.scope` with its check, the partial unique index and `weekly_reports` exist with the keys above; two `live` rows with the same `(strategy_key, revision)` violate the index, while a `replay` row with the same pair is accepted; the ORM matches the migrated schema; downgrade to `0005` works on a database without replay rows and refuses with the documented message when one exists.
+- [x] 2. Every new runtime setting has its default, rejects a value outside its bounds, and has a `SETTING_GROUPS` group (the P4 settings-page tests still pass).
+- [x] 3. `ReplayProgress.to_json()` → `from_json()` round-trips (dates as ISO strings); `load_replay_run` reads a hand-written replay row with the params shape above, and raises `ReplayNotFound` for the live run and an unknown id.
+- [x] 4. `metrics_out` maps every `Metrics` field; a `MetricsOut` built without the four new fields has their defaults; `model_dump(mode="json")` of a `ReplayOut` fixture has money as strings and dates as `YYYY-MM-DD`.
+- [x] 5. The contract test imports every stub module; `ROUTERS` has 17 routers; `FakeReplayLauncher` satisfies `ReplayLauncher`, `FakeReplayMarket` satisfies `ReplayMarket`, `FakeReplayEngine` satisfies `ReplayEngine` (typed assignments, checked by mypy); `MessageRenderer` still satisfies `Renderer`; every stub raises `NotImplementedError` naming its owner.
+- [x] 6. `run_job` with `retry=None` and with `RetryPolicy(attempts=1)` behaves exactly as before (the existing runner tests pass unchanged); `RetryPolicy.from_settings` reads `jobs.retry_attempts` and `jobs.retry_delay_seconds`.
+- [x] 7. The P4-T18 TypeScript mirror test passes with the new models and literal values (`Topic`, `ManualJob`, `ReplayStatus`, `DataMode`, `CatalystMode`, `CommentaryStatus`).
+- [x] 8. Web: `FakeApiClient` satisfies `ApiClient` (`tsc`); `createHttpClient` sends `POST /api/replays` with the CSRF header and the JSON body, and `weeklyReport` resolves `null` on a 404 (mocked `fetch`); `/replay` renders the stub title when logged in; the navigation shows "Replay".
+- [x] 9. Gate: `bash Trader/build/gate.sh` passes (the shared test lane; never `check.sh` directly); commit `P5-T1: ...` and push.
+
+**Build notes (P5-T1 builder, 2026-09-27; trunk 45cb891 re-read after P4-T18):**
+- `alembic heads` was `0005 (head)`, so the migration is `0006` as planned (no renumbering).
+- P4 names consumed are as the plan says: `HistogramBinOut` already allows the `-Infinity`/`Infinity` sentinels;
+  the mirror test is `tests/api/test_ts_contract.py` and the route sweep `tests/api/test_routes_sweep.py`.
+- Literals: `ReplayStatus`, `DataMode`, `CatalystMode` are defined once in `trader.replay.types` and re-exported
+  by `trader.api.schemas`; `CommentaryStatus` is defined in `trader.api.schemas` (and imported by
+  `trader.reports.weekly`).
+- Protocol shapes: `ReplayEngine.broker` and `ReplayMarket.biased_days` are read-only properties, so `Engine`
+  (whose `broker` is a `SimBroker` attribute) and `ReplayData` satisfy them (checked by mypy in
+  `tests/test_phase5_contracts.py`).
+- Extra real helpers: `replay_run_from_row(row)`, `REPLAY_STATUSES`, `ACTIVE_STATUSES`, `ConfigScope`, the base
+  `ReplayError`; `PinnedStrategy.to_json/from_json`; `trader.reports.metrics.OPEN_LOW/OPEN_HIGH` (the histogram's
+  open-end sentinels, which `metrics_out` passes through). `runs.params["half_spread_bps"]` is a string.
+- `StrategyRegistry._latest` is not scope-filtered yet (T4); no `replay` row can exist before T4/T6 land.
+- Pinned tests updated besides those named: `tests/test_phase4_contracts.py::test_api_services_fields` (the new
+  last field `replays`), and the web navigation pins in `web/src/shell.test.tsx` and
+  `web/src/gauntlet/web_pages_breaker.test.tsx` (the More menu now lists Replay after Reports), and three
+  earlier pins the contracts change by design: `tests/api/test_system.py` (alembic revision `0006`),
+  `tests/db/test_migration_0002.py::test_keys` (the partial unique index replaces the constraint) and
+  `tests/test_phase3_contracts.py` (`DailySummaryView` gains `run_to_date`).
+- `make_services` gives `replays=FakeReplayLauncher()` by default (`replays=None` for the 503 case).
+- Fakes: `tests/fakes_replay.py` also has `FakeReplayBroker`, `EngineCall`, `ReplayWorld` and `shifted`;
+  `FakeReplayEngine(clock, broker=None, *, hook=None)` records each call with the clock time and runs the hook.
+- `tests/test_phase5_contracts.py` accepts a stub that no longer raises, and only requires that one still
+  raising `NotImplementedError` names its owner, so T2-T16 never edit it (one owner per file). Every stub
+  raised its owner's name when T1 was committed.
 
 **LIVE step:** apply migration 0006 to `trader_dev` outside 09:15–16:30 ET on a session day and not within 10 minutes of a cron line (soak protection): `uv --directory Trader/app run --env-file ../../../../../Trader/docker/.env.dev alembic upgrade head` → `Running upgrade 0005 -> 0006` (or the numbers the build-time `alembic heads` check chose); `... alembic current` → `0006 (head)`; `... alembic check` → no new operations. The running `trader-dev` container keeps working (the new columns are nullable or defaulted). Record it in the activity log.
 

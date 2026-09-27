@@ -50,6 +50,10 @@ SETTING_GROUPS: Mapping[str, str] = {
     "preopen.": "Worker and Telegram",
     "postclose.": "Worker and Telegram",
     "web.": "Web app",
+    "replay.": "Replay",
+    "reports.": "Reports",
+    "jobs.": "Operations",
+    "logging.": "Operations",
 }
 OTHER_GROUP = "Other"  # a key no entry matches (none today; a test checks every setting has a group)
 # The groups in the Settings page's order (their first appearance above), then OTHER_GROUP.

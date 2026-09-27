@@ -179,6 +179,22 @@ class RuntimeSettings(BaseModel):
     web_quote_cache_seconds: float = Field(
         5.0, ge=1, le=60, allow_inf_nan=False, alias="web.quote_cache_seconds"
     )
+    # --- Phase 5: replay (SPEC §7.4, §8), weekly report (SPEC §4.3), job retries (SPEC §9), log mirror (§2)
+    replay_half_spread_bps: Decimal = Field(
+        Decimal("5"), ge=0, le=Decimal("100"), allow_inf_nan=False, alias="replay.half_spread_bps"
+    )
+    replay_catalyst_mode: Literal["stored", "unknown"] = Field("stored", alias="replay.catalyst_mode")
+    replay_questrade_rps: float = Field(4.0, ge=1, le=10, allow_inf_nan=False, alias="replay.questrade_rps")
+    replay_questrade_window_days: int = Field(85, ge=1, le=120, alias="replay.questrade_window_days")
+    replay_max_sessions: int = Field(130, ge=1, le=500, alias="replay.max_sessions")
+    reports_weekly_commentary: bool = Field(True, alias="reports.weekly_commentary")
+    reports_weekly_max_cost_usd: Decimal = Field(
+        Decimal("0.05"), ge=0, le=Decimal("1"), allow_inf_nan=False, alias="reports.weekly_max_cost_usd"
+    )
+    jobs_retry_attempts: int = Field(3, ge=1, le=5, alias="jobs.retry_attempts")
+    jobs_retry_delay_seconds: int = Field(120, ge=10, le=1800, alias="jobs.retry_delay_seconds")
+    logging_mirror_level: Literal["error", "critical", "off"] = Field("error", alias="logging.mirror_level")
+    logging_mirror_max_per_minute: int = Field(30, ge=1, le=600, alias="logging.mirror_max_per_minute")
 
     @field_validator("scheduler_always_fire_late")
     @classmethod

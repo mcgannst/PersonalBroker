@@ -22,9 +22,14 @@ is not run. `force` still runs it.
 `failure_level` (P3-REVIEW): the level of the event a failed body writes, `error` by default (the relay
 alerts it). The scheduler passes `warning` for a safety event that keeps retrying past its alerted
 attempts, so a persistently failing event is not one phone alert every two minutes until the close.
+
+`retry` (P5): a `RetryPolicy` re-runs a failed body in-process (P5-T15 implements it); `None` or one
+attempt behaves exactly as above.
 """
 
+import asyncio
 import hashlib
+import time
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -40,11 +45,31 @@ from trader.db.session import session_scope
 from trader.events import log_event
 from trader.logging_setup import redact_text
 from trader.market.clock import Clock
+from trader.settings_store import RuntimeSettings
 
 log = structlog.get_logger("jobs.runner")
 
 MAX_ERROR_CHARS = 2000
 OUTCOME_UNKNOWN = "outcome unknown: not re-run automatically"
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """In-process retries of a day-level job (SPEC §9 as amended in Phase 5): up to `attempts` runs in all,
+    waiting `first_delay_s`, then `first_delay_s * backoff`, and so on."""
+
+    attempts: int = 1
+    first_delay_s: float = 120.0
+    backoff: float = 2.0
+
+    @classmethod
+    def from_settings(cls, s: RuntimeSettings) -> "RetryPolicy":
+        return cls(attempts=s.jobs_retry_attempts, first_delay_s=float(s.jobs_retry_delay_seconds))
+
+
+def _check_retry(retry: RetryPolicy | None) -> None:
+    if retry is not None and retry.attempts > 1:
+        raise NotImplementedError("P5-T15")
 
 
 class JobRunMissing(RuntimeError):
@@ -124,6 +149,8 @@ def run_job(
     *,
     rerun_abandoned: bool = True,
     failure_level: str = "error",
+    retry: RetryPolicy | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> JobOutcome:
     """Run `fn` for (job, session_date) unless it already succeeded (then `skipped`, unless `force`)
     or another process is running it right now (`skipped`, reason "already running").
@@ -135,6 +162,7 @@ def run_job(
     outcome is `failed` ("succeeded but could not be recorded: <type>"), a best-effort critical event
     is written, and nothing is raised. With `rerun_abandoned=False` a leftover `running` row is settled
     as failed (OUTCOME_UNKNOWN) and the body is not run."""
+    _check_retry(retry)
     with _single_flight(factory, job, session_date) as acquired:
         if not acquired:
             return JobOutcome("skipped", {"reason": "already running"})
@@ -158,9 +186,12 @@ async def run_job_async(
     *,
     rerun_abandoned: bool = True,
     failure_level: str = "error",
+    retry: RetryPolicy | None = None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> JobOutcome:
     """run_job for an async body, with exactly run_job's semantics. A cancellation of the awaiting task
     (CancelledError) is recorded as a failure and re-raised, and the lock is released."""
+    _check_retry(retry)
     with _single_flight(factory, job, session_date) as acquired:
         if not acquired:
             return JobOutcome("skipped", {"reason": "already running"})

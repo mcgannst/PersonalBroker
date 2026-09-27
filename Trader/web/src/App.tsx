@@ -1,6 +1,6 @@
 // The app (P4-T12): providers, routes and deep links.
 //   /                      -> /dashboard
-//   /dashboard, /candidates, /trades, /performance, /journal, /reports, /settings, /system
+//   /dashboard, /candidates, /trades, /performance, /journal, /reports, /replay, /settings, /system
 //                          -> behind RequireAuth, inside the Layout
 //   /login                 -> the login page
 //   anything else          -> Not found
@@ -22,6 +22,7 @@ import DashboardPage from "./pages/Dashboard";
 import JournalPage from "./pages/Journal";
 import LoginPage from "./pages/Login";
 import PerformancePage from "./pages/Performance";
+import ReplayPage from "./pages/Replay";
 import ReportsPage from "./pages/Reports";
 import SettingsPage from "./pages/Settings";
 import SystemPage from "./pages/System";
@@ -42,6 +43,7 @@ export function AppRoutes() {
             <Route path="/performance" element={<PerformancePage />} />
             <Route path="/journal" element={<JournalPage />} />
             <Route path="/reports" element={<ReportsPage />} />
+            <Route path="/replay" element={<ReplayPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/system" element={<SystemPage />} />
           </Route>

@@ -13,7 +13,7 @@ failure is logged loudly and the loop carries on. Every saved signal ends in exa
 import dataclasses
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -40,6 +40,7 @@ from trader.events import log_event
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock, et_date
 from trader.market.data_service import MarketDataService, QuoteClient
+from trader.market.types import Candle
 from trader.settings_store import Market, RuntimeSettings, SettingsStore
 from trader.strategies.base import (
     Cancel,
@@ -226,6 +227,11 @@ class Engine:
                     },
                 )
         return fills
+
+    async def on_candles(self, candles: Mapping[int, Candle], now: datetime) -> list[FillEvent]:
+        """Replay (P5-T4): the candle twin of `on_quotes` (`broker.on_candles`, each fill's follow-up), then
+        the same-bar worst-case pass for this call's entry fills. Returns every fill in order."""
+        raise NotImplementedError("P5-T4")
 
     async def poll_quotes(self) -> list[FillEvent]:
         ids = self.broker.working_symbol_ids()

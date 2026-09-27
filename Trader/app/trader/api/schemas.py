@@ -19,6 +19,9 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, SecretStr, St
 from trader.db import models as m
 from trader.market.sessions import SessionPhase
 from trader.notify.types import PositionLine, ProposalView
+from trader.replay.types import CatalystMode as CatalystMode
+from trader.replay.types import DataMode as DataMode
+from trader.replay.types import ReplayStatus as ReplayStatus
 
 
 def _utc(value: datetime) -> datetime:
@@ -44,8 +47,13 @@ Topic = Literal[
     "settings",
     "strategies",
     "system",
+    "replays",
+    "reports",
 ]
-ManualJob = Literal["nightly", "premarket", "preopen", "postclose", "token-refresh"]
+ManualJob = Literal["nightly", "premarket", "preopen", "postclose", "token-refresh", "weekly"]
+# The weekly report's commentary outcome (P5-T9): written, switched off, over budget, withheld by the number
+# check, or Claude failed. ReplayStatus, DataMode and CatalystMode live in trader.replay.types (re-exported).
+CommentaryStatus = Literal["ok", "disabled", "budget", "rejected", "error"]
 
 TotpCode = Annotated[str, StringConstraints(pattern=r"^\d{6}$")]
 Password = Annotated[str, StringConstraints(min_length=1, max_length=200)]
@@ -547,6 +555,11 @@ class MetricsOut(ApiModel):
     adherence_pct: Decimal | None = None
     total_pnl: Decimal
     r_histogram: list[HistogramBinOut]
+    # Phase 5 (trader.reports.metrics): defaulted, so a Phase 4 caller that builds MetricsOut still works.
+    losses: int = 0
+    total_fees: Decimal = Decimal(0)
+    avg_slippage_per_share: Decimal | None = None
+    trades_without_r: int = 0
 
 
 class EquityPointOut(ApiModel):
@@ -725,6 +738,113 @@ class WatchlistUploadOut(ApiModel):
     watchlist: WatchlistOut
     rejected: list[RejectedRowOut]
     launched: JobLaunchOut | None = None
+
+
+# --- replays (P5-T7) ------------------------------------------------------------------------------------
+
+
+class ReplayStrategyIn(ApiModel):
+    """One strategy's override in a replay request: only what is sent changes (merged over live params)."""
+
+    enabled: bool | None = None
+    params: dict[str, Any] | None = None
+
+
+class ReplayIn(ApiModel):
+    date_from: date
+    date_to: date
+    label: Annotated[str, StringConstraints(max_length=200)] | None = None
+    overrides: dict[str, Any] = Field(default_factory=dict)  # keys: trader.replay.types.REPLAY_OVERRIDE_KEYS
+    strategies: dict[str, ReplayStrategyIn] = Field(default_factory=dict)
+    offline: StrictBool = False
+
+
+class ReplayStrategyOut(ApiModel):
+    key: str
+    config_id: int
+    revision: int
+    version: str
+    scope: Literal["live", "replay"]
+    enabled: bool
+    params: dict[str, Any]
+
+
+class ReplayProgressOut(ApiModel):
+    sessions_total: int
+    sessions_done: int
+    current_date: date | None = None
+    trades: int
+    forced_closes: int
+    biased_days: list[date]
+    missing_opening_bars: int
+    missing_minute_bars: int
+    questrade_requests: int
+
+
+class ReplaySummaryOut(ApiModel):
+    id: int
+    label: str | None = None
+    status: ReplayStatus
+    date_from: date
+    date_to: date
+    created_at: UtcDateTime  # runs.started_at: the row's creation (wall clock)
+    finished_at: UtcDateTime | None = None
+    data_mode: DataMode
+    biased: bool
+    trades: int
+    expectancy_r: Decimal | None = None
+    total_pnl: Decimal | None = None
+
+
+class ReplayOut(ApiModel):
+    id: int
+    label: str | None = None
+    status: ReplayStatus
+    date_from: date
+    date_to: date
+    created_at: UtcDateTime
+    finished_at: UtcDateTime | None = None
+    data_mode: DataMode
+    catalyst_mode: CatalystMode
+    half_spread_bps: Decimal
+    overrides: dict[str, Any]
+    strategies: list[ReplayStrategyOut]
+    progress: ReplayProgressOut
+    biased: bool
+    cancel_requested: bool
+    error: str | None = None
+    metrics: MetricsOut | None = None
+    live_metrics: MetricsOut | None = None  # the live run over the same dates
+    events: list[EventOut]
+
+
+class ReplayOptionsOut(ApiModel):
+    override_keys: list[str]
+    max_sessions: int
+    latest_allowed: date
+    questrade_from: date
+    archive_from: date | None = None
+    snapshots_from: date | None = None
+    busy: bool
+    offline_now: bool
+
+
+# --- reports (P5-T12) -----------------------------------------------------------------------------------
+
+
+class WeeklyReportOut(ApiModel):
+    week_start: date
+    week_ending: date
+    run_id: int
+    created_at: UtcDateTime
+    updated_at: UtcDateTime
+    commentary: str | None = None
+    commentary_status: CommentaryStatus
+    commentary_error: str | None = None
+    model: str | None = None
+    cost_usd: Decimal
+    facts: dict[str, Any]
+    telegram_status: str | None = None
 
 
 # --- stream (SSE event payloads) ------------------------------------------------------------------------

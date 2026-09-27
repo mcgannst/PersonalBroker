@@ -30,6 +30,10 @@ import type {
   PositionDetailOut,
   PositionOut,
   ProposalOut,
+  ReplayIn,
+  ReplayOptionsOut,
+  ReplayOut,
+  ReplaySummaryOut,
   ResetIn,
   SessionOut,
   SettingOut,
@@ -46,6 +50,7 @@ import type {
   TradeOut,
   WatchlistOut,
   WatchlistUploadOut,
+  WeeklyReportOut,
 } from "./types";
 
 /**
@@ -135,6 +140,10 @@ export interface WatchlistUploadOptions {
   runNightly?: boolean;
 }
 
+export interface ReplaysQuery {
+  limit?: number;
+}
+
 /** One method per /api route (SPEC §11, P4 plan T3–T11). Every method rejects with an `ApiError`. */
 export interface ApiClient {
   // auth (T4)
@@ -190,6 +199,14 @@ export interface ApiClient {
   watchlist(date?: IsoDate): Promise<WatchlistOut | null>;
   uploadWatchlist(file: File, opts: WatchlistUploadOptions): Promise<WatchlistUploadOut>;
   deleteWatchlist(date: IsoDate): Promise<OkOut>;
+  // replays (P5-T7)
+  replayOptions(): Promise<ReplayOptionsOut>;
+  replays(q: ReplaysQuery): Promise<Items<ReplaySummaryOut>>;
+  replay(id: number): Promise<ReplayOut>;
+  startReplay(body: ReplayIn): Promise<ReplayOut>;
+  cancelReplay(id: number): Promise<ReplayOut>;
+  // reports (P5-T12); `weeklyReport` resolves null when the server answers 404 (no report for that week)
+  weeklyReport(week: IsoDate): Promise<WeeklyReportOut | null>;
   // live updates (T11)
   /** Same-origin URL of `GET /api/stream` (for `EventSource`). */
   streamUrl(): string;
@@ -239,6 +256,12 @@ export const API_METHODS = [
   "watchlist",
   "uploadWatchlist",
   "deleteWatchlist",
+  "replayOptions",
+  "replays",
+  "replay",
+  "startReplay",
+  "cancelReplay",
+  "weeklyReport",
   "streamUrl",
 ] as const satisfies readonly (keyof ApiClient)[];
 

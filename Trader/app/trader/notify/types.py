@@ -169,6 +169,35 @@ class TradeLine:
 
 
 @dataclass(frozen=True, slots=True)
+class RunToDateView:
+    """The run's metrics up to the session (P5-T10's daily-summary line), from trader.reports.metrics."""
+
+    trades: int
+    win_rate: Decimal | None
+    expectancy_r: Decimal | None
+    total_pnl: Decimal
+    expectancy_trades: int  # closed trades the expectancy switch has counted
+    expectancy_min_trades: int  # killswitch.expectancy_min_trades
+
+
+@dataclass(frozen=True, slots=True)
+class WeeklyReportView:
+    """The Saturday weekly report message (P5-T9 builds it, P5-T10 renders it)."""
+
+    week_start: date
+    week_ending: date
+    trades: int
+    wins: int
+    win_rate: Decimal | None
+    expectancy_r: Decimal | None
+    total_pnl: Decimal
+    max_drawdown_pct: Decimal | None
+    adherence_pct: Decimal | None
+    commentary: str | None  # untrusted Claude text: escaped by the renderer
+    commentary_note: str | None  # why there is no commentary, when there is none
+
+
+@dataclass(frozen=True, slots=True)
 class DailySummaryView:
     session_date: date
     trades: tuple[TradeLine, ...]
@@ -182,6 +211,7 @@ class DailySummaryView:
     unprotected_seconds: int
     blocking_switches: tuple[str, ...]
     archive: Mapping[str, int]  # candle-archive counts, e.g. {"5m": 812, "1m": 8190}
+    run_to_date: RunToDateView | None = None  # P5-T10; None when the metrics could not be computed
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,3 +271,5 @@ class Renderer(Protocol):
     def reply(self, text: str) -> OutboundMessage: ...
 
     def weekly_link(self, week_ending: date) -> OutboundMessage: ...
+
+    def weekly_report(self, v: WeeklyReportView) -> OutboundMessage: ...

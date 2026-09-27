@@ -1003,7 +1003,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 git pull --rebase && git push
 ```
 
-- [ ] **Step 10: LIVE: apply the migration to `trader_dev`**
+- [x] **Step 10: LIVE: apply the migration to `trader_dev`**
 
 Run: `uv run --env-file ../docker/.env.dev alembic upgrade head`
 Expected: `INFO ... Running upgrade  -> 0001`. Then check the app role sees the tables:

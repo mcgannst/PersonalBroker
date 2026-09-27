@@ -58,7 +58,7 @@ After T2, lanes B, C and D can run in parallel with each other (disjoint files).
 **Interfaces:**
 - Produces: `trader.__version__: str`; `trader.config.EnvSettings` (fields below); `trader.config.get_env() -> EnvSettings`; `trader.cli.app: typer.Typer`; `scripts/check.sh`; `scripts/trader-dev.sh <command>`.
 
-- [ ] **Step 1: Install the toolchain**
+- [x] **Step 1: Install the toolchain**
 
 Run (from anywhere):
 ```bash
@@ -67,7 +67,7 @@ uv python install 3.12
 ```
 Expected: `uv --version` prints a version; `uv python find 3.12` prints a path.
 
-- [ ] **Step 2: Create `Trader/app/pyproject.toml`**
+- [x] **Step 2: Create `Trader/app/pyproject.toml`**
 
 ```toml
 [project]
@@ -139,7 +139,7 @@ ignore_missing_imports = true
 
 Create `Trader/app/.python-version` containing `3.12`.
 
-- [ ] **Step 3: Write the failing tests**
+- [x] **Step 3: Write the failing tests**
 
 `Trader/app/tests/__init__.py`: empty file.
 
@@ -192,12 +192,12 @@ def test_version_command() -> None:
     assert result.stdout.strip() == __version__
 ```
 
-- [ ] **Step 4: Run the tests to see them fail**
+- [x] **Step 4: Run the tests to see them fail**
 
 Run: `uv sync && uv run pytest -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader'` (or import errors for `trader.config`).
 
-- [ ] **Step 5: Implement the package, config and CLI**
+- [x] **Step 5: Implement the package, config and CLI**
 
 `Trader/app/trader/__init__.py`:
 ```python
@@ -262,7 +262,7 @@ def version() -> None:
     typer.echo(__version__)
 ```
 
-- [ ] **Step 6: Create the scripts**
+- [x] **Step 6: Create the scripts**
 
 `Trader/app/scripts/check.sh`:
 ```bash
@@ -288,7 +288,7 @@ exec uv run --env-file ../docker/.env.dev trader "$@"
 
 Run: `chmod +x scripts/check.sh scripts/trader-dev.sh`
 
-- [ ] **Step 7: Run the gate**
+- [x] **Step 7: Run the gate**
 
 Run: `uv run ruff format . && bash scripts/check.sh`
 Expected: ruff and mypy report no errors; `4 passed`.

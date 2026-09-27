@@ -736,3 +736,15 @@ None open.
 
 ### 2026-09-27 00:32 MT · P2-T12 · Breaker · attempt 1 · started
 - Notes: breaking trader/adapters/claude/catalyst.py, tests in tests/gauntlet/test_p2_t12_breaker.py
+
+### 2026-09-27 00:32 MT · P2-B1 · Spec+Code reviewer · attempt 1 · started
+- Notes: reviewing P2-T1..T5 commits on origin/trunk
+
+### 2026-09-27 00:33 MT · P2-B1 · Breaker · attempt 1 · started
+- Notes: verifying batch B1 (P2-T1..T5) and writing tests/gauntlet/test_p2_b1_breaker.py
+
+### 2026-09-27 00:32 MT · P2-B1 · Builder · attempt 1 · finished
+- Result: done, all T2-T5 plan steps ticked (built in order T2, T4, T3, T5 as the orchestrator asked)
+- Commits: 638cc24 (T2), 75c1172 (T4), 166749a (T3), fe80311 (T5)
+- Gate: check.sh passed on trunk fe80311 (456 tests)
+- Notes: plan code applied verbatim (extracted programmatically). Only deviation is placement: the T2 settings fields go after universe_fallback_stale_after_sessions, the last Phase 1 field

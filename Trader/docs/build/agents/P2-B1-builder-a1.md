@@ -6,3 +6,4 @@
 - 00:30:32 MT T3 done: 15 ledger tests pass, check.sh 425 passed, pushed 166749a | next: P2-T5 sim broker
 - 00:30:49 MT T5 steps 1-4: test written and failed (no trader.broker.base), base.py + sim_broker.py extracted | next: run T5 tests
 - 00:32:57 MT T5 done: 62 broker tests pass, pushed fe80311; check.sh on trunk (with P2-T12) 456 passed | next: finished entry + report
+- 00:33:03 MT finished entry appended to BUILD_STATE.md | next: report to orchestrator

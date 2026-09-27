@@ -202,6 +202,9 @@ Secrets: docker/.env.dev exists only in the main checkout. For LIVE steps use
 (uv splits --env-file values on spaces, so use this RELATIVE path, which resolves from a worktree's
 Trader/app to the main checkout. From the main checkout itself use scripts/trader-dev.sh).
 Never print, cat or commit secrets. Stage files by explicit path.
+Scratch files: the session scratchpad is SHARED by all agents. Put your helper scripts and scratch copies
+only in your own subfolder `<scratchpad>/<TASK_ID>-<role>-a<attempt>/` and never read or write another
+agent's files there.
 Shell rules (a hook enforces them): one command per Bash call. No chaining with the and-and, semicolon
 or or-or operators, no `cd` at all, and no `git -C`. Run git from your working directory. Use
 `uv --directory <path>/Trader/app run ...` wherever a plan says "run from Trader/app". A plan's combined

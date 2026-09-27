@@ -1,11 +1,15 @@
 """Every Telegram message format (SPEC §4.4): pure functions of the notify views.
 
-P3-T1 stub: the contracts are final, P3-T4 implements them.
+Messages are Telegram HTML: every dynamic string is escaped here, so callers pass raw values. Each message is
+self-contained (ticker, quantity, prices, stop, P&L, reason), because the web app is reachable only at home;
+a link to the web app is added for use there. Times are shown in Mountain Time, money and prices as Decimal.
 """
 
-from collections.abc import Sequence
+import html
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from trader.notify.types import (
@@ -13,45 +17,174 @@ from trader.notify.types import (
     Buttons,
     DailySummaryView,
     FillView,
+    MessageKind,
     OutboundMessage,
     OverlayView,
     PnlView,
     PositionLine,
     PreopenView,
     ProposalView,
+    Renderer,
     StatusView,
 )
 
 TELEGRAM_LIMIT = 4096
+TRUNCATED_LINE = "… (truncated, see the web app)"
+EMPTY_TEXT = "(empty)"
+ERROR_CHARS = 300  # a job failure shows the first 300 characters of its error
+
+_CENT = Decimal("0.01")
+_PRICE_Q = Decimal("0.0001")
+_MOUNTAIN_ZONES = frozenset(
+    {"America/Edmonton", "America/Denver", "America/Boise", "Canada/Mountain", "US/Mountain", "MST7MDT"}
+)
+
+PROPOSAL_HEADLINES: Mapping[str, str] = {
+    "entry": "ENTRY",
+    "stop": "PROTECTIVE STOP",
+    "exit": "EXIT",
+    "cancel": "CANCEL",
+}
+PHASE_TEXT: Mapping[str, str] = {
+    "closed_day": "closed (no session today)",
+    "pre_market": "pre-market",
+    "open": "open",
+    "after_close": "after the close",
+}
+# The SPEC §4.4 command table.
+COMMANDS: tuple[tuple[str, str], ...] = (
+    ("/status", "Session phase, next event, approval mode, kill switches, token health"),
+    ("/positions", "Open positions: qty, entry, last, stop, unrealized P&L, unprotected time"),
+    ("/pnl", "Today's realized and unrealized P&L, week to date, equity and drawdown"),
+    ("/pending", "Re-send pending proposals with their Approve/Reject buttons"),
+    ("/pause", "Block new entry proposals (asks for confirmation); exits and stops keep working"),
+    ("/resume", "Lift a /pause (automatic kill switches are reset only in the web app)"),
+    ("/help", "This list"),
+)
+PAUSE_CONFIRM_TEXT = "Pause new entries? Exits and stops keep working."
+_APPROVED = frozenset({"approved", "submitted", "auto_approved"})
+_PCT_SWITCHES = frozenset({"daily_loss_pct", "max_drawdown_pct"})
+_KNOWN_SWITCHES = ("daily_loss_pct", "max_drawdown_pct", "expectancy", "manual_pause")
+
+
+# --- formatting helpers ------------------------------------------------------------------------------------
 
 
 def link(base_url: str, path: str) -> str:
-    raise NotImplementedError("P3-T4")
+    """The web-app URL for `path` under `base_url` (exactly one slash between them)."""
+    return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
 def fmt_money(value: Decimal) -> str:
     """`$1,234.56`, negative `-$12.30`."""
-    raise NotImplementedError("P3-T4")
+    q = value.quantize(_CENT, ROUND_HALF_UP)
+    sign = "-" if q < 0 else ""
+    return f"{sign}${abs(q):,.2f}"
 
 
 def fmt_price(value: Decimal) -> str:
     """4 decimal places, trimmed to at least 2."""
-    raise NotImplementedError("P3-T4")
+    s = f"{value.quantize(_PRICE_Q, ROUND_HALF_UP):f}"
+    whole, _, frac = s.partition(".")
+    frac = frac.rstrip("0")
+    return f"{whole}.{frac.ljust(2, '0')}"
 
 
 def fmt_pct(value: Decimal) -> str:
-    """`+1.23%`."""
-    raise NotImplementedError("P3-T4")
+    """A fraction as a signed percentage: `Decimal("0.0123")` → `+1.23%`."""
+    p = (value * 100).quantize(_CENT, ROUND_HALF_UP)
+    return f"{'-' if p < 0 else '+'}{abs(p):.2f}%"
 
 
 def fmt_time(dt: datetime, tz: ZoneInfo) -> str:
-    """`09:35 MT`."""
-    raise NotImplementedError("P3-T4")
+    """`09:35 MT`: the wall-clock time in `tz` (labelled MT for Mountain Time zones)."""
+    local = dt.astimezone(tz)
+    label = "MT" if tz.key in _MOUNTAIN_ZONES else (local.tzname() or tz.key)
+    return f"{local:%H:%M} {label}"
 
 
 def fmt_duration(seconds: float) -> str:
-    """`3m 20s`."""
-    raise NotImplementedError("P3-T4")
+    """`3m 20s`, `45s`, `1h 2m 5s` (negative counts as zero)."""
+    total = max(0, round(seconds))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+def _e(value: object) -> str:
+    return html.escape(str(value), quote=False)
+
+
+def _pct_plain(value: Decimal) -> str:
+    """A fraction as an unsigned percentage: `0.0036` → `0.36%`."""
+    return f"{(value * 100).quantize(_CENT, ROUND_HALF_UP):.2f}%"
+
+
+def _signed_money(value: Decimal) -> str:
+    text = fmt_money(value)
+    return text if text.startswith("-") else f"+{text}"
+
+
+def _fmt_r(value: Decimal) -> str:
+    q = value.quantize(_CENT, ROUND_HALF_UP)
+    return f"{'-' if q < 0 else '+'}{abs(q):.2f}R"
+
+
+def _pnl(pnl: Decimal, pnl_r: Decimal | None) -> str:
+    return _signed_money(pnl) + (f" ({_fmt_r(pnl_r)})" if pnl_r is not None else "")
+
+
+def _one_row(buttons: Buttons) -> Buttons:
+    flat = tuple(b for row in buttons for b in row)
+    return (flat,) if flat else ()
+
+
+def _safe_cut(text: str) -> str:
+    """Drop a trailing partial HTML entity or tag left by a hard cut."""
+    amp = text.rfind("&")
+    if amp != -1 and ";" not in text[amp:]:
+        text = text[:amp]
+    lt = text.rfind("<")
+    if lt != -1 and ">" not in text[lt:]:
+        text = text[:lt]
+    return text
+
+
+def _fit(text: str, tail: str = "") -> str:
+    """Never empty, at most TELEGRAM_LIMIT characters: an over-long text is cut at the last line break that
+    fits and ends with the truncation line. `tail` (a final line) is always kept."""
+    if not text.strip():
+        text = EMPTY_TEXT
+    suffix = f"\n{tail}" if tail else ""
+    if len(text) + len(suffix) <= TELEGRAM_LIMIT:
+        return text + suffix
+    room = TELEGRAM_LIMIT - len(suffix) - len(TRUNCATED_LINE) - 1
+    cut = text.rfind("\n", 0, room + 1)
+    head = text[:cut] if cut > 0 else _safe_cut(text[:room])
+    return f"{head.rstrip()}\n{TRUNCATED_LINE}{suffix}"
+
+
+def _position_line(p: PositionLine) -> str:
+    last = fmt_price(p.last) if p.last is not None else "n/a"
+    stop = fmt_price(p.stop) if p.stop is not None else "none"
+    if not p.stop_working:
+        stop += " (no stop order)"
+    pnl = _signed_money(p.unrealized_pnl) if p.unrealized_pnl is not None else "n/a"
+    line = f"{_e(p.ticker)} {p.qty} @ {fmt_price(p.entry)}, last {last}, stop {stop}, P&amp;L {pnl}"
+    if p.unprotected_seconds > 0:
+        line += f", unprotected {fmt_duration(p.unprotected_seconds)}"
+    return line
+
+
+def _as_decimal(value: object) -> Decimal | None:
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
 
 
 class MessageRenderer:
@@ -61,53 +194,323 @@ class MessageRenderer:
         self.base_url = base_url
         self.tz = tz
 
+    # --- building blocks ---------------------------------------------------------------------------------
+
+    def _time(self, dt: datetime) -> str:
+        return fmt_time(dt, self.tz)
+
+    def _link(self, path: str, label: str) -> str:
+        url = html.escape(link(self.base_url, path), quote=True)
+        return f'<a href="{url}">{_e(label)}</a>'
+
+    @staticmethod
+    def _msg(
+        kind: MessageKind, lines: Iterable[str], buttons: Buttons = (), *, silent: bool = False
+    ) -> OutboundMessage:
+        return OutboundMessage(kind=kind, text=_fit("\n".join(lines)), buttons=buttons, silent=silent)
+
+    # --- proposals ---------------------------------------------------------------------------------------
+
+    @staticmethod
+    def _is_auto(v: ProposalView) -> bool:
+        return v.status == "auto_approved" or v.decided_via == "auto"
+
+    def _proposal_lines(self, v: ProposalView, *, closed: bool) -> list[str]:
+        auto = self._is_auto(v)
+        headline = PROPOSAL_HEADLINES.get(v.kind, v.kind.upper())
+        if auto:
+            headline = f"AUTO {headline}"
+        lines = [f"<b>{_e(headline)}: {_e(v.side.upper())} {v.qty} {_e(v.ticker)}</b>"]
+        order = v.order_type.replace("_", " ")
+        if v.order_type in ("stop", "stop_limit") and v.stop is not None:
+            order = f"stop {fmt_price(v.stop)}"
+            if v.order_type == "stop_limit" and v.limit is not None:
+                order += f" limit {fmt_price(v.limit)}"
+        elif v.order_type == "limit" and v.limit is not None:
+            order = f"limit {fmt_price(v.limit)}"
+        lines.append(f"Order: {_e(v.side)} {_e(order)}")
+        if v.stop_loss is not None:
+            lines.append(f"Stop loss: {fmt_price(v.stop_loss)}")
+        if v.risk_usd is not None:
+            lines.append(f"Risk: {fmt_money(v.risk_usd)}")
+        lines.append(f"Strategy: {_e(v.strategy_key)}")
+        if v.reason.strip():
+            lines.append(f"Reason: {_e(v.reason)}")
+        if not auto and not closed:
+            minutes = max(0, round((v.expires_at - v.created_at).total_seconds() / 60))
+            lines.append(f"Expires {self._time(v.expires_at)} ({minutes} min to decide)")
+        lines.append(self._link(f"/dashboard?proposal={v.proposal_id}", f"Proposal #{v.proposal_id}"))
+        return lines
+
     def proposal(self, v: ProposalView, buttons: Buttons) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        auto = self._is_auto(v)
+        return self._msg(
+            "proposal",
+            self._proposal_lines(v, closed=False),
+            () if auto else _one_row(buttons),
+            silent=auto,
+        )
 
     def proposal_closed(self, v: ProposalView, final_status: str, via: str | None) -> str:
-        raise NotImplementedError("P3-T4")
+        if final_status in _APPROVED:
+            final = f"Approved via {via}" if via else "Approved"
+        elif final_status == "rejected":
+            # An approved entry that the kill switches or a pause blocked is recorded as rejected with the
+            # reason in `error`, so the tapper sees why instead of a plain "Rejected".
+            final = f"Rejected: {v.error}" if v.error else "Rejected"
+        elif final_status == "expired":
+            final = "Expired"
+        elif final_status == "failed":
+            final = f"Failed: {v.error or 'the order was refused'}"
+        else:
+            final = f"Already decided ({final_status})"
+        return _fit("\n".join(self._proposal_lines(v, closed=True)), f"<b>{_e(final)}</b>")
+
+    # --- fills and the overlay ---------------------------------------------------------------------------
 
     def fill(self, v: FillView) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        verb = "BOUGHT" if v.side == "buy" else "SOLD"
+        main = f"{verb} {v.qty} {_e(v.ticker)} @ {fmt_price(v.price)}"
+        kind: MessageKind
+        if v.purpose == "entry":
+            kind, title = "fill", "ENTRY FILLED"
+            if v.stop_loss is not None:
+                main += f", stop {fmt_price(v.stop_loss)}"
+        elif v.purpose == "stop":
+            kind, title = "stop_hit", "STOPPED OUT"
+        elif v.reason == "flatten_close":
+            kind, title = "flatten", "FLATTENED (end of day)"
+        else:
+            kind, title = "fill", "EXIT FILLED"
+            if v.reason:
+                main += f" ({_e(v.reason)})"
+        lines = [f"<b>{title}</b>", main]
+        if v.pnl is not None:
+            lines.append(f"P&amp;L {_pnl(v.pnl, v.pnl_r)}")
+        lines.append(f"Filled at {self._time(v.ts)}")
+        if v.position_id is not None:
+            lines.append(self._link(f"/trades?position={v.position_id}", f"Position #{v.position_id}"))
+        else:
+            lines.append(self._link("/trades", "Trades"))
+        return self._msg(kind, lines)
 
     def overlay(self, v: OverlayView) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        lines = [f"<b>SPY OVERLAY: {_e(v.decision.upper())}</b> at {self._time(v.ts)}"]
+        if v.spy_return is None and v.prior_close is None and v.price is None:
+            lines.append("SPY data unavailable")
+        else:
+            parts = []
+            if v.spy_return is not None:
+                parts.append(f"SPY {fmt_pct(v.spy_return)} from the prior close")
+            if v.prior_close is not None:
+                parts.append(f"prior close {fmt_price(v.prior_close)}")
+            if v.price is not None:
+                parts.append(f"now {fmt_price(v.price)}")
+            lines.append(", ".join(parts))
+        ids = ", ".join(f"#{i}" for i in v.position_ids) or "none"
+        lines.append(f"Positions affected: {ids}")
+        if v.note.strip():
+            lines.append(_e(v.note))
+        lines.append(self._link("/dashboard", "Dashboard"))
+        return self._msg("overlay", lines)
+
+    # --- alerts ------------------------------------------------------------------------------------------
 
     def alert(self, v: AlertView) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        at = self._time(v.ts)
+        message = [_e(v.message)] if v.message.strip() else []
+        if v.kind == "kill_switch":
+            lines = self._kill_switch_lines(v, at)
+        elif v.kind == "job_failure":
+            job = v.source.removeprefix("job.")
+            lines = [f"<b>JOB FAILED: {_e(job)}</b> at {at}", *message]
+            error = str(v.data.get("error") or "")
+            if error:
+                cut = error[:ERROR_CHARS] + ("…" if len(error) > ERROR_CHARS else "")
+                lines.append(f"Error: {_e(cut)}")
+        elif v.kind == "token_failure":
+            error = str(v.data.get("error") or v.message or "unknown error").rstrip(". ")
+            lines = [
+                f"<b>TOKEN FAILURE</b> at {at}",
+                f"Questrade token refresh failed: {_e(error)}. Paste a new token in Settings.",
+            ]
+        elif v.kind == "escalation":
+            lines = [f"<b>ESCALATION</b> at {at}", *message, *self._data_lines(v.data)]
+        else:
+            lines = [
+                f"<b>ALERT ({_e(v.level.upper())})</b> {_e(v.source)} at {at}",
+                *message,
+                *self._data_lines(v.data),
+            ]
+        lines.append(self._link("/system", "System page"))
+        return self._msg(v.kind, lines)
+
+    @staticmethod
+    def _data_lines(data: Mapping[str, Any]) -> list[str]:
+        return [f"{_e(k)}: {_e(val)}" for k, val in data.items()]
+
+    @staticmethod
+    def _switch_name(v: AlertView) -> str:
+        switch = v.data.get("switch")
+        if switch:
+            return str(switch)
+        if v.message.startswith("manual pause"):
+            return "manual_pause"
+        return next((s for s in _KNOWN_SWITCHES if s in v.message), "unknown")
+
+    def _kill_switch_lines(self, v: AlertView, at: str) -> list[str]:
+        switch = self._switch_name(v)
+        lines = [f"<b>KILL SWITCH: {_e(switch)}</b> at {at}"]
+        if v.message.strip():
+            lines.append(_e(v.message))
+        value, threshold = v.data.get("value"), v.data.get("threshold")
+        if value is not None and threshold is not None:
+            dv, dt = _as_decimal(value), _as_decimal(threshold)
+            if switch in _PCT_SWITCHES and dv is not None and dt is not None:
+                lines.append(f"Value {_pct_plain(dv)} vs threshold {_pct_plain(dt)}")
+            else:
+                lines.append(f"Value {_e(value)} vs threshold {_e(threshold)}")
+        if switch == "manual_pause":
+            lines.append("New entries blocked until /resume. Exits and stops keep working.")
+        elif switch == "daily_loss_pct":
+            lines.append("Entries blocked until the next session (resets automatically).")
+        else:
+            lines.append("Entries blocked; reset in the web app.")
+        return lines
+
+    # --- end of day --------------------------------------------------------------------------------------
 
     def daily_summary(self, v: DailySummaryView, buttons: Buttons) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        d = v.session_date.isoformat()
+        lines = [f"<b>Daily summary {d}</b>"]
+        if v.trades:
+            lines.append(f"Trades ({len(v.trades)}):")
+            lines += [
+                f"{_e(t.ticker)} {t.qty} @ {fmt_price(t.entry)} → {fmt_price(t.exit)}: "
+                f"{_pnl(t.pnl, t.pnl_r)} {_e(t.exit_reason)}"
+                for t in v.trades
+            ]
+        else:
+            lines.append("No trades.")
+        lines += [
+            f"Realized P&amp;L: {_signed_money(v.realized_pnl)}",
+            f"Fees: {fmt_money(v.fees)}",
+            f"Equity: {fmt_money(v.equity)}",
+            f"Drawdown: {_pct_plain(v.drawdown_pct)}",
+        ]
+        if v.open_positions:
+            lines.append(f"<b>⚠️ STILL OPEN: {len(v.open_positions)} position(s) after the close</b>")
+            lines += [_position_line(p) for p in v.open_positions]
+        decisions = f"Decisions: {v.decisions}"
+        if v.avg_decision_seconds is not None:
+            decisions += f", average {fmt_duration(v.avg_decision_seconds)}"
+        lines.append(decisions)
+        lines.append(f"Unprotected time: {fmt_duration(v.unprotected_seconds)}")
+        lines.append(f"Kill switches: {_e(', '.join(v.blocking_switches)) or 'none'}")
+        archive = ", ".join(f"{_e(k)}: {n}" for k, n in sorted(v.archive.items()))
+        lines.append(f"Candles archived: {archive or 'none'}")
+        lines.append("<b>Rules followed?</b>")
+        lines.append(self._link(f"/journal?date={d}", f"Journal {d}"))
+        return self._msg("daily_summary", lines, buttons)
 
     def journal_answered(self, session_date: date, rules_followed: bool) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        answer = "Yes" if rules_followed else "No"
+        return self._msg("reply", [f"Journal {session_date.isoformat()}: rules followed = {answer}"])
+
+    # --- morning -----------------------------------------------------------------------------------------
 
     def premarket_brief(self, session_date: date, brief: str) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        body = _e(brief) if brief.strip() else "(no brief)"
+        return self._msg("premarket_brief", [f"<b>Pre-market brief {session_date.isoformat()}</b>", body])
 
     def preopen(self, v: PreopenView) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        lines = [
+            f"<b>Pre-open {v.session_date.isoformat()}</b>",
+            f"Approval mode: {_e(v.approval_mode)}",
+        ]
+        for c in v.checks:
+            label = "OK" if c.ok else ("ERROR" if c.level == "error" else "WARNING")
+            lines.append(f"{label} {_e(c.name)}: {_e(c.detail)}")
+        if not v.checks:
+            lines.append("No checks ran.")
+        lines.append(self._link("/system", "System page"))
+        return self._msg("preopen", lines)
+
+    # --- status and commands -----------------------------------------------------------------------------
+
+    def _status_lines(self, v: StatusView) -> list[str]:
+        lines = [
+            f"Now {self._time(v.now)}, session {v.session_date.isoformat()}: "
+            f"{_e(PHASE_TEXT.get(v.phase, v.phase))}"
+        ]
+        if v.next_event_key is not None and v.next_event_at is not None:
+            lines.append(f"Next event: {_e(v.next_event_key)} at {self._time(v.next_event_at)}")
+        else:
+            lines.append("Next event: none today")
+        lines.append(f"Approval mode: {_e(v.approval_mode)}")
+        if v.blocking_switches:
+            lines.append(f"Kill switches: BLOCKED by {_e(', '.join(v.blocking_switches))}")
+        else:
+            lines.append("Kill switches: none")
+        age = f", refreshed {v.token_age_hours:.1f} h ago" if v.token_age_hours is not None else ""
+        if v.token_ok:
+            lines.append(f"Questrade token: OK{age}")
+        else:
+            lines.append(f"Questrade token: NOT OK ({_e(v.token_error or 'unknown error')}{age})")
+        if v.heartbeat_age_seconds is not None:
+            lines.append(f"Worker heartbeat: {fmt_duration(v.heartbeat_age_seconds)} ago")
+        else:
+            lines.append("Worker heartbeat: no heartbeat")
+        lines.append(f"Open positions: {len(v.positions)}")
+        lines += [_position_line(p) for p in v.positions]
+        lines.append(f"Pending proposals: {v.pending_count}")
+        lines.append(self._link("/dashboard", "Dashboard"))
+        return lines
 
     def checkin(self, v: StatusView, at_label: str) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        return self._msg("checkin", [f"<b>Check-in {_e(at_label)}</b>", *self._status_lines(v)])
 
     def status(self, v: StatusView) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        return self._msg("reply", ["<b>Status</b>", *self._status_lines(v)])
 
     def positions(self, lines: Sequence[PositionLine], now: datetime) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        out = [f"<b>Positions</b> at {self._time(now)}"]
+        out += [_position_line(p) for p in lines] or ["No open positions."]
+        out.append(self._link("/trades", "Trades"))
+        return self._msg("reply", out)
 
     def pnl(self, v: PnlView) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        return self._msg(
+            "reply",
+            [
+                f"<b>P&amp;L {v.session_date.isoformat()}</b>",
+                f"Realized today: {_signed_money(v.realized_today)}",
+                f"Unrealized: {_signed_money(v.unrealized)}",
+                f"Week to date: {_signed_money(v.week_to_date)}",
+                f"Equity: {fmt_money(v.equity)} (peak {fmt_money(v.peak_equity)})",
+                f"Drawdown: {_pct_plain(v.drawdown_pct)}",
+                self._link("/trades", "Trades"),
+            ],
+        )
 
     def pause_confirm(self, buttons: Buttons) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        return self._msg("reply", [PAUSE_CONFIRM_TEXT], buttons)
 
     def help(self) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        return self._msg("reply", ["<b>Commands</b>", *(f"{c} - {_e(d)}" for c, d in COMMANDS)])
 
     def reply(self, text: str) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        return self._msg("reply", [_e(text)])
 
     def weekly_link(self, week_ending: date) -> OutboundMessage:
-        raise NotImplementedError("P3-T4")
+        d = week_ending.isoformat()
+        return self._msg(
+            "weekly_report",
+            [f"<b>Weekly report</b> for the week ending {d}", self._link(f"/reports?week={d}", "Report")],
+        )
+
+
+if TYPE_CHECKING:  # mypy verifies that MessageRenderer satisfies the Renderer protocol
+
+    def _is_renderer(r: MessageRenderer) -> Renderer:
+        return r

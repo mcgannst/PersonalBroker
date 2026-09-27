@@ -245,15 +245,15 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 - Every dynamic string is HTML-escaped. Text longer than `TELEGRAM_LIMIT` is cut at the last line break before the limit with a final `… (truncated, see the web app)` line; buttons are kept. No message is empty.
 
 **Acceptance tests:**
-- [ ] 1. An entry proposal view renders ticker, qty, buy stop, stop loss, risk dollars, reason, expiry in MT, the link with the proposal id, and two buttons in one row carrying the given callback data.
-- [ ] 2. Each proposal kind renders its headline; `proposal_closed` renders each final status (including `failed`); an auto-approved entry renders `AUTO ENTRY` with no buttons.
-- [ ] 3. Entry fill, stop fill, flatten fill and overlay exit fill render kinds `fill`, `stop_hit`, `flatten`, `fill`; closing fills include P&L and R (for example `+$10.82 (+2.17R)`).
-- [ ] 4. Each alert kind renders its specific text; a kill-switch alert for `max_drawdown_pct` says it needs a web-app reset, `manual_pause` does not.
-- [ ] 5. The daily summary renders trades, P&L, equity, drawdown, decision time, unprotected time, archive counts and the Yes/No buttons; with an open position it contains `STILL OPEN`.
-- [ ] 6. A reason containing `<b>&` is escaped; a 10,000-character brief is cut below 4096 characters on a line break with the truncation line.
-- [ ] 7. Times render in MT: 13:35:05Z on 2026-10-06 (MDT) → `07:35 MT`; 14:35:05Z on Mon 2026-11-02, the first session after the clocks change on Sun 2026-11-01 (MST) → `07:35 MT`.
-- [ ] 8. `MessageRenderer` satisfies the `Renderer` protocol (typed assignment) and every method returns a non-empty message.
-- [ ] 9. Gate and commit `P3-T4: ...`.
+- [x] 1. An entry proposal view renders ticker, qty, buy stop, stop loss, risk dollars, reason, expiry in MT, the link with the proposal id, and two buttons in one row carrying the given callback data.
+- [x] 2. Each proposal kind renders its headline; `proposal_closed` renders each final status (including `failed`); an auto-approved entry renders `AUTO ENTRY` with no buttons.
+- [x] 3. Entry fill, stop fill, flatten fill and overlay exit fill render kinds `fill`, `stop_hit`, `flatten`, `fill`; closing fills include P&L and R (for example `+$10.82 (+2.17R)`).
+- [x] 4. Each alert kind renders its specific text; a kill-switch alert for `max_drawdown_pct` says it needs a web-app reset, `manual_pause` does not.
+- [x] 5. The daily summary renders trades, P&L, equity, drawdown, decision time, unprotected time, archive counts and the Yes/No buttons; with an open position it contains `STILL OPEN`.
+- [x] 6. A reason containing `<b>&` is escaped; a 10,000-character brief is cut below 4096 characters on a line break with the truncation line.
+- [x] 7. Times render in MT: 13:35:05Z on 2026-10-06 (MDT) → `07:35 MT`; 14:35:05Z on Mon 2026-11-02, the first session after the clocks change on Sun 2026-11-01 (MST) → `07:35 MT`.
+- [x] 8. `MessageRenderer` satisfies the `Renderer` protocol (typed assignment) and every method returns a non-empty message.
+- [x] 9. Gate and commit `P3-T4: ...`.
 
 ---
 

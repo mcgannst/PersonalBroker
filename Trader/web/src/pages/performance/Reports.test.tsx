@@ -1,4 +1,5 @@
 // P4-T14 acceptance tests 6 and 7 (Reports side): the weekly Reports page the Telegram weekly link opens.
+// P5-T13 acceptance tests 3-5: the weekly Claude commentary on it.
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,9 +40,51 @@ describe("Reports page", () => {
     expect(within(days[0] as HTMLElement).getByRole("link")).toHaveAttribute("href", "/journal?date=2026-10-05");
   });
 
-  it("says the Claude commentary comes with the weekly report and shows nothing in its place", async () => {
-    renderWithProviders(<ReportsPage />, { route: "/reports?week=2026-10-09" });
-    expect(await screen.findByText(/Claude commentary arrives with the weekly report/)).toBeInTheDocument();
+  // P5-T13: the Phase 4 note line ("The Claude commentary arrives with the weekly report.") is replaced by the
+  // commentary itself or the reason there is none.
+  it("shows the week's Claude commentary instead of the Phase 4 note line", async () => {
+    renderWithProviders(<ReportsPage />, { route: "/reports?week=2026-11-25" });
+    const card = await screen.findByRole("region", { name: "Commentary" });
+    expect(card).toHaveTextContent(/A short holiday week with 4 sessions/);
+    expect(card).toHaveTextContent("Generated 2026-11-28 08:00 MT by claude-sonnet-5, US$0.0123");
+    expect(screen.queryByText(/Claude commentary arrives with the weekly report/)).toBeNull();
+  });
+
+  it("a report without commentary shows the reason; the rest of the page is unchanged", async () => {
+    const api = new FakeApiClient({ weeklyReport: fx.weeklyReportBudget });
+    renderWithProviders(<ReportsPage />, { route: "/reports?week=2026-11-25", api });
+    expect(await screen.findByText("The daily Claude budget was used up")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Commentary" })).toBeNull();
+    expect(await screen.findByText("Win rate")).toBeInTheDocument();
+  });
+
+  it("no weekly report (404) says so and the metrics, trades and journal still render", async () => {
+    const api = new FakeApiClient({ weeklyReport: null });
+    renderWithProviders(<ReportsPage />, { route: "/reports?week=2026-10-09", api });
+    expect(await screen.findByText(/No weekly report for this week yet/)).toBeInTheDocument();
+    expect(await screen.findByText("Win rate")).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "BBB" })).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Journal" })).getAllByRole("listitem")).toHaveLength(5);
+    expect(screen.queryByRole("region", { name: "Commentary" })).toBeNull();
+  });
+
+  it("?week=2026-11-25 asks for the report of Monday 2026-11-23; Previous week asks for that Monday", async () => {
+    const r = renderWithProviders(<ReportsPage />, { route: "/reports?week=2026-11-25" });
+    await waitFor(() => expect(r.api.callsTo("weeklyReport")).toEqual([["2026-11-23"]]));
+    await userEvent.click(screen.getByRole("link", { name: /Previous week/ }));
+    expect(await screen.findByRole("heading", { name: "Week of 2026-11-16 to 2026-11-20" })).toBeInTheDocument();
+    await waitFor(() => expect(r.api.callsTo("weeklyReport")).toEqual([["2026-11-23"], ["2026-11-16"]]));
+  });
+
+  it("a Saturday link (the Telegram weekly link's week ending + 1) asks for the week just ended", async () => {
+    const r = renderWithProviders(<ReportsPage />, { route: "/reports?week=2026-11-28" });
+    await waitFor(() => expect(r.api.callsTo("weeklyReport")).toEqual([["2026-11-23"]]));
+  });
+
+  it("a malformed week never asks for a weekly report", async () => {
+    const r = renderWithProviders(<ReportsPage />, { route: "/reports?week=2026-13-40" });
+    expect(await screen.findByText(/not a date/i)).toBeInTheDocument();
+    expect(r.api.callsTo("weeklyReport")).toEqual([]);
   });
 
   it("a Saturday opens the week that just ended; following Previous moves the week", async () => {

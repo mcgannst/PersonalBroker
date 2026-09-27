@@ -688,12 +688,12 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - The P4 gauntlet test `web/src/gauntlet/web_pages_breaker.test.tsx` is not edited; if it pinned the note line, report it to the orchestrator instead.
 
 **Acceptance tests (Vitest):**
-- [ ] 1. With `weeklyReportOk` the commentary paragraphs, the MT time, the model and the cost render; a `<script>` inside the commentary text renders as text.
-- [ ] 2. With `weeklyReportBudget` the budget reason shows and no commentary card body.
-- [ ] 3. With `null` the "No weekly report for this week yet" line shows; the metrics still render.
-- [ ] 4. `?week=2026-11-25` calls `weeklyReport("2026-11-23")`; changing to the previous week requests that Monday.
-- [ ] 5. The P4 Reports tests still pass except the note-line test, which now asserts the new states.
-- [ ] 6. Gate and commit `P5-T13: ...`.
+- [x] 1. With `weeklyReportOk` the commentary paragraphs, the MT time, the model and the cost render; a `<script>` inside the commentary text renders as text.
+- [x] 2. With `weeklyReportBudget` the budget reason shows and no commentary card body.
+- [x] 3. With `null` the "No weekly report for this week yet" line shows; the metrics still render.
+- [x] 4. `?week=2026-11-25` calls `weeklyReport("2026-11-23")`; changing to the previous week requests that Monday.
+- [x] 5. The P4 Reports tests still pass except the note-line test, which now asserts the new states.
+- [x] 6. Gate and commit `P5-T13: ...`.
 
 ---
 

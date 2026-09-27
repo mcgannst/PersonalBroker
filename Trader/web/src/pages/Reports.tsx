@@ -1,6 +1,6 @@
 // Reports (contract refinement 1: `/reports?week=YYYY-MM-DD`, the week-ending date the Telegram weekly link
 // carries; default the current week): the Monday-Friday trading week containing that date, with its metrics,
-// trades and each day's journal answer. The Claude commentary is added by P5-T6.
+// trades and each day's journal answer, headed by the week's Claude commentary (P5-T13), or why there is none.
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 
@@ -12,6 +12,7 @@ import { fmtDate } from "../lib/format";
 import { answerText } from "./Journal";
 import { addDays, isIsoDate, todayEt, tradingWeek, type TradingWeek } from "./performance/dates";
 import { MetricTiles } from "./performance/MetricTiles";
+import { Commentary } from "./reports/Commentary";
 import { TradeList } from "./trades/TradeList";
 
 /** At most this many trades are listed for a week (a week has far fewer). */
@@ -39,7 +40,7 @@ function WeekReport({ week }: { week: TradingWeek }) {
         <Link className="link-touch" to={weekHref(addDays(week.friday, -7))}>← Previous week</Link>
         <Link className="link-touch" to={weekHref(addDays(week.friday, 7))}>Next week →</Link>
       </nav>
-      <p className="small muted">The Claude commentary arrives with the weekly report.</p>
+      <Commentary monday={week.monday} />
 
       <Card title="Metrics">
         {metrics.isPending ? (

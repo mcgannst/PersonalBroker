@@ -6,10 +6,10 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 
 | Field | Value |
 |---|---|
-| Current phase | 2 (P2-T0 planning finishing) |
+| Current phase | 3 (Phase 2 COMPLETE 11:24 MT Sep 27, tag phase-2-complete) |
 | Current task | P2-REVIEW; P3 building T3,T5-T11 (T2,T4 queued) |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-27T17:23:31Z |
+| Last updated (UTC) | 2026-09-27T17:47:12Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
 | Token last refreshed (UTC) | 2026-09-27T17:21:56Z (re-seeded from Stephen's new token after .env.dev rebuild; token removed from .env.dev) |
@@ -20,6 +20,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Phase 3 started | 01:05 MT; estimate ~3.5-4 h, finish ~04:30-05:00 MT (overlaps Phase 2 fix rounds) |
 | Paused | ~01:30-11:00 MT (blocking question, then 5 unreadable repo files; .env.dev rebuilt) |
 | Phase 3 estimate | revised 11:10 MT: finish ~14:30-15:00 MT |
+| Backlog | P2: cash sizing ignores slippage/ECN on gapped stop entries (SPEC 6.1 change); confirm FinViz 'yesterday' on Monday 2026-09-28 premarket; cash_ledger sign CHECK + ensure_sim_account via Ledger.record; event_log indexes for kill-switch/Claude-budget lookups |
 
 ## Task board
 
@@ -57,19 +58,19 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P2-T13 | Engine orchestrator | T8–T12 | todo | 0 | | |
 | P2-T14 | Pre-market job + premarket CLI | T7, T12 | todo | 0 | | |
 | P2-T15 | Integration: one full simulated day | T13, T14 | todo | 0 | | |
-| P2-REVIEW | Phase 2 whole-phase review | all P2 | reviewing | 1 | restarted after pause; whole-phase review + earnings window |  |
+| P2-REVIEW | Phase 2 whole-phase review | all P2 | accepted | 1 | PASS; earnings window (2 screens unioned), deadlock fix, exits-only for disabled strategies | 8f035b0 |
 | P3-T0 | Write the Phase 3 plan | P2-REVIEW | accepted | 1 | plan verify+fix PASS (migration renumbered 0004, event settle rule, approval actor) | 37bef3b |
 | P3-T1 | Contracts, migration 0004 (LIVE), fakes | P2 verifiers, 0003 | accepted | 1 | contracts pinned by tests; 0004 LIVE; check.sh green except P2-T14 breaker (since fixed) | fcc813f |
-| P3-T2 | Logging unification | P3-T1 | fixing | 2 | V✅ B❌(5/12, shared with T4) S✅ C✅; fix round a2 with T4 (review findings forwarded) | 48d22ec |
-| P3-T3 | Session event scheduler + run_job_async | P3-T1 | gauntlet | 1 | built (36 tests); note: day_plan errors log-only, not event_log (gauntlet to judge) | b086a2c |
-| P3-T4 | Message renderer | P3-T1 | fixing | 2 | T2/T4 breaker FAIL 5/12 (alert token leak, redactor gaps, length cap) -> fix round a2; review still running | 48d22ec |
-| P3-T5 | Telegram API client + Notifier | P3-T1 | gauntlet | 1 | built (37 tests); token-safe error handling; awaiting gauntlet group | c12a3e6 |
-| P3-T6 | Telegram bot: updates, signed callbacks, approvals | P3-T1 | fixing | 2 | V✅ B✅ (12/12) S✅ C✅; should-fix round a2 (429 sync, lost send, issuer API, sender check) | 6443479 |
-| P3-T7 | Telegram commands | P3-T1 | gauntlet | 1 | built (25 tests); gauntlet batched with other P3 tasks | 36f423b |
-| P3-T8 | Notification relay | P3-T1 | fixing | 2 | T3/T7/T8 breaker FAIL 4/12 + review must-fix -> fix round a2 | 7ff7937 |
-| P3-T9 | Worker process | P3-T1 | fixing | 2 | T5/T9 breaker FAIL 7/26 + review must-fix (T9) -> fix round a2 (relay+heartbeat off-step, settings fallback, split_text, alert streaks) | 143708b |
-| P3-T10 | Day jobs: preopen, checkin, event backup | P3-T1 | fixing | 2 | T10/T11 breaker FAIL 1/16 (fire loop not isolated) + review should-fix -> fix round a2 | e0e7ef5 |
-| P3-T11 | Post-close job + candle archive | P3-T1 | gauntlet | 1 | built (15 tests); gauntlet batched with T10 when it lands | 704b260 |
+| P3-T2 | Logging unification | P3-T1 | accepted | 2 | fix round: redactor covers JSON/fields/DB URLs/non-str; no traceback locals; one root handler | 740880e |
+| P3-T3 | Session event scheduler + run_job_async | P3-T1 | accepted | 2 | fix round: breaker 12/12; unknown-outcome entries not re-run, backoff, plan problems alerted once, exits-only scheduling | 126e021 |
+| P3-T4 | Message renderer | P3-T1 | accepted | 2 | fix round: breaker 12/12; alert redaction, length cap, Decimal-only | 740880e |
+| P3-T5 | Telegram API client + Notifier | P3-T1 | accepted | 2 | fix round: safe split_text, retry only not-sent errors, unknown status never re-sent | 7c9ca3e |
+| P3-T6 | Telegram bot: updates, signed callbacks, approvals | P3-T1 | accepted | 2 | V✅ B✅ S✅ C✅; should-fix round done (429 sync, re-send once, issuer API, private-chat sender check) | b887987 |
+| P3-T7 | Telegram commands | P3-T1 | accepted | 2 | fix round: per-switch reset text, partial P&L note, stopped heartbeat | 126e021 |
+| P3-T8 | Notification relay | P3-T1 | accepted | 2 | fix round: late-commit re-scan, poison row skipped, cap only on backlog | 126e021 |
+| P3-T9 | Worker process | P3-T1 | accepted | 2 | fix round: breaker 26/26; relay+heartbeat off-step, settings fallback, lock re-check (exit 3), alert streaks | 7c9ca3e |
+| P3-T10 | Day jobs: preopen, checkin, event backup | P3-T1 | accepted | 2 | fix round: breaker 16/16, +14 regression; backup loops isolated | c4ed413 |
+| P3-T11 | Post-close job + candle archive | P3-T1 | accepted | 2 | fix round: summary always sent even if archive fails; batched upserts | c4ed413 |
 | P3-T12 | Wiring (runtime, CLI, crontab) + LIVE dev bot | P3-T2..T11 | pending | 0 | - | - |
 | P3-T13 | Integration: worker day with fake Telegram | P3-T12 | pending | 0 | - | - |
 | P3-REVIEW | Phase 3 review | P3-T13 | pending | 0 | - | - |
@@ -1220,3 +1221,40 @@ None open.
 
 ### 2026-09-27 11:22 MT · P3-T2/T4 · Builder · attempt 2 · started
 - Notes: combined verify+fix round for T2/T4 breaker findings (redaction, length cap, Decimal rendering, None skipping, no show_locals)
+
+### 2026-09-27 11:24 MT · P2-REVIEW · Phase reviewer (review+fix) · attempt 1 · finished
+- Result: PASS (no must-fix left). Earnings window now yesterday-after-close OR today-before-open (two FinViz screens, unioned). RiskCheck has duplicate_symbol. Fixed: expire_due lock order, disabled owner still flattens (exits-only), overlay sees exits in flight, commission 4 dp, log_event level check. SPEC 4.2/4.3/13 and master plan 7.1 updated.
+- Commits: 8f035b0
+- Gate: ruff, format, mypy clean. 1276 passed outside the P3 gauntlet breaker files. The only failures are new P3 breaker tests, which fail the same way without this commit. Integration 2/2.
+- LIVE: FinViz echoes earningsdate:yesterdayafter and earningsdate:todaybefore as applied. The pipe-OR form is ignored (542 = whole universe). trader_dev has no stored premarket rows, so the new default applies.
+- Left for orchestrator: cash sizing ignores slippage_min/fees (SPEC 6.1 amendment, should-fix). Check on Mon 09-28 whether FinViz "yesterday" means the previous trading day (should-fix). P3 scheduler should schedule events of disabled owners (should-fix). cash_ledger sign CHECK and event_log index (should-fix). Nits listed in report.
+
+### 2026-09-27 11:31 MT · P3-T6 · Builder · attempt 2 · finished
+- Result: done. All 4 should-fix items fixed, nits done (the foreign-event rate limit is a burst of 5 per chat per 10 min, not 1, because breaker test 3 needs 5 events from one chat)
+- Commits: b887987
+- Gate: check.sh lint/format/mypy clean, 1317 passed, 5 failed (all in other groups' breakers: p3_t10t11 x1, p3_t3t7t8 x4). T6 tests 44 bot + 21 callbacks, breaker 12/12 green, contracts green
+- Notes: new issuer methods data_for, discard, close_if_unused, exists_for, unbound_for, open_messages (additive). Lost-send alert source is telegram.proposal
+
+### 2026-09-27 11:36 MT · P3-T10/P3-T11 · builder · attempt 2 · finished
+- Result: all must-fix, should-fix and nits fixed. T10/T11 breaker file 16/16 pass
+- Commits: c4ed413 (P3-T10/T11: fix gauntlet findings)
+- Gate: check.sh 1352 passed, 16 failed, all in other groups' breaker files (t2t4 5, t3t7t8 4, t5t9 7)
+- Notes: backup fire loops isolated (failed result + error type, check-in also an error event), check-in plan/fired read inside error handling. Post-close archive and issuer isolated, new result key `summary` (sent, handed_off, duplicate, failed, error) with summary_sent derived from it, no nonce when summary row exists, opening bars in one statement via new repository.upsert_candle_archive_bars. Preopen treats stopping like stopped. `event --due --force` narrowing and CheckinDeps additions left to T12
+
+### 2026-09-27 11:44 MT · P3-T5/T9 · Builder · attempt 2 · finished
+- Result: all 4 must-fix rulings, both should-fix items and all 5 nits fixed
+- Commits: 7c9ca3e
+- Gate: check.sh lint, format and mypy clean. 1387 passed, 10 failed, all in other groups' breaker files (t2t4 x5, t3t7t8 x4, t10t11 x1). Owned files: 105 tests, all pass, T5/T9 breaker included
+- Notes: relay and heartbeat are now their own worker tasks. Notification status `unknown` added. TelegramNotSentError added in api.py. Breaker alert-flood test adapted to ruling 4
+
+### 2026-09-27 11:41 MT · P3-T2/T4 · Builder · attempt 2 · finished
+- Result: done. Breaker test_p3_t2t4_breaker.py 12/12 pass. Review should-fix items folded in except (g) minutes-remaining (the breaker pins the window wording and the renderer has no proposal clock)
+- Commits: 740880e
+- Gate: lint, format, mypy clean. 1354 passed, 12 failed (all in other groups' breaker tests: T3T7T8 x4, T5T9 x7, T10T11 x1)
+- Notes: MessageRenderer gains an optional keyword clock (dated alerts). logging_setup exports redact_text, is_secret_key, REDACTED, console_renderer
+
+### 2026-09-27 11:44 MT · P3-T3/T7/T8 · builder · attempt 2 · finished
+- Result: all 12 P3-B1 breaker tests pass. Must-fix 1 to 4, should-fix 5 to 7, the T7 nits and the P2-REVIEW exits-only plan item are done.
+- Commits: 126e021
+- Gate: check.sh green on the rebased trunk, 1440 passed
+- Notes: breaker S6 harness adapted (its worker round calls report_plan_problems). The worker and T12 wiring should call report_plan_problems each step and build the plan with live_day_plan.

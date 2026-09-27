@@ -372,17 +372,36 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - `ReplayCatalysts.get(ids, d)`: `stored` → the stored rows (`CatalystStore.get`), and a `StoredCatalyst(symbol_id, "unknown", "neutral", None, None, UNKNOWN_REASON, None, Decimal(0), False)` for a missing id; `unknown` → that for every id. It never writes.
 
 **Acceptance tests (real DB seeded with `seed_replay_world`; Questrade through the in-memory `FakeQuestrade` in `tests/fakes_questrade.py`, which records its calls):**
-- [ ] 1. A session with a stored universe and stats returns them exactly; a session without a snapshot returns the newest stored universe with every member `source = "biased"`, `universe_status().source == "biased"`, and the day in `biased_days`.
-- [ ] 2. Opening bars come from `candle_archive` (5m) when present, else `intraday_candles`, else Questrade (one request per symbol for the whole range); offline or outside the window they are `missing` with `no_archived_bar`.
-- [ ] 3. **No lookahead:** at 09:35:04 the 09:30–09:35 bar is returned; at 09:34:59 it is not; `candles(sid, open, close, "OneMinute")` at 10:00 returns only bars ending by 10:00; `quotes` at 10:00:30 uses the 09:59–10:00 bar.
-- [ ] 4. Stats for a biased day are computed from the prior `open_bar.lookback_sessions` opening bars and 14 daily bars and equal the nightly job's values for the same inputs (the nightly helper is called in the test).
-- [ ] 5. Two `ReplayData` over the same seeded data and the same fake Questrade responses return identical values for every method (determinism), with ids sorted.
-- [ ] 6. A synthetic quote has `bid < last < ask` by `hs`, `delay = 0` and `last_trade_time` = the bar end; `spy_overlay`'s stale check accepts it at 15:30:05.
-- [ ] 7. A Questrade 500 for one symbol leaves that symbol missing (`questrade_error: HTTP 500`), counts it, writes one `warning` event with the replay's `run_id`, and the other symbols load.
-- [ ] 8. **No writes:** row counts of every table are unchanged after a full day of reads, fetches included.
-- [ ] 9. `ReplayCatalysts`: `stored` returns a stored row as is and `unknown` (unclassified, reason `UNKNOWN_REASON`) for a missing one; `unknown` mode returns `unknown` for a stored one; no `catalysts` row is written.
-- [ ] 10. **Request size and memory:** a 130-session full-mode range asks Questrade for `FiveMinutes` bars in windows of at most `MAX_CANDLES_PER_REQUEST` intervals (the recorded calls), each symbol's range once; a fake response of 78 bars per session leaves one kept bar per session; after `prepare_day` of day 2, day 1's 1-minute bars are no longer held; `quotes` for a symbol whose minute bars were not loaded loads them once and answers from the last complete bar.
-- [ ] 11. Gate and commit `P5-T5: ...`.
+- [x] 1. A session with a stored universe and stats returns them exactly; a session without a snapshot returns the newest stored universe with every member `source = "biased"`, `universe_status().source == "biased"`, and the day in `biased_days`.
+- [x] 2. Opening bars come from `candle_archive` (5m) when present, else `intraday_candles`, else Questrade (one request per symbol for the whole range); offline or outside the window they are `missing` with `no_archived_bar`.
+- [x] 3. **No lookahead:** at 09:35:04 the 09:30–09:35 bar is returned; at 09:34:59 it is not; `candles(sid, open, close, "OneMinute")` at 10:00 returns only bars ending by 10:00; `quotes` at 10:00:30 uses the 09:59–10:00 bar.
+- [x] 4. Stats for a biased day are computed from the prior `open_bar.lookback_sessions` opening bars and 14 daily bars and equal the nightly job's values for the same inputs (the nightly helper is called in the test).
+- [x] 5. Two `ReplayData` over the same seeded data and the same fake Questrade responses return identical values for every method (determinism), with ids sorted.
+- [x] 6. A synthetic quote has `bid < last < ask` by `hs`, `delay = 0` and `last_trade_time` = the bar end; `spy_overlay`'s stale check accepts it at 15:30:05.
+- [x] 7. A Questrade 500 for one symbol leaves that symbol missing (`questrade_error: HTTP 500`), counts it, writes one `warning` event with the replay's `run_id`, and the other symbols load.
+- [x] 8. **No writes:** row counts of every table are unchanged after a full day of reads, fetches included.
+- [x] 9. `ReplayCatalysts`: `stored` returns a stored row as is and `unknown` (unclassified, reason `UNKNOWN_REASON`) for a missing one; `unknown` mode returns `unknown` for a stored one; no `catalysts` row is written.
+- [x] 10. **Request size and memory:** a 130-session full-mode range asks Questrade for `FiveMinutes` bars in windows of at most `MAX_CANDLES_PER_REQUEST` intervals (the recorded calls), each symbol's range once; a fake response of 78 bars per session leaves one kept bar per session; after `prepare_day` of day 2, day 1's 1-minute bars are no longer held; `quotes` for a symbol whose minute bars were not loaded loads them once and answers from the last complete bar.
+- [x] 11. Gate and commit `P5-T5: ...`.
+
+**Build notes (P5-T5 builder, 2026-09-27; trunk 8ddff8e):**
+- The Questrade `FiveMinutes` range per symbol spans the sessions still missing from the archive and cache
+  (inside the Questrade window), not always the whole range: a symbol whose range days are archived asks only
+  for its look-back. Still one range per symbol, split into windows of at most `MAX_CANDLES_PER_REQUEST`.
+- Fetches go through `client.candles_many` (one symbol's windows at a time, reduced at once); any failure is
+  that request's `questrade_error: HTTP <status>` (0 for a transport or parse failure). Warning events:
+  source `replay.data`, kinds `opening_bars`, `minute_bars`, `daily_bars`, at most one per day and kind.
+- Daily bars: `daily_candles` then one `OneDay` request per symbol over `[date_from - 40 days, date_to]`
+  (the in-window part); older daily and opening bars are pruned in `prepare_day`. `held_counts()` (extra
+  helper) reports the bars held in memory.
+- A biased day's members keep only the names of the newest stored universe (`price`, `avg_volume`,
+  `atr14` are `None`, since the snapshot's numbers are from a later date); the stats are computed with the
+  nightly formulas (`jobs.nightly.MIN_OPENING_BARS`, `DAILY_LOOKBACK`, `atr`, `average_volume`).
+- Universe, universe status, stored stats and symbol ids are read through a `MarketDataService` whose client
+  refuses every fetch; `prior_close(s)` returns nothing until the previous session has closed on the replay
+  clock; `candles()` never fetches (current-day 1-minute bars, archive, cache, kept opening bars).
+- `ReplayCatalysts` uses `CatalystStore.get` with a clock that refuses to be read; `unknown_catalyst(sid)` is
+  exported for T6/T18.
 
 ---
 

@@ -4,21 +4,109 @@ date, never offline), with no lookahead (no bar ending after the replay clock) a
 
 Implements `trader.replay.types.ReplayMarket`. Fetched Questrade data is held in memory for the run only:
 each session's opening 5-minute bar, and the current session's 1-minute bars.
+
+Sources, in order:
+- opening 5-minute bars: `candle_archive` (5m) -> `intraday_candles` (5m) -> Questrade `FiveMinutes`, per
+  symbol once for the whole range plus the look-back, split into windows of at most
+  `MAX_CANDLES_PER_REQUEST` intervals; only each session's opening bar is kept from a response.
+- 1-minute bars (fills, synthetic quotes): `candle_archive` (1m) -> `intraday_candles` (1m) -> one Questrade
+  `OneMinute` request per symbol and session; held for the current session only.
+- daily bars (prior close, ATR): `daily_candles` -> Questrade `OneDay` (one request per symbol).
+- universe: that session's `universe_snapshots`; with none, the newest stored universe on or before the
+  wall-clock date, every member `source = "biased"` (and the day in `biased_days`).
+- opening-bar stats: that session's `open_bar_stats`; a member without a row gets them computed in memory
+  with the nightly job's formulas.
+
+Memory: opening and daily bars older than the current day's look-back are dropped in `prepare_day`, and the
+previous day's 1-minute bars are released, so a 130-session replay stays small. A Questrade error is a
+counted "missing" and one `warning` event per day and kind with the replay's `run_id`, never an exception to
+the strategy. There is no wall-clock fetch deadline: a replay waits for every response, so its result never
+depends on timing. Fetches are assembled by symbol id (sorted), never in completion order.
 """
 
+from bisect import bisect_right
 from collections.abc import Mapping, Sequence
-from datetime import date, datetime
-from decimal import Decimal
+from datetime import date, datetime, time, timedelta
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from trader.adapters.questrade.models import QtQuote
+from trader.adapters.questrade.client import MAX_CANDLES_PER_REQUEST, QuestradeApiError
+from trader.adapters.questrade.models import CandleRequest, QtQuote
+from trader.db import models as m
+from trader.db.session import session_scope
+from trader.events import log_event
+from trader.jobs.nightly import DAILY_LOOKBACK, MIN_OPENING_BARS
 from trader.market.calendar import SessionCalendar
-from trader.market.clock import Clock
-from trader.market.data_service import QuoteClient
-from trader.market.types import Candle, Interval, OpenBarStats, OpeningBars, UniverseMember, UniverseStatus
+from trader.market.clock import ET, Clock, et_date
+from trader.market.data_service import STEP, MarketDataService, QuoteClient
+from trader.market.indicators import atr, average_volume, regular_hours
+from trader.market.types import (
+    INTERVAL_CODES,
+    Candle,
+    Interval,
+    OpenBarStats,
+    OpeningBars,
+    UniverseMember,
+    UniverseStatus,
+)
+from trader.settings_store import OVERLAY_SYMBOL
 
 BIASED_SOURCE = "biased"
+EVENT_SOURCE = "replay.data"
+Q4 = Decimal("0.0001")
+BPS = Decimal("0.0001")
+ONE_MINUTE = timedelta(minutes=1)
+FIVE_MINUTES = timedelta(minutes=5)
+ONE_DAY = timedelta(days=1)
+# Daily bars kept before `date_from` (and before the current day): the nightly ATR window (30 calendar days
+# before the previous session) plus a long holiday weekend.
+DAILY_MARGIN = DAILY_LOOKBACK + timedelta(days=10)
+MINUTE_CODE = INTERVAL_CODES["OneMinute"]
+FIVE_CODE = INTERVAL_CODES["FiveMinutes"]
+NO_ARCHIVED_BAR = "no_archived_bar"
+
+
+class _NoQuestrade:
+    """The client given to the read-only `MarketDataService` helper: its cache reads never fetch."""
+
+    async def quotes(self, ids: Sequence[int]) -> list[QtQuote]:
+        raise RuntimeError("replay data never fetches through MarketDataService")
+
+    async def candles(
+        self, symbol_id: int, start: datetime, end: datetime, interval: Interval
+    ) -> list[Candle]:
+        raise RuntimeError("replay data never fetches through MarketDataService")
+
+    async def candles_many(
+        self, reqs: Sequence[CandleRequest]
+    ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
+        raise RuntimeError("replay data never fetches through MarketDataService")
+
+
+def _row_candle(start: datetime, row: Any, step: timedelta) -> Candle:
+    return Candle(start, start + step, row.open, row.high, row.low, row.close, row.volume, row.vwap)
+
+
+def _day_start(d: date) -> datetime:
+    return datetime.combine(d, time(0), tzinfo=ET)
+
+
+def _windows(start: datetime, end: datetime, step: timedelta) -> list[tuple[datetime, datetime]]:
+    """[start, end) split into consecutive windows of at most MAX_CANDLES_PER_REQUEST intervals."""
+    width = step * MAX_CANDLES_PER_REQUEST
+    out: list[tuple[datetime, datetime]] = []
+    t = start
+    while t < end:
+        out.append((t, min(t + width, end)))
+        t += width
+    return out
+
+
+def _error_reason(result: list[Candle] | QuestradeApiError) -> str | None:
+    return f"questrade_error: HTTP {result.status}" if isinstance(result, QuestradeApiError) else None
 
 
 class ReplayData:
@@ -48,56 +136,519 @@ class ReplayData:
         self.half_spread_bps = half_spread_bps
         self.questrade_window_days = questrade_window_days
         self.lookback_sessions = lookback_sessions
+        # Cache-only reads shared with the live service (universe, its status, stored stats, symbol ids).
+        self._db = MarketDataService(factory, clock, calendar, _NoQuestrade())
+
+        # Decided once, so a run that crosses midnight still reads the same data.
+        self._wall_date = et_date(wall.now())
+        self._questrade_from = self._wall_date - timedelta(days=questrade_window_days)
+        # Every session whose opening bar the run can need: the look-back of the first day, then the range.
+        span = calendar.sessions_before(date_from, lookback_sessions) if lookback_sessions > 0 else []
+        d = date_from if calendar.is_session(date_from) else calendar.next_session(date_from)
+        while d <= date_to:
+            span.append(d)
+            d = calendar.next_session(d)
+        self._span: list[date] = span
+        self._opens: dict[datetime, date] = {calendar.session_open(s): s for s in span}
+        self._daily_from = date_from - DAILY_MARGIN
+
+        self._counts: dict[str, int] = {
+            "missing_opening_bars": 0,
+            "missing_minute_bars": 0,
+            "questrade_requests": 0,
+        }
+        self._biased: set[date] = set()
+        self._biased_source: tuple[date | None, list[UniverseMember]] | None = None
+        self._warned: set[tuple[date, str]] = set()
+        self._tickers: dict[int, str] = {}
+
+        # The prepared day (universe and stats are cached for it only).
+        self._day: date | None = None
+        self._day_universe: list[UniverseMember] = []
+        self._day_stats: dict[int, OpenBarStats] | None = None
+        # symbol -> session -> opening bar; reasons for the missing ones that are not "no_archived_bar".
+        self._opening: dict[int, dict[date, Candle]] = {}
+        self._opening_reason: dict[int, dict[date, str]] = {}
+        # symbol -> date -> daily bar
+        self._daily: dict[int, dict[date, Candle]] = {}
+        # 1-minute bars of one session only.
+        self._minute_day: date | None = None
+        self._minute: dict[int, list[Candle]] = {}
+
+    # --- helpers --------------------------------------------------------------------------------------------
+    def _questrade_allowed(self, session: date) -> bool:
+        return self._client is not None and session >= self._questrade_from
+
+    def _current_day(self) -> date:
+        return self._day if self._day is not None else self.date_from
+
+    def _questrade_ids(self, symbol_ids: Sequence[int]) -> dict[int, int]:
+        if not symbol_ids:
+            return {}
+        with self._factory() as s:
+            rows = s.execute(
+                select(m.Symbol.id, m.Symbol.questrade_id).where(
+                    m.Symbol.id.in_(list(symbol_ids)), m.Symbol.questrade_id.is_not(None)
+                )
+            ).all()
+        return {sid: int(qid) for sid, qid in rows}
+
+    def _ticker_names(self, symbol_ids: Sequence[int]) -> dict[int, str]:
+        need = [sid for sid in symbol_ids if sid not in self._tickers]
+        if need:
+            with self._factory() as s:
+                rows = s.execute(select(m.Symbol.id, m.Symbol.ticker).where(m.Symbol.id.in_(need))).all()
+            self._tickers.update({sid: ticker for sid, ticker in rows})
+        return {sid: self._tickers[sid] for sid in symbol_ids if sid in self._tickers}
+
+    async def _fetch(
+        self, reqs: Sequence[CandleRequest]
+    ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
+        """One batch through the client; any failure becomes that request's error, never an exception."""
+        assert self._client is not None
+        self._counts["questrade_requests"] += len(reqs)
+        try:
+            return await self._client.candles_many(list(reqs))
+        except QuestradeApiError as exc:
+            return {r: exc for r in reqs}
+        except Exception as exc:  # a transport or parse failure of the whole batch
+            err = QuestradeApiError(0, type(exc).__name__)
+            return {r: err for r in reqs}
+
+    def _warn(self, day: date, kind: str, errors: Mapping[int, str]) -> None:
+        """At most one `warning` event per day and kind, stamped with the replay clock and run id."""
+        if not errors or (day, kind) in self._warned:
+            return
+        self._warned.add((day, kind))
+        with session_scope(self._factory) as s:
+            log_event(
+                s,
+                self._clock,
+                "warning",
+                EVENT_SOURCE,
+                f"replay: Questrade {kind} failed for {len(errors)} symbols",
+                {
+                    "session_date": day.isoformat(),
+                    "kind": kind,
+                    "errors": {str(sid): errors[sid] for sid in sorted(errors)},
+                },
+                run_id=self.run_id,
+            )
+
+    # --- opening bars ---------------------------------------------------------------------------------------
+    async def _ensure_opening(self, symbol_ids: Sequence[int]) -> None:
+        ids = sorted(set(symbol_ids) - self._opening.keys())
+        if not ids or not self._span:
+            for sid in ids:
+                self._opening.setdefault(sid, {})
+            return
+        # A load always covers the whole span (pruning happens in prepare_day).
+        opens = list(self._opens)
+        found: dict[int, dict[date, Candle]] = {sid: {} for sid in ids}
+        with self._factory() as s:
+            for arch in s.execute(
+                select(m.CandleArchive).where(
+                    m.CandleArchive.symbol_id.in_(ids),
+                    m.CandleArchive.interval == FIVE_CODE,
+                    m.CandleArchive.start_ts.in_(opens),
+                )
+            ).scalars():
+                found[arch.symbol_id][self._opens[arch.start_ts]] = _row_candle(
+                    arch.start_ts, arch, FIVE_MINUTES
+                )
+            for row in s.execute(
+                select(m.IntradayCandle).where(
+                    m.IntradayCandle.symbol_id.in_(ids),
+                    m.IntradayCandle.interval == FIVE_CODE,
+                    m.IntradayCandle.ts.in_(opens),
+                )
+            ).scalars():
+                found[row.symbol_id].setdefault(self._opens[row.ts], _row_candle(row.ts, row, FIVE_MINUTES))
+        reasons: dict[int, dict[date, str]] = {}
+        errors: dict[int, str] = {}
+        wanted = {
+            sid: [d for d in self._span if d not in found[sid] and self._questrade_allowed(d)] for sid in ids
+        }
+        qids = self._questrade_ids([sid for sid in ids if wanted[sid]])
+        for sid in ids:
+            need = wanted[sid]
+            if not need:
+                continue
+            if sid not in qids:
+                reasons[sid] = {d: "no_questrade_id" for d in need}
+                continue
+            start, end = self._calendar.session_open(need[0]), self._calendar.session_close(need[-1])
+            reqs = [
+                CandleRequest(qids[sid], a, b, "FiveMinutes") for a, b in _windows(start, end, FIVE_MINUTES)
+            ]
+            results = await self._fetch(reqs)
+            need_set = set(need)
+            for req in reqs:
+                result = results.get(req, QuestradeApiError(0, "no result"))
+                why = _error_reason(result)
+                if why is not None:
+                    errors[sid] = why
+                    for d in need:
+                        if req.start <= self._calendar.session_open(d) < req.end:
+                            reasons.setdefault(sid, {})[d] = why
+                    continue
+                assert isinstance(result, list)
+                for bar in result:  # keep only each session's opening bar; the rest is dropped at once
+                    session = self._opens.get(bar.start)
+                    if session is not None and session in need_set:
+                        found[sid].setdefault(session, bar)
+            for d in need:
+                if d not in found[sid]:
+                    reasons.setdefault(sid, {}).setdefault(d, "no_bar_at_open")
+        self._opening.update(found)
+        self._opening_reason.update(reasons)
+        self._warn(self._current_day(), "opening_bars", errors)
+
+    # --- daily bars -----------------------------------------------------------------------------------------
+    async def _ensure_daily(self, symbol_ids: Sequence[int]) -> None:
+        ids = sorted(set(symbol_ids) - self._daily.keys())
+        if not ids:
+            return
+        found: dict[int, dict[date, Candle]] = {sid: {} for sid in ids}
+        with self._factory() as s:
+            for row in s.execute(
+                select(m.DailyCandle).where(
+                    m.DailyCandle.symbol_id.in_(ids),
+                    m.DailyCandle.date >= self._daily_from,
+                    m.DailyCandle.date <= self.date_to,
+                )
+            ).scalars():
+                found[row.symbol_id][row.date] = _row_candle(_day_start(row.date), row, ONE_DAY)
+        sessions: list[date] = []
+        d = self._daily_from
+        while d <= self.date_to:
+            if self._calendar.is_session(d) and self._questrade_allowed(d):
+                sessions.append(d)
+            d += ONE_DAY
+        wanted = {sid: [x for x in sessions if x not in found[sid]] for sid in ids}
+        qids = self._questrade_ids([sid for sid in ids if wanted[sid]])
+        reqs: dict[int, CandleRequest] = {
+            sid: CandleRequest(
+                qids[sid], _day_start(wanted[sid][0]), _day_start(wanted[sid][-1] + ONE_DAY), "OneDay"
+            )
+            for sid in ids
+            if wanted[sid] and sid in qids
+        }
+        errors: dict[int, str] = {}
+        if reqs:
+            results = await self._fetch([reqs[sid] for sid in sorted(reqs)])
+            for sid in sorted(reqs):
+                result = results.get(reqs[sid], QuestradeApiError(0, "no result"))
+                why = _error_reason(result)
+                if why is not None:
+                    errors[sid] = why
+                    continue
+                assert isinstance(result, list)
+                need = set(wanted[sid])
+                for bar in sorted(result, key=lambda c: c.start):
+                    day = et_date(bar.start)
+                    if day in need:
+                        found[sid].setdefault(day, bar)
+        self._daily.update(found)
+        self._warn(self._current_day(), "daily_bars", errors)
+
+    def _daily_before(self, sid: int, session_date: date) -> list[Candle]:
+        """The nightly job's ATR input: daily bars from 30 days before the previous session's end."""
+        prev = self._calendar.previous_session(session_date)
+        end = _day_start(prev + ONE_DAY)
+        start = end - DAILY_LOOKBACK
+        bars = self._daily.get(sid, {})
+        return [bars[d] for d in sorted(bars) if start <= bars[d].start < end]
+
+    # --- 1-minute bars --------------------------------------------------------------------------------------
+    def _switch_minute_day(self, session_date: date) -> None:
+        if self._minute_day != session_date:
+            self._minute = {}
+            self._minute_day = session_date
+
+    def _minutes_until(self, symbol_id: int, at: datetime) -> list[Candle]:
+        """The loaded 1-minute bars of `symbol_id` that ended by `at` (the day of `at`'s last minute)."""
+        if self._minute_day is None or et_date(at - ONE_MINUTE) != self._minute_day:
+            return []
+        bars = self._minute.get(symbol_id, [])
+        return bars[: bisect_right([b.end for b in bars], at)]
 
     # --- MarketDataView (strategy-facing; never past the replay clock) --------------------------------------
+    async def _universe_for(self, session_date: date) -> list[UniverseMember]:
+        stored = await self._db.universe(session_date)
+        if stored:
+            return stored
+        if self._biased_source is None:
+            with self._factory() as s:
+                newest = s.execute(
+                    select(m.UniverseSnapshot.session_date)
+                    .where(m.UniverseSnapshot.session_date <= self._wall_date)
+                    .order_by(m.UniverseSnapshot.session_date.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+            members = await self._db.universe(newest) if newest is not None else []
+            # The snapshot's numbers are from a later date: only the names are used (no lookahead).
+            biased = [
+                UniverseMember(u.symbol_id, u.ticker, u.name, None, None, None, BIASED_SOURCE)
+                for u in members
+            ]
+            self._biased_source = (newest, biased)
+        members = list(self._biased_source[1])
+        if members and self.date_from <= session_date <= self.date_to:
+            self._biased.add(session_date)
+        return members
+
     async def universe(self, session_date: date) -> list[UniverseMember]:
-        raise NotImplementedError("P5-T5")
+        if session_date == self._day:
+            return list(self._day_universe)
+        return await self._universe_for(session_date)
 
     async def universe_status(self, session_date: date) -> UniverseStatus:
-        raise NotImplementedError("P5-T5")
+        members = await self.universe(session_date)
+        if members and members[0].source == BIASED_SOURCE:
+            return UniverseStatus(source=BIASED_SOURCE, fallback_from=None, stale=False, age_sessions=None)
+        return await self._db.universe_status(session_date)
+
+    async def _stats_for(
+        self, session_date: date, members: Sequence[UniverseMember]
+    ) -> dict[int, OpenBarStats]:
+        stats = dict(await self._db.open_bar_stats(session_date))
+        need = sorted({u.symbol_id for u in members} - stats.keys())
+        if need:
+            await self._ensure_opening(need)
+            await self._ensure_daily(need)
+            lookback = self._calendar.sessions_before(session_date, self.lookback_sessions)
+            min_bars = min(MIN_OPENING_BARS, len(lookback))
+            for sid in need:
+                bars = self._opening.get(sid, {})
+                opening = [bars[d] for d in lookback if d in bars]
+                avg_open = average_volume(opening) if len(opening) >= min_bars else None
+                stats[sid] = OpenBarStats(sid, avg_open, atr(self._daily_before(sid, session_date), 14))
+        return dict(sorted(stats.items()))
 
     async def open_bar_stats(self, session_date: date) -> dict[int, OpenBarStats]:
-        raise NotImplementedError("P5-T5")
+        if session_date == self._day and self._day_stats is not None:
+            return dict(self._day_stats)
+        return await self._stats_for(session_date, await self.universe(session_date))
 
     async def opening_bars(self, session_date: date, symbol_ids: Sequence[int] | None = None) -> OpeningBars:
-        raise NotImplementedError("P5-T5")
+        if symbol_ids is None:
+            symbol_ids = [u.symbol_id for u in await self.universe(session_date)]
+        ids = sorted(set(symbol_ids))
+        await self._ensure_opening(ids)
+        now = self._clock.now()
+        bars: dict[int, Candle] = {}
+        missing: dict[int, str] = {}
+        for sid in ids:
+            bar = self._opening.get(sid, {}).get(session_date)
+            if bar is None:
+                missing[sid] = self._opening_reason.get(sid, {}).get(session_date, NO_ARCHIVED_BAR)
+            elif bar.end > now:
+                missing[sid] = "bar_not_complete"
+            else:
+                bars[sid] = bar
+        return OpeningBars(bars, missing)
 
     async def quotes(self, symbol_ids: Sequence[int]) -> dict[int, QtQuote]:
         """Synthetic quotes from the last complete 1-minute bar (last = close, bid/ask = close -/+ hs)."""
-        raise NotImplementedError("P5-T5")
+        now = self._clock.now()
+        day = et_date(now)
+        if not self._calendar.is_session(day):
+            return {}
+        ids = sorted(set(symbol_ids))
+        self._switch_minute_day(day)
+        need = [sid for sid in ids if sid not in self._minute]
+        if need:
+            await self.load_minute_bars(need, day)
+        names = self._ticker_names(ids)
+        out: dict[int, QtQuote] = {}
+        for sid in ids:
+            done = self._minutes_until(sid, now)
+            if not done:
+                continue
+            bar = done[-1]
+            hs = (bar.close * self.half_spread_bps * BPS).quantize(Q4, ROUND_HALF_UP)
+            out[sid] = QtQuote(
+                symbol_id=sid,
+                symbol=names.get(sid, ""),
+                bid=bar.close - hs,
+                ask=bar.close + hs,
+                last=bar.close,
+                last_regular=bar.close,
+                volume=bar.volume,
+                last_trade_time=bar.end,
+                delay=0,
+                is_halted=False,
+                vwap=None,
+            )
+        return out
 
     async def candles(
         self, symbol_id: int, start: datetime, end: datetime, interval: Interval
     ) -> list[Candle]:
-        raise NotImplementedError("P5-T5")
+        """Bars with start in [start, end) that ended by the replay clock. 1-minute bars of the current day
+        come from the loaded day; other bars from the archive and the cache (daily: `daily_candles` and
+        fetched daily bars), never fetched here."""
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("candles() needs timezone-aware start and end")
+        now = self._clock.now()
+        step = STEP[interval]
+        found: dict[datetime, Candle] = {}
+        if interval == "OneDay":
+            await self._ensure_daily([symbol_id])
+            for bar in self._daily.get(symbol_id, {}).values():
+                found[bar.start] = bar
+        else:
+            day = et_date(start)
+            if interval == "OneMinute" and self._calendar.is_session(day) and day == self._minute_day:
+                if symbol_id not in self._minute:
+                    await self.load_minute_bars([symbol_id], day)
+                for bar in self._minute.get(symbol_id, []):
+                    found[bar.start] = bar
+            code = INTERVAL_CODES[interval]
+            with self._factory() as s:
+                for arch in s.execute(
+                    select(m.CandleArchive).where(
+                        m.CandleArchive.symbol_id == symbol_id,
+                        m.CandleArchive.interval == code,
+                        m.CandleArchive.start_ts >= start,
+                        m.CandleArchive.start_ts < end,
+                    )
+                ).scalars():
+                    found.setdefault(arch.start_ts, _row_candle(arch.start_ts, arch, step))
+                for row in s.execute(
+                    select(m.IntradayCandle).where(
+                        m.IntradayCandle.symbol_id == symbol_id,
+                        m.IntradayCandle.interval == code,
+                        m.IntradayCandle.ts >= start,
+                        m.IntradayCandle.ts < end,
+                    )
+                ).scalars():
+                    found.setdefault(row.ts, _row_candle(row.ts, row, step))
+            if interval == "FiveMinutes":
+                for bar in self._opening.get(symbol_id, {}).values():
+                    found.setdefault(bar.start, bar)
+        return [found[t] for t in sorted(found) if start <= t < end and found[t].end <= now]
 
     async def prior_close(self, symbol_id: int, session_date: date) -> Decimal | None:
-        raise NotImplementedError("P5-T5")
+        return (await self.prior_closes([symbol_id], session_date)).get(symbol_id)
 
     async def prior_closes(self, symbol_ids: Sequence[int], session_date: date) -> dict[int, Decimal]:
-        raise NotImplementedError("P5-T5")
+        prev = self._calendar.previous_session(session_date)
+        if self._calendar.session_close(prev) > self._clock.now():
+            return {}  # that session had not closed yet at the replay clock
+        ids = sorted(set(symbol_ids))
+        await self._ensure_daily(ids)
+        out: dict[int, Decimal] = {}
+        for sid in ids:
+            bar = self._daily.get(sid, {}).get(prev)
+            if bar is not None:
+                out[sid] = bar.close
+        return out
 
     async def symbol_ids(self, tickers: Sequence[str]) -> dict[str, int]:
-        raise NotImplementedError("P5-T5")
+        return await self._db.symbol_ids(tickers)
 
     # --- runner-only helpers --------------------------------------------------------------------------------
+    def _prune(self, session_date: date) -> None:
+        """Drop opening and daily bars that no later day can need."""
+        lookback = self._calendar.sessions_before(session_date, self.lookback_sessions)
+        oldest = lookback[0] if lookback else session_date
+        for sid, bars in self._opening.items():
+            self._opening[sid] = {d: bar for d, bar in bars.items() if d >= oldest}
+        for sid, reasons in self._opening_reason.items():
+            self._opening_reason[sid] = {d: why for d, why in reasons.items() if d >= oldest}
+        daily_oldest = session_date - DAILY_MARGIN
+        for sid, by_date in self._daily.items():
+            self._daily[sid] = {d: v for d, v in by_date.items() if d >= daily_oldest}
+
     async def prepare_day(self, session_date: date) -> None:
         """Load the day's universe, opening bars, stats and SPY's 1-minute bars. Drop the previous day's."""
-        raise NotImplementedError("P5-T5")
+        self._switch_minute_day(session_date)
+        self._prune(session_date)
+        self._day = session_date
+        self._day_stats = None
+        self._day_universe = await self._universe_for(session_date)
+        ids = sorted({u.symbol_id for u in self._day_universe})
+        await self._ensure_opening(ids)
+        self._counts["missing_opening_bars"] += sum(
+            1 for sid in ids if session_date not in self._opening.get(sid, {})
+        )
+        self._day_stats = await self._stats_for(session_date, self._day_universe)
+        spy = (await self._db.symbol_ids([OVERLAY_SYMBOL])).get(OVERLAY_SYMBOL)
+        if spy is not None:
+            await self.load_minute_bars([spy], session_date)
 
     async def load_minute_bars(self, symbol_ids: Sequence[int], session_date: date) -> None:
-        raise NotImplementedError("P5-T5")
+        self._switch_minute_day(session_date)
+        need = sorted(set(symbol_ids) - self._minute.keys())
+        if not need:
+            return
+        open_, close = self._calendar.session_open(session_date), self._calendar.session_close(session_date)
+        found: dict[int, dict[datetime, Candle]] = {sid: {} for sid in need}
+        with self._factory() as s:
+            for arch in s.execute(
+                select(m.CandleArchive).where(
+                    m.CandleArchive.symbol_id.in_(need),
+                    m.CandleArchive.interval == MINUTE_CODE,
+                    m.CandleArchive.start_ts >= open_,
+                    m.CandleArchive.start_ts < close,
+                )
+            ).scalars():
+                found[arch.symbol_id][arch.start_ts] = _row_candle(arch.start_ts, arch, ONE_MINUTE)
+            cache_ids = [sid for sid in need if not found[sid]]
+            if cache_ids:
+                for row in s.execute(
+                    select(m.IntradayCandle).where(
+                        m.IntradayCandle.symbol_id.in_(cache_ids),
+                        m.IntradayCandle.interval == MINUTE_CODE,
+                        m.IntradayCandle.ts >= open_,
+                        m.IntradayCandle.ts < close,
+                    )
+                ).scalars():
+                    found[row.symbol_id][row.ts] = _row_candle(row.ts, row, ONE_MINUTE)
+        errors: dict[int, str] = {}
+        fetch_ids = [sid for sid in need if not found[sid]] if self._questrade_allowed(session_date) else []
+        qids = self._questrade_ids(fetch_ids)
+        reqs = {sid: CandleRequest(qids[sid], open_, close, "OneMinute") for sid in fetch_ids if sid in qids}
+        if reqs:
+            results = await self._fetch([reqs[sid] for sid in sorted(reqs)])
+            for sid in sorted(reqs):
+                result = results.get(reqs[sid], QuestradeApiError(0, "no result"))
+                why = _error_reason(result)
+                if why is not None:
+                    errors[sid] = why
+                    continue
+                assert isinstance(result, list)
+                for bar in regular_hours(result, self._calendar, session_date):
+                    found[sid].setdefault(bar.start, bar)
+        for sid in need:
+            bars = [found[sid][t] for t in sorted(found[sid])]
+            self._minute[sid] = bars
+            if not bars:
+                self._counts["missing_minute_bars"] += 1
+        self._warn(session_date, "minute_bars", errors)
 
     def bar_ending_at(self, symbol_id: int, at: datetime) -> Candle | None:
-        raise NotImplementedError("P5-T5")
+        done = self._minutes_until(symbol_id, at)
+        return done[-1] if done and done[-1].end == at else None
 
     def last_close(self, symbol_id: int, at: datetime) -> Decimal | None:
-        raise NotImplementedError("P5-T5")
+        done = self._minutes_until(symbol_id, at)
+        return done[-1].close if done else None
 
     def progress_counts(self) -> Mapping[str, int]:
         """`missing_opening_bars`, `missing_minute_bars`, `questrade_requests`."""
-        raise NotImplementedError("P5-T5")
+        return dict(self._counts)
+
+    def held_counts(self) -> Mapping[str, int]:
+        """How many bars are held in memory (tests and diagnostics)."""
+        return {
+            "opening_bars": sum(len(v) for v in self._opening.values()),
+            "daily_bars": sum(len(v) for v in self._daily.values()),
+            "minute_bars": sum(len(v) for v in self._minute.values()),
+        }
 
     @property
     def biased_days(self) -> frozenset[date]:
-        raise NotImplementedError("P5-T5")
+        return frozenset(self._biased)

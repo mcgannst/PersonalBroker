@@ -9381,7 +9381,7 @@ git pull --rebase --autostash origin trunk
 git push origin HEAD:trunk
 ```
 
-- [ ] **Step 7: LIVE: run the pre-market scan against `trader_dev`**
+- [x] **Step 7: LIVE: run the pre-market scan against `trader_dev`**
 
 Needs a session day and the nightly job's universe for it (P1-T9). From your worktree, before 09:30 ET on a trading day (or any time with `--date` set to a session the nightly job prepared):
 `uv --directory Trader/app run --env-file ../../../../../Trader/docker/.env.dev trader premarket`

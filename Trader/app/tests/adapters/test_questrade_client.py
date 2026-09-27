@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -6,7 +7,7 @@ import pytest
 import respx
 
 from trader.adapters.questrade.auth import AccessToken
-from trader.adapters.questrade.client import QuestradeApiError, QuestradeClient, TokenBucket
+from trader.adapters.questrade.client import MAX_ATTEMPTS, QuestradeApiError, QuestradeClient, TokenBucket
 from trader.adapters.questrade.models import CandleRequest
 from trader.market.clock import FixedClock
 
@@ -132,7 +133,8 @@ async def test_candles_parse_to_utc_decimal() -> None:
 async def test_intraday_start_is_clamped_to_available_history() -> None:
     route = respx.get(BASE + "markets/candles/1").mock(return_value=httpx.Response(200, json={"candles": []}))
     async with client() as c:
-        await c.candles(1, NOW - timedelta(days=400), NOW, "OneMinute")
+        # FifteenMinutes: 88 days of OneMinute would trip the 20,000-candle guard.
+        await c.candles(1, NOW - timedelta(days=400), NOW, "FifteenMinutes")
         await c.candles(1, NOW - timedelta(days=400), NOW, "OneDay")
     intraday_start = datetime.fromisoformat(route.calls[0].request.url.params["startTime"])
     daily_start = datetime.fromisoformat(route.calls[1].request.url.params["startTime"])
@@ -208,3 +210,252 @@ async def test_token_bucket_spaces_requests() -> None:
     for _ in range(3):
         await bucket.acquire()
     assert waits == pytest.approx([0.05, 0.05])
+
+
+# --- P1-T7 attempt 2 regression tests (gauntlet findings) ---
+
+
+class Sleeps:
+    def __init__(self) -> None:
+        self.calls: list[float] = []
+
+    async def __call__(self, s: float) -> None:
+        self.calls.append(s)
+
+
+def recording_client(sleeps: Sleeps) -> QuestradeClient:
+    return QuestradeClient(FakeTokens(), FixedClock(NOW), sleep=sleeps)
+
+
+BAR = {
+    "start": "2026-09-25T13:30:00Z",
+    "end": "2026-09-25T13:35:00Z",
+    "low": 9,
+    "high": 11,
+    "open": 10,
+    "close": 11,
+    "volume": 1000,
+}
+START = datetime(2026, 9, 25, 13, 30, tzinfo=UTC)
+
+
+@respx.mock
+async def test_transport_error_is_retried_then_succeeds() -> None:
+    """Finding 1: a timeout is retried with the 5xx backoff."""
+    sleeps = Sleeps()
+    route = respx.get(BASE + "time").mock(
+        side_effect=[
+            httpx.ConnectTimeout("timed out"),
+            httpx.Response(200, json={"time": "2026-09-27T12:00:00Z"}),
+        ]
+    )
+    async with recording_client(sleeps) as c:
+        assert await c.server_time() == NOW
+    assert route.call_count == 2
+    assert 0.5 in sleeps.calls
+
+
+@respx.mock
+async def test_transport_error_on_every_attempt_raises_status_0_without_url_or_token() -> None:
+    """Findings 1 and 3: QuestradeApiError(0, ...) naming the exception type, no trailing sleep."""
+    sleeps = Sleeps()
+    route = respx.get(BASE + "time").mock(
+        side_effect=httpx.ConnectError(f"cannot reach {BASE}time with tok-1")
+    )
+    async with recording_client(sleeps) as c:
+        with pytest.raises(QuestradeApiError) as err:
+            await c.server_time()
+    assert route.call_count == MAX_ATTEMPTS
+    assert err.value.status == 0
+    assert "ConnectError" in str(err.value)
+    assert BASE not in str(err.value)
+    assert "tok-1" not in str(err.value)
+    assert [s for s in sleeps.calls if s >= 0.5] == [0.5, 1.0, 2.0, 4.0]
+
+
+@respx.mock
+async def test_429_on_every_attempt_does_not_pause_after_the_last() -> None:
+    """Finding 3 (429 path): four pauses for five attempts, growing exponentially."""
+    sleeps = Sleeps()
+    respx.get(BASE + "markets/quotes").mock(
+        return_value=httpx.Response(429, headers={"X-RateLimit-Reset": "junk"})
+    )
+    async with recording_client(sleeps) as c:
+        with pytest.raises(QuestradeApiError) as err:
+            await c.quotes([1])
+    assert err.value.status == 429
+    backoffs = [s for s in sleeps.calls if s >= 0.4]
+    assert backoffs == pytest.approx([0.5, 1.0, 2.0, 4.0], abs=0.05)
+
+
+@respx.mock
+async def test_429_pause_follows_reset_header_capped_at_30s() -> None:
+    """Finding 4: the reset time wins when it is later than the backoff, capped at 30 s."""
+    sleeps = Sleeps()
+    far = str(int(NOW.timestamp()) + 600)
+    respx.get(BASE + "markets/quotes").mock(
+        side_effect=[
+            httpx.Response(429, headers={"X-RateLimit-Reset": far}),
+            httpx.Response(200, json={"quotes": []}),
+        ]
+    )
+    async with recording_client(sleeps) as c:
+        assert await c.quotes([1]) == []
+    assert max(sleeps.calls) == pytest.approx(30.0, abs=0.05)
+
+
+async def test_pause_until_holds_back_every_caller() -> None:
+    """Finding 4: a pause delays new callers and callers already queued for an earlier slot."""
+    t = {"now": 0.0}
+    dispatched: list[float] = []
+
+    async def fake_sleep(s: float) -> None:
+        await asyncio.sleep(0)
+        t["now"] = max(t["now"], t["now"] + s)
+
+    bucket = TokenBucket(20.0, monotonic=lambda: t["now"], sleep=fake_sleep)
+
+    async def caller() -> None:
+        await bucket.acquire()
+        dispatched.append(t["now"])
+
+    queued = [asyncio.create_task(caller()) for _ in range(5)]
+    await asyncio.sleep(0)  # all five have taken slots 0.00..0.20 and four are waiting
+    bucket.pause_until(3.0)
+    await asyncio.gather(*queued, *(caller() for _ in range(5)))
+    assert len(dispatched) == 10
+    # The first caller's slot was "now" (no wait), so it went through before the pause.
+    held = sorted(dispatched)[1:]
+    assert all(d >= 3.0 for d in held)
+    gaps = [b - a for a, b in zip(held, held[1:], strict=False)]
+    assert all(g >= 0.05 - 1e-9 for g in gaps)
+
+
+@respx.mock
+async def test_429_pauses_the_shared_bucket_for_concurrent_callers() -> None:
+    """Finding 4: a 429 pauses the category's shared bucket, so a different caller waits too.
+
+    Virtual time stands still (the fake sleep only records), so each wait shows the slot the
+    bucket handed out: without the shared pause the candles call would wait 0.1 s, not 0.55 s.
+    """
+    waits: list[float] = []
+
+    async def record(s: float) -> None:
+        waits.append(s)
+
+    respx.get(BASE + "markets/quotes").mock(
+        side_effect=[httpx.Response(429), httpx.Response(200, json={"quotes": []})]
+    )
+    respx.get(BASE + "markets/candles/1").mock(return_value=httpx.Response(200, json={"candles": []}))
+    async with client() as c:
+        c._buckets["market"] = TokenBucket(20.0, monotonic=lambda: 0.0, sleep=record)
+        assert await c.quotes([1]) == []
+        assert waits == pytest.approx([0.5])  # the 429'd caller waited out its own pause
+        await c.candles(1, START, START + timedelta(minutes=5), "FiveMinutes")
+    assert waits[1] == pytest.approx(0.55)
+
+
+@respx.mock
+async def test_candles_many_turns_parse_errors_into_per_request_errors() -> None:
+    """Finding 2: bad JSON, missing keys, bad numbers and naive timestamps don't abort the scan."""
+    bodies = {
+        2: httpx.Response(200, text="<html>not json"),
+        3: httpx.Response(200, json={"candles": [{"start": "x"}]}),
+        4: httpx.Response(200, json={"candles": [{**BAR, "open": "abc"}]}),
+        5: httpx.Response(200, json={"candles": [{**BAR, "start": "2026-09-25T13:30:00"}]}),
+        6: httpx.Response(200, json={"candles": [{**BAR, "volume": None}]}),
+        7: httpx.Response(200, json=["not", "an", "object"]),
+    }
+    respx.get(BASE + "markets/candles/1").mock(return_value=httpx.Response(200, json={"candles": [BAR]}))
+    for sid, resp in bodies.items():
+        respx.get(BASE + f"markets/candles/{sid}").mock(return_value=resp)
+    reqs = [CandleRequest(i, START, START + timedelta(minutes=5), "FiveMinutes") for i in range(1, 8)]
+    async with client() as c:
+        got = await c.candles_many(reqs)
+    assert len(got[reqs[0]]) == 1  # type: ignore[arg-type]
+    for r in reqs[1:]:
+        v = got[r]
+        assert isinstance(v, QuestradeApiError), (r.symbol_id, v)
+        assert v.status == 0
+
+
+@respx.mock
+async def test_bad_rate_limit_headers_are_ignored() -> None:
+    """Finding 2: non-numeric X-RateLimit-* headers never raise."""
+    respx.get(BASE + "markets/quotes").mock(
+        side_effect=[
+            httpx.Response(429, headers={"X-RateLimit-Reset": "soon", "X-RateLimit-Remaining": "?"}),
+            httpx.Response(200, json={"quotes": []}),
+        ]
+    )
+    async with client() as c:
+        assert await c.quotes([1]) == []
+        assert "market" not in c.rate_limit_remaining
+
+
+@respx.mock
+async def test_candles_sends_second_precision_times_and_rejects_naive() -> None:
+    """Finding 5."""
+    route = respx.get(BASE + "markets/candles/1").mock(return_value=httpx.Response(200, json={"candles": []}))
+    start = START.replace(microsecond=123456)
+    async with client() as c:
+        await c.candles(1, start, start + timedelta(minutes=5), "FiveMinutes")
+        with pytest.raises(ValueError, match="timezone"):
+            await c.candles(1, START.replace(tzinfo=None), START + timedelta(minutes=5), "FiveMinutes")
+        with pytest.raises(ValueError, match="timezone"):
+            await c.candles(1, START, (START + timedelta(minutes=5)).replace(tzinfo=None), "FiveMinutes")
+    params = route.calls[0].request.url.params
+    assert params["startTime"] == "2026-09-25T13:30:00+00:00"
+    assert params["endTime"] == "2026-09-25T13:35:00+00:00"
+    assert route.call_count == 1
+
+
+async def test_aexit_closes_only_a_client_it_created() -> None:
+    """Finding 6."""
+    shared = httpx.AsyncClient()
+    async with QuestradeClient(FakeTokens(), FixedClock(NOW), http=shared, sleep=no_sleep):
+        pass
+    assert not shared.is_closed
+    await shared.aclose()
+    own = QuestradeClient(FakeTokens(), FixedClock(NOW), sleep=no_sleep)
+    async with own:
+        pass
+    assert own._http.is_closed
+
+
+@respx.mock
+async def test_missing_delay_is_none_not_real_time() -> None:
+    """Finding 8."""
+    respx.get(BASE + "markets/quotes").mock(
+        return_value=httpx.Response(
+            200, json={"quotes": [{"symbol": "A", "symbolId": 1}, {"symbol": "B", "symbolId": 2, "delay": 0}]}
+        )
+    )
+    async with client() as c:
+        a, b = await c.quotes([1, 2])
+    assert a.delay is None
+    assert b.delay == 0
+
+
+@respx.mock
+async def test_candles_rejects_windows_over_20000_bars() -> None:
+    """Finding 9: OneMinute over 14 days could exceed 20,000 bars; 13 days cannot."""
+    route = respx.get(BASE + "markets/candles/1").mock(return_value=httpx.Response(200, json={"candles": []}))
+    async with client() as c:
+        await c.candles(1, NOW - timedelta(days=13), NOW, "OneMinute")
+        with pytest.raises(ValueError, match="20000"):
+            await c.candles(1, NOW - timedelta(days=14), NOW, "OneMinute")
+        got = await c.candles_many([CandleRequest(1, NOW - timedelta(days=14), NOW, "OneMinute")])
+    assert route.call_count == 1
+    (err,) = got.values()
+    assert isinstance(err, QuestradeApiError)
+    assert err.status == 0
+
+
+@respx.mock
+async def test_server_time_without_time_raises_api_error() -> None:
+    """Finding 10: explicit errors instead of asserts."""
+    respx.get(BASE + "time").mock(return_value=httpx.Response(200, json={"time": ""}))
+    async with client() as c:
+        with pytest.raises(QuestradeApiError):
+            await c.server_time()

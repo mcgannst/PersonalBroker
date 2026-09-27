@@ -26,7 +26,7 @@ class QtQuote:
     last_regular: Decimal | None
     volume: int
     last_trade_time: datetime | None
-    delay: int
+    delay: int | None  # None when Questrade omits it: unknown, never assume real-time
     is_halted: bool
     vwap: Decimal | None
 

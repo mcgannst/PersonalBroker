@@ -26,6 +26,7 @@ from trader.api.deps import ApiServices
 from trader.api.errors import install_error_handlers
 from trader.api.routers import replays
 from trader.api.routers.auth import router as auth_router
+from trader.api.routers.strategies import safe_field_message
 from trader.db import models as m
 from trader.engine.runs import get_live_run
 from trader.market.clock import ET, FixedClock
@@ -670,3 +671,95 @@ def test_6_busy_after_settling_abandoned_runs(db_factory: sessionmaker[Session],
         add_replay(s, status="queued")
         s.commit()
     assert client.get("/api/replays/options").json()["busy"] is True
+
+
+# --- 7. fix round 1 (P5-GW gauntlet findings) ---------------------------------------------------------------
+
+
+def test_7_pydantic_messages_that_echo_the_value_are_scrubbed(
+    db_factory: sessionmaker[Session], runner: FakeRunner
+) -> None:
+    """Defence in depth: a runner message that still carries the submitted value (a plug-in validator that
+    formats it) becomes a generic text, and pydantic's "Value error, " prefix is dropped."""
+    runner.create_error = ReplayInvalid(
+        [
+            ("strategies.orb_sip.params.exit_at", "Value error, exit_at 'SENTINEL-exit' is not an offset"),
+            ("overrides.replay.catalyst_mode", "Input should be 'stored' or 'none', got SENTINEL-mode-long"),
+            ("strategies.orb_sip.params.top_n", "Value error, must be at least 1"),
+        ]
+    )
+    body = {
+        **BODY,
+        "overrides": {"replay.catalyst_mode": "SENTINEL-mode-long"},
+        "strategies": {"orb_sip": {"params": {"exit_at": "SENTINEL-exit", "top_n": 0}}},
+    }
+    r = client_for(services_for(db_factory, replays=FakeReplayLauncher())).post("/api/replays", json=body)
+    assert r.status_code == 422, r.text
+    assert "SENTINEL" not in r.text
+    fields = r.json()["error"]["fields"]
+    assert [f["msg"] for f in fields] == ["invalid value", "invalid value", "must be at least 1"]
+    assert fields[1]["loc"] == ["body", "overrides", "replay", "catalyst_mode"]
+
+
+def test_7_safe_field_message_and_value_at() -> None:
+    assert safe_field_message("Value error, not a session offset", ["x"]) == "not a session offset"
+    assert safe_field_message("bad 'ab'", ["ab"]) == "invalid value"  # a quoted echo, however short
+    assert safe_field_message("bad ab", ["ab"]) == "bad ab"  # a short unquoted value is not matched
+    assert safe_field_message("got 123456", [{"k": [123456]}]) == "invalid value"  # nested, numbers too
+    assert safe_field_message("must be true", [True, None]) == "must be true"
+    body = {"overrides": {"replay.catalyst_mode": "v1", "risk_pct": "v2"}, "strategies": {"a": {"p": 1}}}
+    assert replays._value_at(body, "overrides.replay.catalyst_mode") == "v1"
+    assert replays._value_at(body, "overrides.risk_pct") == "v2"
+    assert replays._value_at(body, "strategies.a.params.x") == {"p": 1}  # stops where the path stops
+    assert replays._value_at(body, "label") == body
+
+
+class _CancelledFirst(FakeReplayLauncher):
+    """A launcher that finds the run already cancelled (a cancel landed between create and launch) and,
+    like the real one, refuses a run that is not queued."""
+
+    def __init__(self, factory: sessionmaker[Session]) -> None:
+        super().__init__()
+        self.factory = factory
+
+    async def launch(self, run_id: int) -> None:
+        with self.factory() as s:
+            s.execute(
+                update(m.Run).where(m.Run.id == run_id).values(status="cancelled", cancel_requested=True)
+            )
+            s.commit()
+        raise ValueError(f"replay {run_id} is cancelled, not queued")
+
+
+def test_7_a_cancel_between_create_and_launch_is_409_not_500(
+    db_factory: sessionmaker[Session], runner: FakeRunner
+) -> None:
+    services = services_for(db_factory, replays=_CancelledFirst(db_factory))
+    r = client_for(services, raise_server_exceptions=False).post("/api/replays", json=BODY)
+    assert r.status_code == 409, r.text
+    assert r.json()["error"]["message"] == "The replay was cancelled before it started."
+    with db_factory() as s:
+        [row] = s.execute(select(m.Run).where(m.Run.mode == "replay")).scalars().all()
+    assert row.status == "cancelled" and row.error is None  # not re-marked as failed
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"date_from": "not-a-date", "date_to": "2026-11-27", "data_mode": "offline"},
+        {"date_from": "2026-11-23", "date_to": "2026-11-27", "data_mode": "sideways"},
+        ["not", "a", "mapping"],
+    ],
+)
+def test_7_a_malformed_params_row_is_left_out_of_the_list(
+    db_factory: sessionmaker[Session], runner: FakeRunner, params: Any
+) -> None:
+    with db_factory() as s:
+        good = add_replay(s)
+        bad = add_replay(s, started_at=T0 + timedelta(hours=1))
+        s.execute(update(m.Run).where(m.Run.id == bad).values(params=params))
+        s.commit()
+    r = client_for(services_for(db_factory)).get("/api/replays")
+    assert r.status_code == 200, r.text
+    assert [x["id"] for x in r.json()["items"]] == [good]

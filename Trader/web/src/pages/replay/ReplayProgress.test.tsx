@@ -1,5 +1,5 @@
 // P5-T8 acceptance test 5: progress and Cancel; the 5 s refetch while the stream is down.
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -43,6 +43,20 @@ describe("progress and cancel (acceptance test 5)", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Cancel replay" }));
     await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Stop replay" }));
     expect(await screen.findByText("The replay is not running.")).toBeInTheDocument();
+  });
+
+  it("a synchronous double click on Stop sends one cancel, and a retry after a failure sends another (fix round 1)", async () => {
+    const { ApiError } = await import("../../api/client");
+    const api = new FakeApiClient().fail("cancelReplay", new ApiError(503, "unavailable", "try again"));
+    renderWithProviders(<ReplayPage />, { route: "/replay?id=13", api });
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel replay" }));
+    const stop = within(screen.getByRole("alertdialog")).getByRole("button", { name: "Stop replay" });
+    fireEvent.click(stop);
+    fireEvent.click(stop);
+    expect(await screen.findByText("try again")).toBeInTheDocument();
+    expect(api.callsTo("cancelReplay")).toHaveLength(1);
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Stop replay" }));
+    await waitFor(() => expect(api.callsTo("cancelReplay")).toHaveLength(2));
   });
 
   it("a queued replay shows 0 of its sessions and can be cancelled too", async () => {

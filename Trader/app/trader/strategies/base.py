@@ -36,13 +36,13 @@ class SessionOffset:
     def parse(cls, text: str) -> Self:
         m = _OFFSET.fullmatch(text)  # fullmatch: `$` would accept a trailing newline
         if m is None:
-            raise ValueError(f"not a session offset: {text!r} (e.g. 'open+5m', 'close-30m', 'open+5m5s')")
+            raise ValueError("not a session offset (e.g. 'open+5m', 'close-30m', 'open+5m5s')")
         name, sign, minutes, secs = m.groups()
         if secs is not None and int(secs) >= 60:
-            raise ValueError(f"seconds must be below 60 in {text!r}")
+            raise ValueError("seconds must be below 60 in a session offset")
         total = int(minutes or 0) * 60 + int(secs or 0)
         if total > MAX_OFFSET_SECONDS:
-            raise ValueError(f"offset {text!r} is longer than a session")
+            raise ValueError("the offset is longer than a session")
         anchor: Literal["open", "close"] = "open" if name == "open" else "close"
         return cls(anchor, -total if sign == "-" else total)
 

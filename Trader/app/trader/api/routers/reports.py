@@ -6,6 +6,10 @@ before it, so Monday-Friday find their own week and a Saturday or Sunday finds t
 `trader.reports.weekly.week_window` and the web's `tradingWeek`). A holiday week keeps its Monday as
 `week_start`, so this needs no session calendar. A malformed date is 422 (FastAPI's date parsing).
 
+Only reports of a live run are served (`runs.mode = 'live'`): a row written for a replay run is never shown
+on the live Reports page (P5-GW fix round 1). A week near the first representable date (`0001-01-01`) does
+not overflow: the lower bound is clamped to `date.min`, so it simply finds no report (404).
+
 `telegram_status` is the status of the `notifications` row keyed `weekly:<week_ending>` (`sending`, `sent`,
 `failed`), or null when none was queued. The commentary is returned as stored, never generated on read.
 """
@@ -35,10 +39,15 @@ def weekly_notification_key(week_ending: date) -> str:
 def load_weekly(factory: sessionmaker[Session], week: date) -> WeeklyReportOut | None:
     """The stored report of the week containing `week` with its Telegram status, or None."""
     wr = m.WeeklyReport
+    try:
+        earliest = week - WEEK_SPAN
+    except OverflowError:  # a week in the first days of year 1
+        earliest = date.min
     with factory() as s:
         report = s.scalars(
             select(wr)
-            .where(wr.week_start <= week, wr.week_start >= week - WEEK_SPAN)
+            .join(m.Run, m.Run.id == wr.run_id)
+            .where(m.Run.mode == "live", wr.week_start <= week, wr.week_start >= earliest)
             .order_by(wr.week_start.desc())
             .limit(1)
         ).one_or_none()

@@ -1,8 +1,8 @@
 // A queued or running replay's progress (sessions done of total, the current date) and its Cancel button,
 // which asks "Stop this replay after the current day?" before calling `cancelReplay` (the runner stops at the
-// next day boundary).
+// next day boundary). A ref guards the Stop button: a double click sends exactly one cancel (P5-GW fix round 1).
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { useApi } from "../../api/client";
 import { qk } from "../../api/queryKeys";
@@ -20,14 +20,23 @@ export function ReplayProgress({ replay }: { replay: ReplayOut }) {
   const api = useApi();
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
+  const inFlight = useRef(false);
   const cancel = useMutation({
     mutationFn: () => api.cancelReplay(replay.id),
+    onSettled: () => {
+      inFlight.current = false;
+    },
     onSuccess: (out) => {
       setConfirming(false);
       queryClient.setQueryData(qk.replay(out.id), out);
       void queryClient.invalidateQueries({ queryKey: ["replays"] });
     },
   });
+  const stop = () => {
+    if (cancel.isPending || inFlight.current) return;
+    inFlight.current = true;
+    cancel.mutate();
+  };
   const p = replay.progress;
   const stopping = replay.cancel_requested || (cancel.isSuccess && cancel.data.cancel_requested);
 
@@ -44,7 +53,7 @@ export function ReplayProgress({ replay }: { replay: ReplayOut }) {
         <div className="confirm stack" role="alertdialog" aria-label="Stop replay">
           <p>Stop this replay after the current day?</p>
           <div className="row">
-            <Button variant="danger" busy={cancel.isPending} onClick={() => cancel.mutate()}>
+            <Button variant="danger" busy={cancel.isPending} onClick={stop}>
               Stop replay
             </Button>
             <Button

@@ -90,9 +90,9 @@ class OrbSipParams(BaseModel):
             return v
         off = SessionOffset.parse(v)
         if off.anchor == "open" and off.seconds <= ORB_AT_SECONDS:
-            raise ValueError(f"entry_cancel_at {v!r} must be later than the ORB event ({ORB_AT})")
+            raise ValueError(f"entry_cancel_at must be later than the ORB event ({ORB_AT})")
         if off.anchor == "close" and off.seconds >= 0:
-            raise ValueError(f"entry_cancel_at {v!r} must be before the close (e.g. 'close-60m')")
+            raise ValueError("entry_cancel_at must be before the close (e.g. 'close-60m')")
         return v
 
     @field_validator("exit_at")
@@ -100,7 +100,7 @@ class OrbSipParams(BaseModel):
     def _exit_before_close(cls, v: str) -> str:
         off = SessionOffset.parse(v)
         if off.anchor != "close" or off.seconds >= 0:
-            raise ValueError(f"exit_at {v!r} must be a negative offset from the close (e.g. 'close-10m')")
+            raise ValueError("exit_at must be a negative offset from the close (e.g. 'close-10m')")
         return v
 
     @model_validator(mode="after")

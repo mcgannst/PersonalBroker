@@ -536,6 +536,19 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - `tests/api/test_web_client_contract.py` (P4 review): the five replay client methods were removed from
   `PENDING_ROUTES` (coordinator's instruction), so the contract test covers them.
 
+**Fix round 1 (P5-GW builder attempt 2, 2026-09-27; gauntlet `tests/gauntlet/test_p5_gw_breaker.py`):**
+- No value echo in a 422: the `SessionOffset.parse` and `orb_sip` validator messages no longer format the value,
+  and both `POST /api/replays` and `PUT /api/strategies/{key}` pass every field message through
+  `trader.api.routers.strategies.safe_field_message`: pydantic's "Value error, " prefix is dropped, and a message
+  that still contains the value submitted at that path (quoted, or unquoted and 6+ characters) becomes
+  "invalid value" (defence in depth for a plug-in validator that formats its value, e.g. `spy_overlay`).
+- A cancel landing between `create_replay` and the launch (the launcher refuses a run that is no longer
+  `queued`) is 409 "The replay was cancelled before it started." and the run stays `cancelled` (was 500).
+- The list skips (and logs) a replay whose `runs.params` can't be read, so it never 500s on one bad row.
+- The docstring now states that `GET /replays/options` and `GET /replays` settle abandoned runs.
+- `_settings` is still imported from `trader.api.deps`: there is no public helper (dashboard and auth use the
+  same private one); adding one belongs to `deps.py`, outside this round.
+
 ---
 
 ### Task P5-T8: Web Replay page
@@ -582,6 +595,13 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
   effective params have `require_catalyst: true` (only when `settings()` has that descriptor).
 - Reused P4 pieces unmodified: `FieldInput`, `EquityChart`, `strategyChanges` (StrategyForms), `validate.ts`;
   `MetricTiles` was not used (the comparison table replaces it on this page).
+
+**Fix round 1 (P5-GW builder attempt 2, 2026-09-27; gauntlet `web/src/gauntlet/p5_web_breaker.test.tsx`):**
+- `ReplayForm` (Start) and `ReplayProgress` (Stop replay) guard their mutation with a ref set before `mutate`
+  and cleared in `onSettled`, so a double click or a second submit before React re-renders sends exactly one
+  request; a retry after a failure still works.
+- The "pp" label for the win-rate and drawdown differences was NOT applied: the gauntlet test pins the cells as
+  `+20.00%` / `-20.00%`, so `CompareTable` keeps "%" (the values are percentage-point differences).
 
 ---
 
@@ -728,6 +748,12 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - [x] 3. The CSV header is the 22 columns in order; a trade of a replay run with a replay-scoped config shows `config_scope = replay` and `run_mode = replay`; the P4-T7 export tests pass (they use the constant).
 - [x] 4. Gate and commit `P5-T12: ...`.
 
+**Fix round 1 (P5-GW builder attempt 2, 2026-09-27):**
+- Only a live run's report is served: the lookup joins `runs` and filters `mode = 'live'`, so a
+  `weekly_reports` row of a replay run is never shown (404 when it is the only one that week).
+- `week - 6 days` below `0001-01-01` no longer overflows (500): the lower bound is clamped to `date.min`, so a
+  week in the first days of year 1 is simply 404 (the gauntlet pins 404, not 422: the date itself is valid).
+
 ---
 
 ### Task P5-T13: Web Reports commentary
@@ -751,6 +777,10 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - [x] 4. `?week=2026-11-25` calls `weeklyReport("2026-11-23")`; changing to the previous week requests that Monday.
 - [x] 5. The P4 Reports tests still pass except the note-line test, which now asserts the new states.
 - [x] 6. Gate and commit `P5-T13: ...`.
+
+**Fix round 1 (P5-GW builder attempt 2, 2026-09-27):** no change needed. The gauntlet's Reports tests (hostile
+commentary rendered as text, the week asked for around DST and holidays, an error with a retry rather than the
+"no report yet" line) pass as built; the API side of "a replay run's report is never shown" is in P5-T12.
 
 ---
 

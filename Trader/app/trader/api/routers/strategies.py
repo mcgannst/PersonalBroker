@@ -5,7 +5,15 @@ A change goes through `StrategyRegistry.update`: a new versioned revision with a
 `web:<username>`). Disabling a strategy that owns an open position or a working order is allowed (it
 then runs exits-only); `owns_open_positions` lets the web warn. The router is registered under `/api` by
 `trader.api.routers.ROUTERS`.
+
+A 422 never echoes an input value (the Web API contract): `safe_field_message` drops pydantic's
+"Value error, " prefix and replaces any message that still contains a submitted value with a generic
+text. The plug-in validators already leave the value out; this is the defence in depth for a plug-in that
+does not (P5-GW fix round 1). `trader.api.routers.replays` uses it for the replay start form as well.
 """
+
+from collections.abc import Iterable, Iterator, Mapping
+from typing import Any
 
 import structlog
 from fastapi import APIRouter
@@ -21,6 +29,34 @@ from trader.strategies.registry import StrategyConfigView
 
 log = structlog.get_logger("api.strategies")
 router = APIRouter(tags=["strategies"])
+
+VALUE_ERROR_PREFIX = "Value error, "
+GENERIC_MESSAGE = "invalid value"
+RAW_MATCH_MIN = 6  # an unquoted submitted value this long found in a message counts as an echo
+
+
+def input_leaves(value: Any) -> Iterator[str]:
+    """Every scalar value (not key) in a submitted structure, as text."""
+    if value is None or isinstance(value, bool):
+        return
+    if isinstance(value, Mapping):
+        for v in value.values():
+            yield from input_leaves(v)
+    elif isinstance(value, list | tuple | set | frozenset):
+        for v in value:
+            yield from input_leaves(v)
+    else:
+        yield str(value)
+
+
+def safe_field_message(msg: str, inputs: Iterable[Any]) -> str:
+    """`msg` without pydantic's "Value error, " prefix, or GENERIC_MESSAGE when it contains any submitted
+    value (quoted, or unquoted and at least RAW_MATCH_MIN characters long)."""
+    text = msg.removeprefix(VALUE_ERROR_PREFIX)
+    for leaf in input_leaves(list(inputs)):
+        if leaf and (repr(leaf) in text or (len(leaf) >= RAW_MATCH_MIN and leaf in text)):
+            return GENERIC_MESSAGE
+    return text
 
 
 def _owns_open_positions(services: ApiServices, key: str, run_id: int) -> bool:
@@ -91,7 +127,10 @@ def put_strategy(key: str, body: StrategyIn, services: Services, user: CsrfUser)
     try:
         cfg = services.registry.update(key, params=body.params, enabled=body.enabled, actor=actor(user))
     except ValidationError as exc:
-        fields = [{"loc": ["params", *e["loc"]], "msg": e["msg"]} for e in exc.errors(include_input=False)]
+        fields = [
+            {"loc": ["params", *e["loc"]], "msg": safe_field_message(e["msg"], [e.get("input")])}
+            for e in exc.errors()
+        ]
         raise ApiError(422, "validation", "Invalid strategy settings", fields=fields) from None
     except KeyError:
         raise ApiError(409, "conflict", "The strategy has no settings yet") from None

@@ -173,6 +173,20 @@ describe("server errors (acceptance test 4)", () => {
     expect(await within(f).findByRole("alert")).toHaveTextContent("A replay is already running.");
     expect(r.location().search).toBe("");
   });
+
+  it("a synchronous double click sends one start, and a retry after a failure sends another (fix round 1)", async () => {
+    const api = new FakeApiClient().fail("startReplay", new ApiError(409, "conflict", "A replay is already running."));
+    renderForm(replayOptions, api);
+    const f = await form();
+    const start = within(f).getByRole("button", { name: "Start replay" });
+    fireEvent.click(start);
+    fireEvent.click(start);
+    fireEvent.submit(f);
+    expect(await within(f).findByRole("alert")).toHaveTextContent("A replay is already running.");
+    expect(api.callsTo("startReplay")).toHaveLength(1);
+    fireEvent.submit(f);
+    await waitFor(() => expect(api.callsTo("startReplay")).toHaveLength(2));
+  });
 });
 
 describe("catalyst mode warning (acceptance test 7)", () => {

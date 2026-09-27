@@ -116,6 +116,24 @@ def test_put_invalid_params_is_422_without_a_revision(db_factory: sessionmaker[S
     assert _revisions(db_factory, "orb_sip") == 1
 
 
+def test_put_422_never_echoes_a_value(db_factory: sessionmaker[Session]) -> None:
+    """P5-GW fix round 1: the plug-in validators leave the value out, pydantic's "Value error, " prefix is
+    dropped, and a validator that still formats the value (spy_overlay's) is scrubbed by the router."""
+    _, client = _setup(db_factory)
+    bad = {"entry_cancel_at": "SENTINEL-cancel", "exit_at": "open+45m", "stale_universe": "SENTINEL-stale"}
+    r = client.put("/api/strategies/orb_sip", json={"params": bad})
+    assert r.status_code == 422, r.text
+    assert "SENTINEL" not in r.text and "open+45m" not in r.text
+    msgs = {f["loc"][-1]: f["msg"] for f in r.json()["error"]["fields"]}
+    assert msgs["entry_cancel_at"] == "not a session offset (e.g. 'open+5m', 'close-30m', 'open+5m5s')"
+    assert msgs["exit_at"] == "exit_at must be a negative offset from the close (e.g. 'close-10m')"
+    overlay = client.put("/api/strategies/spy_overlay", json={"params": {"decision_at": "open+45m"}})
+    assert overlay.status_code == 422, overlay.text
+    assert "open+45m" not in overlay.text
+    assert [f["msg"] for f in overlay.json()["error"]["fields"]] == ["invalid value"]
+    assert _revisions(db_factory, "orb_sip") == 1
+
+
 def test_put_unknown_key_and_empty_body(db_factory: sessionmaker[Session]) -> None:
     _, client = _setup(db_factory)
     r = client.put("/api/strategies/no_such", json={"enabled": False})

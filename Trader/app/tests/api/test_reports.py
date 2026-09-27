@@ -127,3 +127,32 @@ def test_telegram_status_is_null_without_the_weekly_notification(db_factory: ses
         s.commit()
     body = _client(db_factory).get("/api/reports/weekly", params={"week": "2026-11-27"}).json()
     assert body["telegram_status"] is None
+
+
+# --- P5-GW fix round 1 --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("week", ["0001-01-01", "0001-01-06", "0001-01-07"])
+def test_weekly_near_the_first_date_is_404_not_500(db_factory: sessionmaker[Session], week: str) -> None:
+    """`week - 6 days` overflows below 0001-01-01: the lower bound is clamped, no report is found."""
+    with db_factory() as s:
+        _seed_report(s, add_run(s))
+        s.commit()
+    r = _client(db_factory).get("/api/reports/weekly", params={"week": week})
+    assert r.status_code == 404, r.text
+
+
+def test_weekly_serves_only_a_live_runs_report(db_factory: sessionmaker[Session]) -> None:
+    """A report row written for a replay run is never served, even when it is the only one that week."""
+    with db_factory() as s:
+        replay = add_run(s, mode="replay", status="completed")
+        _seed_report(s, replay)
+        s.commit()
+    client = _client(db_factory)
+    assert client.get("/api/reports/weekly", params={"week": "2026-11-25"}).status_code == 404
+    with db_factory() as s:
+        live = add_run(s)
+        _seed_report(s, live, week_start=date(2026, 11, 22), week_ending=date(2026, 11, 26))
+        s.commit()
+    body = client.get("/api/reports/weekly", params={"week": "2026-11-25"}).json()
+    assert body["run_id"] == live and body["week_start"] == "2026-11-22"

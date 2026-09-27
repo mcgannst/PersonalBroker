@@ -2,9 +2,10 @@
 // allowed session), a label, the data notes, the Offline box (checked and locked in market hours), setting
 // overrides for the `override_keys` that have a descriptor in `settings()`, and per strategy its Enabled box
 // and params. Only changed settings and params are sent. A 422 shows each message under its input; any other
-// failure shows the server's message.
+// failure shows the server's message. A ref guards the start: a double click or a second submit before React
+// re-renders (while `isPending` is still false) sends exactly one request (P5-GW fix round 1).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useApi } from "../../api/client";
@@ -127,9 +128,13 @@ function Form({
   const [paramEdits, setParamEdits] = useState<Record<string, Edits>>({});
   const [enabledEdits, setEnabledEdits] = useState<Record<string, boolean>>({});
   const offline = options.offline_now || offlineChoice;
+  const inFlight = useRef(false);
 
   const start = useMutation({
     mutationFn: (body: ReplayIn) => api.startReplay(body),
+    onSettled: () => {
+      inFlight.current = false;
+    },
     onSuccess: (out) => {
       queryClient.setQueryData(qk.replay(out.id), out);
       void queryClient.invalidateQueries({ queryKey: ["replays"] });
@@ -185,7 +190,8 @@ function Form({
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (invalid || start.isPending) return;
+    if (invalid || start.isPending || inFlight.current) return;
+    inFlight.current = true;
     const body: ReplayIn = { date_from: from, date_to: to };
     if (label.trim()) body.label = label.trim();
     body.overrides = overrides;

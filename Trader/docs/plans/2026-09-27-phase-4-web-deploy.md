@@ -824,11 +824,12 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 2. **Sessions and lockout:** a session lasts 30 days at most and ends after 7 days without use (`web.session_max_days`, `web.session_idle_hours`); five wrong passwords lock the login for 15 minutes (`web.login_max_failures`, `web.lockout_minutes`).
 3. **Web approvals are one tap**, the same as Telegram, with no "are you sure?" step. Confirmations stay only for switching to Auto mode, resetting a kill switch and pausing (T13, T15).
 4. **No held-paused start:** once T19 deploys `trader-dev`, the container's worker and cron run the dev simulation every trading day straight away, which starts the Phase 6 soak count. Nothing in T19 pauses dev; Stephen can still use `/pause` or the web Pause button whenever he wants.
+5. **An uploaded watchlist replaces FinViz** for the session it is uploaded for (no merging). Deleting it on the System page goes back to FinViz (T10).
 
 ## Open questions for Stephen (defaults chosen; the build does not wait on them)
 
 1. **Rate limiting trusts `X-Forwarded-For`** from anything on the `proxy` Docker network (NPM sets it). Other containers on that network could fake it, which only affects the per-IP login limit; the per-account lockout still applies. Default: accept.
-2. **Watchlist upload wins over FinViz** for the session it is uploaded for (explicit beats automatic). Delete it on the System page to go back to FinViz.
+2. *(Resolved: see Resolved decisions 5.)*
 3. **Metrics and the CSV export** are simple SQL now; Phase 5 (P5-T1, P5-T6) may refine them behind the same pages.
 4. **Changing the live run** has no button in the web app (none is in the SPEC). The worker's handling comes from the P3-T12 fix round (it either restarts itself with exit code 4 or re-reads the run); T18 pins whichever it is.
 

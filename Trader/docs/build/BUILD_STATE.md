@@ -7,9 +7,9 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 3 (Phase 2 COMPLETE 11:24 MT Sep 27, tag phase-2-complete) |
-| Current task | P2-REVIEW; P3 building T3,T5-T11 (T2,T4 queued) |
+| Current task | P3-T12 gauntlet; P3-T13 building; P4-T0 planning |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-27T17:47:12Z |
+| Last updated (UTC) | 2026-09-27T19:00:53Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
 | Token last refreshed (UTC) | 2026-09-27T17:21:56Z (re-seeded from Stephen's new token after .env.dev rebuild; token removed from .env.dev) |
@@ -21,6 +21,8 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Paused | ~01:30-11:00 MT (blocking question, then 5 unreadable repo files; .env.dev rebuilt) |
 | Phase 3 estimate | revised 11:10 MT: finish ~14:30-15:00 MT |
 | Backlog | P2: cash sizing ignores slippage/ECN on gapped stop entries (SPEC 6.1 change); confirm FinViz 'yesterday' on Monday 2026-09-28 premarket; cash_ledger sign CHECK + ensure_sim_account via Ledger.record; event_log indexes for kill-switch/Claude-budget lookups |
+| Phase 4 planning | P4-T0 plan written (836a484: 19 tasks, width 15, crit path 4); verify+fix running |
+| Phase 4 started | 12:48 MT Sep 27; estimate ~5-5.5 h (contracts, 2 waves of builders, gauntlets, wiring, deploy + LIVE): finish ~18:00-18:30 MT |
 
 ## Task board
 
@@ -71,9 +73,9 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P3-T9 | Worker process | P3-T1 | accepted | 2 | fix round: breaker 26/26; relay+heartbeat off-step, settings fallback, lock re-check (exit 3), alert streaks | 7c9ca3e |
 | P3-T10 | Day jobs: preopen, checkin, event backup | P3-T1 | accepted | 2 | fix round: breaker 16/16, +14 regression; backup loops isolated | c4ed413 |
 | P3-T11 | Post-close job + candle archive | P3-T1 | accepted | 2 | fix round: summary always sent even if archive fails; batched upserts | c4ed413 |
-| P3-T12 | Wiring (runtime, CLI, crontab) + LIVE dev bot | P3-T2..T11 | pending | 0 | - | - |
-| P3-T13 | Integration: worker day with fake Telegram | P3-T12 | pending | 0 | - | - |
-| P3-REVIEW | Phase 3 review | P3-T13 | pending | 0 | - | - |
+| P3-T12 | Wiring (runtime, CLI, crontab) + LIVE dev bot | P3-T2..T11 | accepted | 2 | fix round: breaker 12/12, 1565 green; GuardedSettings, run-change exit 4, overlay cron backups | 1befdf1 |
+| P3-T13 | Integration: worker day with fake Telegram | P3-T12 | accepted | 2 | integration day 8/8 (outage xfail now passes after 707ef23); 1580 green | 707ef23 |
+| P3-REVIEW | Phase 3 review | P3-T13 | reviewing | 1 | whole-phase review running | - |
 
 ## Escalations
 
@@ -1258,3 +1260,89 @@ None open.
 - Commits: 126e021
 - Gate: check.sh green on the rebased trunk, 1440 passed
 - Notes: breaker S6 harness adapted (its worker round calls report_plan_problems). The worker and T12 wiring should call report_plan_problems each step and build the plan with live_day_plan.
+
+### 2026-09-27 11:48 MT · P3-T12 · Builder · attempt 1 · started
+- Notes: wiring (runtime.py, cli.py, crontab, notify/views.py), then LIVE checks against dev bot and trader_dev
+
+### 2026-09-27 12:09 MT · P4-T0 · Planner · attempt 1 · started
+- Notes: writing the Phase 4 spec plan (API, web app, deployment) to docs/plans/2026-09-27-phase-4-web-deploy.md
+
+### 2026-09-27 12:16 MT · P3-T12 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1 to 8 ticked, LIVE steps 1 to 4 run (step 4 only to the non-session path, Sunday)
+- Commits: 3d774d1, c83d4c7
+- Gate: check.sh passed, 1522 tests (was 1440)
+- Notes: telegram-test sent messages 38 and 39 (with buttons). worker --once exit 0, heartbeat worker stopped 18:11:42Z. preopen, checkin, event, postclose print not a trading session and exit 0. event --due --force refused. Monday 2026-09-28 job_runs untouched. conftest gains an autouse no-op for configure_logging. Relay test now expects the actual risk 4.62.
+
+### 2026-09-27 12:17 MT · P3-T12 · Reviewer (spec + code) · attempt 1 · started
+- Notes: reviewing 3d774d1 and c83d4c7 against the T12 section, orchestrator notes, SPEC §1, §9, §13, §14 and master plan §7.1
+
+### 2026-09-27 12:15 MT · P3-T12 · Verifier+Breaker · attempt 1 · started
+- Notes: verify gate, then 8-12 breaker tests in tests/gauntlet/test_p3_t12_breaker.py
+
+### 2026-09-27 12:16 MT · P3-T13 · Builder · attempt 1 · started
+- Result: started, worker-day integration test through trader.runtime with FakeQuestrade and FakeTelegramApi
+
+### 2026-09-27 12:21 MT · P3-T12 · Reviewer (spec + code) · attempt 1 · finished
+- Result: PASS, no must-fix. Every orchestrator note met (entry guard on the only new ProposalService, no lock in run_worker, exit 2/3 mapped, live_day_plan + report_plan_problems in every plan, renderer clock, force bound only for event KEY, --due --force refused, shared views, TELEGRAM_LIMIT once, logging first). Crontab matches SPEC §9 plus the 12:55 flatten
+- Should-fix: (1) unguarded settings reads in the composition root (a bad settings row stops the worker and every cron job with no alert), (2) cli _report prints JobOutcome.error unmasked and possibly multi-line, (3) no test for the session-engine rollover, (4) run id fixed at worker start for bot, relay and commands
+- Gate: T12-related tests 152 passed on c83d4c7, mypy clean on runtime, cli, views
+- Notes: log at docs/build/agents/P3-T12-reviewer-a1.md. conftest autouse no-op of configure_logging accepted
+
+### 2026-09-27 12:28 MT · P3-T12 · Verifier+Breaker · attempt 1 · finished
+- Result: VERIFY PASS (clean tree, check.sh green 1522 passed, boxes 1-8 ticked). BREAK FAIL: 11/12 pass
+- Commits: 16135ff (tests/gauntlet/test_p3_t12_breaker.py)
+- Findings: test_no_command_prints_a_secret_or_a_traceback_on_a_questrade_or_telegram_failure fails.
+  (1) cli._report prints out.error unredacted (postclose/preopen/checkin), unlike `event` which redacts.
+  (2) token-refresh catches only QuestradeAuthError. Any other failure (e.g. InvalidToken on decrypt) is a
+  traceback and writes no questrade.token event, so no alert.
+- Notes: overlay_decision has no cron backup on any day (check-ins precede it, 15:55 is flatten only). Spec-level, not tested.
+
+### 2026-09-27 12:29 MT · P3-T12 · Builder · attempt 2 · started
+- Notes: fix round for breaker must-fix (report redaction, token-refresh catch-all) plus reviewer should-fix items 3-6 and nits
+
+### 2026-09-27 13:05 MT · P3-T13 · Builder · attempt 1 · finished
+- Result: done, all plan boxes ticked. tests/integration/test_worker_day.py drives whole days through rt.run_worker (real composition, Worker.step driver) and the rt cron job bodies
+- Commits: afa3a9e
+- Gate: ruff, format, mypy green. pytest 1540 passed, 1 xfailed, 1 failed = tests/gauntlet/test_p3_t12_breaker.py::test_no_command_prints_a_secret_or_a_traceback_on_a_questrade_or_telegram_failure (T12 gauntlet, not T13 code)
+- Notes: 8 tests (plan 1-4 plus early close, outage, pause). Finding (strict xfail test_telegram_outage_alerts_delivered_later_exactly_once): messages failing during a Telegram outage are never delivered later (relay re-scan skips failed keys in notify/relay.py, bot send_proposal gives up after one re-send on TelegramNotSentError). Owners P3-T8 and P3-T6
+
+### 2026-09-27 12:52 MT · P4-T0 · Planner · attempt 1 · finished
+- Result: Phase 4 spec plan written, docs/plans/2026-09-27-phase-4-web-deploy.md (19 tasks: T1 backend contracts and T2 web contracts in parallel, T3-T17 builds, T18 wiring, T19 end to end and LIVE deploy)
+- Commits: 836a484
+- Gate: plan only (no code). Placeholder scan clean. Every task has Files, Interfaces, Behaviour, Acceptance tests
+- Notes: critical path 4 (T1, T5, T18, T19), max width 15. SSE by polling (no LISTEN/NOTIFY). Migration 0005 (users, web_sessions, manual_watchlists). Web approvals only via runtime.build_decider (entry guard). Worker live-run guard exits 4. Coordinator's P3-T12 review points folded in (stopwaitsecs 45, supercronic -test and debug check, PATH, TRADER_CACHE_DIR, pip tzdata with empty PYTHONTZPATH, Telegram-not-configured flag, LIVE pre-open and one real tap with a default)
+
+### 2026-09-27 12:36 MT · P3-T6/T8 (outage delivery) · Builder · attempt 3 · started
+- Notes: fix round for the T13 outage finding. Relay retry pass for failed notifications, bot fresh nonce on surely-not-sent. Log at docs/build/agents/P3-OUTAGE-builder-a3.md
+
+### 2026-09-27 12:37 MT · P4-T0 · Verifier+Spec reviewer · attempt 1 · started
+- Notes: combined verify+fix of the Phase 4 plan against SPEC, BRD and trunk code (P3-T12 fix round and outage fix reconciled). Log at docs/build/agents/P4-T0-verifier-a1.md
+
+### 2026-09-27 12:48 MT · P4-T0 · Verifier+Spec reviewer · attempt 1 · finished
+- Result: PASS after fixes (all must-fix and should-fix items fixed in the plan)
+- Commits: 11c0adf
+- Must-fix fixed: entrypoint unsets MIGRATION_DATABASE_URL but EnvSettings required it (T1 makes it optional); token-refresh has no --date/--force (T9); P3-T12 fix round and outage fix reconciled (live-run exit 4 vs re-read, FinViz cache dir, overlay cron backups at 12:32/15:32 in T5 test 6, notification statuses); worktree deploy had no .env.dev (TRADER_ENV_FILE)
+- Should-fix fixed: worker stopwaitsecs 60 (bot stop can take 55 s at max poll timeout), compose grace >= sum; admin username checked in ensure_admin not EnvSettings; create-admin failure never blocks start-up; manual job non-zero exit event; http(s)-only headline links; LIVE credentials via uv --env-file, no trace in live mode; pre-deploy check for another dev worker
+- Stephen decisions recorded: password min 8 (7 rejected, 8 accepted), one-tap web approvals, no held-paused start; env backup at /Users/stephen/.config/trader-backup (700/600)
+- Notes: neither P3 fix round was on trunk at 836a484; the plan tells builders how to adapt. Log at docs/build/agents/P4-T0-verifier-a1.md
+
+### 2026-09-27 12:49 MT · P4-T1 · Builder · attempt 1 · started
+- Notes: backend contracts (deps, migration, settings/env, schemas, deps, errors, views, stubs, fakes, gate)
+
+### 2026-09-27 12:50 MT · P4-T2 · Builder · attempt 1 · started
+- Notes: web contracts (Vite scaffold, types.ts, ApiClient, formatters, UI primitives, stubs, test helpers). node v25.9.0, npm 11.12.1
+
+### 2026-09-27 12:53 MT · P3-T12 · Builder · attempt 2 · finished
+- Result: done. Must-fix 1-2 fixed (breaker 12/12 pass). Should-fix 3-6 fixed. All nits fixed.
+- Commits: 1befdf1
+- Gate: check.sh passed (1565 passed, 1 xfailed = T13's strict xfail for the Telegram-outage finding)
+- Notes: stale run id handled by restart. A new live run makes the worker stop and exit 4 (the P4 plan's run-worker.sh already expects this). WorkerDeps.relay stays the bound pump because T13 needs it. Trading paths keep failing closed on invalid settings. SPEC 9 gains the 12:32/15:32 event --due rows.
+
+### 2026-09-27 13:00 MT · P3-T6/T8 (outage delivery) · Builder · attempt 3 · finished
+- Result: done. Rulings 1-3 fixed. T13 outage test passes, strict xfail removed
+- Commits: 707ef23
+- Gate: check.sh green on trunk 1befdf1 (T12 fix round included), 1580 passed, 0 failed, 0 xfailed
+- Notes: relay walks failed notifications and pending proposals oldest first (30 s backoff, 60 s after a 2nd send while Telegram is away). A transient failure holds the rest and the streams (cursors stay put). Re-scan leaves failed keys to the retry pass. Bot discards the nonce on surely-unsent, honours 429 retry_after, and writes one warning per proposal. Job messages are retried from stored text (daily summary journal buttons not rebuilt)
+
+### 2026-09-27 13:01 MT · P3-REVIEW · Phase reviewer (review+fix) · attempt 1 · started
+- Notes: whole-phase review of Phase 3 on trunk, small fixes inside Phase 3 files, §7.1 update

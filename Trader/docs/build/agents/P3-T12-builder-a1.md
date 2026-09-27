@@ -1,0 +1,9 @@
+# P3-T12 builder attempt 1
+- 11:48:00 MT started; read master plan and phase-3 plan T12 section | next: read trunk code (runtime, cli, worker, bot, relay, jobs)
+- 11:52:59 MT read trunk code (worker, scheduler, bot, relay, commands, checkin, events, postclose, notifier, api, cli, logging) | next: write notify/views.py and switch bot/relay/commands/checkin to it
+- 12:04:26 MT views.py + bot/relay/commands/checkin switched; runtime.py, crontab, CLI commands written; test_crontab + test_cli (74) green | next: tests/test_runtime.py (decider safety, run_worker once, plan, lock exit codes, jobs)
+- 12:10:42 MT test_runtime (27), test_views (3), crontab, CLI tests written; check.sh green 1522 passed | next: commit+push code, then LIVE steps
+- 12:11:08 MT committed+pushed 3d774d1 (code, 1522 tests) | next: LIVE pre-check of trader_dev (pending proposals, alembic head) then telegram-test
+- 12:11:35 MT LIVE pre-check trader_dev: alembic 0004, 0 pending proposals, 0 working orders, 0 open positions, no cursors/heartbeats | LIVE 1 telegram-test -> sent message 38 | LIVE 2 telegram-test --buttons -> sent message 39 | next: worker --once (Sunday, closed_day)
+- 12:12:19 MT LIVE 3 python -m trader.worker --once -> exit 0, no output, no getUpdates; worker_heartbeats: worker stopped beat_at 2026-09-27T18:11:42Z (12:11 MT); relay cursors created at current max (proposals 0, fills 0, events 4) | LIVE 4 preopen / checkin --at 11:30 / event --due / event flatten / postclose -> '<name> 2026-09-27: not a trading session, nothing to do', exit 0; event --due --force refused exit 2; job_runs for Mon 2026-09-28 unchanged (nightly x2 succeeded, premarket failed+superseded, pre-existing) | next: tick plan boxes, commit, push
+- 12:14:38 MT committed+pushed c83d4c7 (plan ticks + LIVE notes), check.sh 1522 passed | next: finished entry, report

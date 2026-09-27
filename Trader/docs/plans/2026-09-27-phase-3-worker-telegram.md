@@ -344,16 +344,16 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 - Read-only commands open read-only DB work only; only `/pause` confirmation and `/resume` change state.
 
 **Acceptance tests (real DB with seeded rows; FakeRenderer, FakeIssuer, FakeMessenger):**
-- [ ] 1. `status_view` on a session at 10:00 ET after `orb_open` fired shows phase `open`, next event `entry_cancel` at 15:30Z, approval mode `manual`, no switches, token OK, heartbeat age 5 s, one position, one pending proposal.
-- [ ] 2. On Saturday `status_view` shows `closed_day`, the next session's date and no next event today.
-- [ ] 3. A token whose last refresh is 30 h old, or with `last_error`, is shown as not OK with the reason.
-- [ ] 4. `position_lines` shows the stop order's price; with no working stop it shows `stop_loss` flagged `(no stop order)` and an unprotected time growing with the clock; a quote callable that raises gives `last = None` without failing.
-- [ ] 5. `pnl_view` sums today's trades, the week's trades from Monday (a trade last Friday excluded), and drawdown from the latest snapshot.
-- [ ] 6. `/pending` re-sends each pending proposal with `resend=True`, oldest first; none → `No pending proposals.`.
-- [ ] 7. `/pause` then `confirm_pause("y")` blocks entries (`KillSwitches.blocking` returns `manual_pause`) and writes an audit row with actor `telegram`; `confirm_pause("n")` changes nothing; `/pause` when already paused replies `Already paused.`.
-- [ ] 8. `/resume` lifts `manual_pause` only: with `max_drawdown_pct` also tripped it stays blocking and the reply names it; `/resume` when not paused replies `Not paused.`.
-- [ ] 9. `/status@StephenTraderDevBot` works; `/nonsense` and plain text get the unknown-command reply; `/help` calls `render.help()`.
-- [ ] 10. Gate and commit `P3-T7: ...`.
+- [x] 1. `status_view` on a session at 10:00 ET after `orb_open` fired shows phase `open`, next event `entry_cancel` at 15:30Z, approval mode `manual`, no switches, token OK, heartbeat age 5 s, one position, one pending proposal.
+- [x] 2. On Saturday `status_view` shows `closed_day`, the next session's date and no next event today.
+- [x] 3. A token whose last refresh is 30 h old, or with `last_error`, is shown as not OK with the reason.
+- [x] 4. `position_lines` shows the stop order's price; with no working stop it shows `stop_loss` flagged `(no stop order)` and an unprotected time growing with the clock; a quote callable that raises gives `last = None` without failing.
+- [x] 5. `pnl_view` sums today's trades, the week's trades from Monday (a trade last Friday excluded), and drawdown from the latest snapshot.
+- [x] 6. `/pending` re-sends each pending proposal with `resend=True`, oldest first; none → `No pending proposals.`.
+- [x] 7. `/pause` then `confirm_pause("y")` blocks entries (`KillSwitches.blocking` returns `manual_pause`) and writes an audit row with actor `telegram`; `confirm_pause("n")` changes nothing; `/pause` when already paused replies `Already paused.`.
+- [x] 8. `/resume` lifts `manual_pause` only: with `max_drawdown_pct` also tripped it stays blocking and the reply names it; `/resume` when not paused replies `Not paused.`.
+- [x] 9. `/status@StephenTraderDevBot` works; `/nonsense` and plain text get the unknown-command reply; `/help` calls `render.help()`.
+- [x] 10. Gate and commit `P3-T7: ...`.
 
 ---
 

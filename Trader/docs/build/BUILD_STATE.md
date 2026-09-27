@@ -6,10 +6,10 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 
 | Field | Value |
 |---|---|
-| Current phase | 3 (Phase 2 COMPLETE 11:24 MT Sep 27, tag phase-2-complete) |
-| Current task | P3-T12 gauntlet; P3-T13 building; P4-T0 planning |
+| Current phase | 4 (Phase 3 COMPLETE ~13:45 MT Sep 27, tag phase-3-complete) |
+| Current task | P3-REVIEW; P4-T1 contracts; web builders T12-T16 |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-27T19:00:53Z |
+| Last updated (UTC) | 2026-09-27T19:17:11Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
 | Token last refreshed (UTC) | 2026-09-27T17:21:56Z (re-seeded from Stephen's new token after .env.dev rebuild; token removed from .env.dev) |
@@ -75,7 +75,27 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P3-T11 | Post-close job + candle archive | P3-T1 | accepted | 2 | fix round: summary always sent even if archive fails; batched upserts | c4ed413 |
 | P3-T12 | Wiring (runtime, CLI, crontab) + LIVE dev bot | P3-T2..T11 | accepted | 2 | fix round: breaker 12/12, 1565 green; GuardedSettings, run-change exit 4, overlay cron backups | 1befdf1 |
 | P3-T13 | Integration: worker day with fake Telegram | P3-T12 | accepted | 2 | integration day 8/8 (outage xfail now passes after 707ef23); 1580 green | 707ef23 |
-| P3-REVIEW | Phase 3 review | P3-T13 | reviewing | 1 | whole-phase review running | - |
+| P3-REVIEW | Phase 3 review | P3-T13 | accepted | 1 | PASS; 409 alert relayed, safety-event alert cap, masked stored errors; + second flatten cron backup (12:58/15:58) | b3b9c38 |
+| P4-T1 | Backend contracts, migration 0005 (LIVE), fakes | P3 | building | 1 | - | - |
+| P4-T2 | Web contracts (Vite, types, ApiClient, UI) | P3 | gauntlet | 1 | built (40 web tests); gauntlet batched with web pages | 7abefd6 |
+| P4-T3 | API core, health, SPA serving | T1 | todo | 1 | - | - |
+| P4-T4 | Auth (Argon2, sessions, CSRF, lockout, TOTP) | T1 | todo | 1 | - | - |
+| P4-T5 | Dashboard and trading reads | T1 | todo | 1 | - | - |
+| P4-T6 | Decisions (approve/reject, kill switches) | T1 | todo | 1 | - | - |
+| P4-T7 | Performance, journal, CSV export | T1 | todo | 1 | - | - |
+| P4-T8 | Settings and strategies | T1 | todo | 1 | - | - |
+| P4-T9 | System, jobs, token paste, Telegram test | T1 | todo | 1 | - | - |
+| P4-T10 | Watchlist CSV upload | T1 | todo | 1 | - | - |
+| P4-T11 | Change feed and SSE | T1 | todo | 1 | - | - |
+| P4-T12 | Web shell | T2 | building | 1 | - | - |
+| P4-T13 | Web Dashboard and Candidates | T2 | building | 1 | - | - |
+| P4-T14 | Web Trades, Performance, Journal, Reports | T2 | building | 1 | - | - |
+| P4-T15 | Web Settings | T2 | building | 1 | - | - |
+| P4-T16 | Web System | T2 | building | 1 | - | - |
+| P4-T17 | Docker image, supervisord, deploy scripts | T1, T2 | todo | 1 | - | - |
+| P4-T18 | Wiring | T3-T17 | todo | 1 | - | - |
+| P4-T19 | End to end + deploy trader-dev (LIVE) | T18 | todo | 1 | - | - |
+| P4-REVIEW | Phase 4 review | T19 | todo | 1 | - | - |
 
 ## Escalations
 
@@ -1346,3 +1366,31 @@ None open.
 
 ### 2026-09-27 13:01 MT · P3-REVIEW · Phase reviewer (review+fix) · attempt 1 · started
 - Notes: whole-phase review of Phase 3 on trunk, small fixes inside Phase 3 files, §7.1 update
+
+### 2026-09-27 13:08 MT · P4-T2 · Builder · attempt 1 · finished
+- Result: done. Trader/web scaffold, types.ts, ApiClient + FakeApiClient, format.ts, ui.tsx, styles.css, stubs for T12-T16, test helpers. Plan boxes 1-8 ticked
+- Commits: 7abefd6
+- Gate: check.sh passed (1580 pytest), npm run check passed (tsc + 40 Vitest tests), npm ci from the lock works
+- Notes: T1's check.sh web step and Trader/.gitignore lines were not on trunk yet, so T2 added Trader/web/.gitignore too. Extra T2 test files (fakeApi.test.ts, render.test.tsx, queryKeys.test.ts, build.test.ts). npm audit: 2 moderate react-router 6 advisories (fixed only in v7). T12 must reject backslash paths in the login next param
+
+### 2026-09-27 13:07 MT · P4-T15 · Builder · attempt 1 · started
+- Notes: web Settings page (approval mode, field-descriptor forms, strategies, kill-switch panel, Questrade token, Telegram test, security)
+
+### 2026-09-27 13:07 MT · P4-T14 · Builder · attempt 1 · started
+- Web Trades, Performance, Journal and Reports pages
+
+### 2026-09-27 13:07 MT · P4-T16 · Builder · attempt 1 · started
+- Notes: Web System page, own worktree
+
+### 2026-09-27 13:09 MT · P4-T13 · Builder · attempt 1 · started
+- Notes: Web Dashboard and Candidates pages
+
+### 2026-09-27 13:08 MT · P4-T12 · Builder · attempt 1 · started
+- Notes: web shell (http client, login, layout, routes and deep links, live updates, tz check). Log at docs/build/agents/P4-T12-builder-a1.md
+
+### 2026-09-27 13:40 MT · P3-REVIEW · Phase reviewer (review+fix) · attempt 1 · finished
+- Result: PASS (no must-fix left). Fixed 3 should-fix items in Phase 3 files, 7.1 updated
+- Commits: b3b9c38
+- Gate: check.sh 1583 passed (baseline 1580 + 3 regression tests), tests/integration 10 passed
+- Findings fixed: 409 critical never relayed (source telegram), safety-event retries alerted every 120 s, unmasked exception text stored in job_runs/event_log/job detail
+- Left for orchestrator: flatten has one cron backup only (15:55/12:55) when the worker is down (should-fix, crontab/SPEC 9), nits on duplicated helpers and dead fields

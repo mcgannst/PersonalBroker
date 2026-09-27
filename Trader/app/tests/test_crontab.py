@@ -26,9 +26,11 @@ EXPECTED = {
     ("30 11 * * 1-5", "trader checkin --at 11:30"),
     ("32 12 * * 1-5", "trader event --due"),
     ("55 12 * * 1-5", "trader event flatten"),
+    ("58 12 * * 1-5", "trader event flatten"),
     ("30 13 * * 1-5", "trader checkin --at 13:30"),
     ("32 15 * * 1-5", "trader event --due"),
     ("55 15 * * 1-5", "trader event flatten"),
+    ("58 15 * * 1-5", "trader event flatten"),
     ("15 16 * * 1-5", "trader postclose"),
 }
 # SPEC §9 times (ET) of the weekday jobs, plus the documented 12:55 flatten and 12:32 / 15:32 overlay backups.
@@ -38,7 +40,7 @@ WEEKDAY_ET = {
     "trader event orb_open": [time(9, 36)],
     "trader checkin --at 11:30": [time(11, 30)],
     "trader event --due": [time(12, 32), time(15, 32)],
-    "trader event flatten": [time(12, 55), time(15, 55)],
+    "trader event flatten": [time(12, 55), time(12, 58), time(15, 55), time(15, 58)],
     "trader checkin --at 13:30": [time(13, 30)],
     "trader postclose": [time(16, 15)],
 }

@@ -4,7 +4,9 @@
 # "not a trading session"). The 12:55 flatten is the backup for early-close days (13:00 close); on a normal
 # day it is too early and does nothing. The 12:32 and 15:32 `event --due` lines back up the overlay decision
 # (close - 30 min: 12:30 on early-close days, 15:30 otherwise); `--due` fires only events that are due and
-# not yet settled, so on a normal day the 12:32 run finds nothing new. The weekly report line is added by
+# not yet settled, so on a normal day the 12:32 run finds nothing new. The 12:58 and 15:58 flatten lines are a
+# second backup (P3-REVIEW): if the worker is down and the first backup fails, a retry still runs before the
+# close (the flatten is a safety event, so its failures never settle it). The weekly report line is added by
 # P5-T6.
 CRON_TZ=America/New_York
 0 2 * * *      trader token-refresh
@@ -15,7 +17,9 @@ CRON_TZ=America/New_York
 30 11 * * 1-5  trader checkin --at 11:30
 32 12 * * 1-5  trader event --due
 55 12 * * 1-5  trader event flatten
+58 12 * * 1-5  trader event flatten
 30 13 * * 1-5  trader checkin --at 13:30
 32 15 * * 1-5  trader event --due
 55 15 * * 1-5  trader event flatten
+58 15 * * 1-5  trader event flatten
 15 16 * * 1-5  trader postclose

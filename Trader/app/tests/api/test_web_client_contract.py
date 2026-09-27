@@ -10,6 +10,8 @@ same-origin `url(...)` link), and checks against the real route table of `create
 - a passed-through body has the TypeScript type named like the route's pydantic body model, and an inline
   body (`{ value }`) has exactly the model's field names;
 - every `/api` route is used by some client method (no dead route, no missing method).
+
+Phase 5 builders: a new client method whose route is not registered yet goes in `PENDING_ROUTES`.
 """
 
 import inspect
@@ -29,6 +31,11 @@ WEB_API = Path(__file__).resolve().parents[3] / "web" / "src" / "api"
 HTTP_TS = WEB_API / "http.ts"
 CLIENT_TS = WEB_API / "client.ts"
 NOT_ROUTES = {"csrfToken", "setCsrfToken"}  # accessors of the client itself
+# Client methods declared by the P5-T1 contracts whose routes a later Phase 5 task registers: skipped until
+# the route exists, checked like every other method from then on. Remove a name once its route is wired.
+PENDING_ROUTES = frozenset(
+    {"replayOptions", "replays", "replay", "startReplay", "cancelReplay", "weeklyReport"}
+)
 
 _CALL = re.compile(r"\b(get|post|put|del)<[^(]*?>\(\s*[`\"]([^`\"]+)[`\"]")
 _REQUEST = re.compile(r'request<[^(]*?>\(\{\s*method:\s*"(\w+)",\s*path:\s*[`"]([^`"]+)[`"]')
@@ -165,20 +172,30 @@ def test_the_client_parser_sees_every_api_method() -> None:
     assert set(client_calls()) == methods
 
 
+def _route_of(name: str) -> tuple[ClientCall, APIRoute]:
+    call = client_calls()[name]
+    route = api_routes().get((call.method, call.path))
+    if route is None and name in PENDING_ROUTES:
+        pytest.skip(f"{name}: its route is registered by a later Phase 5 task")
+    assert route is not None, f"{name}: no route {call.method} {call.path}"
+    return call, route
+
+
+def test_the_pending_methods_are_client_methods() -> None:
+    assert PENDING_ROUTES <= set(client_calls())
+
+
 @pytest.mark.parametrize("name", sorted(client_calls()))
 def test_each_client_method_requests_a_real_route_with_real_query_names(name: str) -> None:
-    call = client_calls()[name]
-    routes = api_routes()
-    route = routes.get((call.method, call.path))
-    assert route is not None, f"{name}: no route {call.method} {call.path}"
+    call, route = _route_of(name)
     unknown = call.query_fields - _query_params(route.dependant)
     assert not unknown, f"{name}: the route has no query parameter {sorted(unknown)}"
 
 
 @pytest.mark.parametrize("name", sorted(client_calls()))
 def test_each_client_body_matches_the_route_body_model(name: str) -> None:
-    call = client_calls()[name]
-    model = _body_model(api_routes()[(call.method, call.path)])
+    call, route = _route_of(name)
+    model = _body_model(route)
     ts_type = _body_types().get(name)
     if call.inline_body is not None:
         assert model is not None, f"{name}: sends a body the route does not read"

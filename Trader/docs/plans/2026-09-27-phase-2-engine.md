@@ -6354,7 +6354,7 @@ git push origin HEAD:trunk
     - `set_approval_mode(mode: Literal["manual","auto"], actor: str) -> None`: through `SettingsStore.set`, which audits the change (SPEC §6.2).
     - Proposal status values: `pending`, `approved` (transient inside the transaction), `rejected`, `expired`, `auto_approved` (transient), `submitted`, `failed`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `Trader/app/tests/engine/test_proposals.py`:
 ```python
@@ -6618,12 +6618,12 @@ def test_kind_must_match_the_sized_order(env: Env) -> None:
         env.svc.create(env.signal_id, entry_sized(env), "exit")
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `uv --directory Trader/app run pytest tests/engine/test_proposals.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.engine.proposals'`.
 
-- [ ] **Step 3: Implement `trader/engine/proposals.py`**
+- [x] **Step 3: Implement `trader/engine/proposals.py`**
 
 ```python
 """Proposal workflow (SPEC §6.2, BR-30, BR-31, BR-33).
@@ -6834,12 +6834,12 @@ class ProposalService:
             self._log(s, "info", f"proposal {p.id} ({p.kind}) expired", p)
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `uv --directory Trader/app run pytest tests/engine/test_proposals.py -q`
 Expected: all pass. In `test_an_expired_protective_stop_escalates_and_counts_unprotected_time`, the position has no stop for its whole 600 s life, so `unprotected_seconds == 600`.
 
-- [ ] **Step 5: Run the gate, commit and push**
+- [x] **Step 5: Run the gate, commit and push**
 
 Run: `uv --directory Trader/app run ruff format .` then `bash Trader/app/scripts/check.sh` → all pass.
 ```bash

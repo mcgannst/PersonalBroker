@@ -5419,7 +5419,7 @@ git push origin HEAD:trunk
   - `SpyOverlayParams` (frozen, `extra="forbid"`): `decision_at="close-30m"` (a valid offset), `benchmark="SPY"` (ticker pattern), `signal: Literal["rest_of_day"] = "rest_of_day"`.
   - `SpyOverlay(params=None)`: `key="spy_overlay"`, `version="1.0.0"`, `kind="overlay"`; `schedule` gives one `overlay_decision` event at `decision_at`. On the event: `ret = (last − prior close) / prior close` for the benchmark (last trade, or last regular-hours trade if `last` is missing; a halted quote counts as missing). `ret <= 0` → `Exit(position_id, "market", None, "overlay_negative")` for every position in `ctx.positions`; `ret > 0` → nothing. A note `overlay: decision` records `decision`, `spy_return`, `prior_close`, `price` and the position IDs either way. Missing data (unknown benchmark, no prior close, no quote) holds, with a warning or error note: the flatten at `close-10m` still closes everything. `on_fill` returns `[]`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `Trader/app/tests/strategies/test_spy_overlay.py`:
 ```python
@@ -5512,12 +5512,12 @@ def test_the_plugin_loads_through_its_entry_point() -> None:
     assert cls is SpyOverlay and cls.kind == "overlay" and cls.version == "1.0.0"
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `uv --directory Trader/app run pytest tests/strategies/test_spy_overlay.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.strategies.spy_overlay'`.
 
-- [ ] **Step 3: Implement `trader/strategies/spy_overlay.py`**
+- [x] **Step 3: Implement `trader/strategies/spy_overlay.py`**
 
 ```python
 """spy_overlay 1.0.0 (kind = overlay): hold into the close or exit at 15:30 ET (SPEC §5.3, BR-12)."""
@@ -5603,12 +5603,12 @@ class SpyOverlay:
         return []
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `uv --directory Trader/app run pytest tests/strategies/test_spy_overlay.py -q`
 Expected: all pass. `-2.50 / 500.00 = -0.005` prints as `-0.005000` at 6 dp.
 
-- [ ] **Step 5: Run the gate, commit and push**
+- [x] **Step 5: Run the gate, commit and push**
 
 Run: `uv --directory Trader/app run ruff format .` then `bash Trader/app/scripts/check.sh` → all pass.
 ```bash

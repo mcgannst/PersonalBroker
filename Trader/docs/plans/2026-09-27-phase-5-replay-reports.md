@@ -734,16 +734,32 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - Mirror rows are never relayed (T10), so they reach the System page only.
 
 **Acceptance tests (real DB; `configure_logging` in a subprocess-free test with a fresh root logger per test):**
-- [ ] 1. After `install_event_mirror(... level "error")`, `structlog.get_logger("trader.x").error("thing.failed", symbol="AAA")` and a stdlib `logging.getLogger("finviz").error("boom")` each produce one `event_log` row (`source` `log.test`, message `trader.x: thing.failed`, data with `symbol`) after `flush()`; an `info` and a `warning` produce none.
-- [ ] 2. **Masked:** a line with `token="abc123secret"` and a message containing `https://api.telegram.org/bot123456:AAAA.../getUpdates` stores `[REDACTED]` for both; nothing unmasked reaches the row.
-- [ ] 3. **Non-blocking:** with the DB paused (a factory whose connect blocks), 5,000 error lines return from `emit` in under 1 s in total, the queue keeps at most `queue_size`, and `dropped` counts the rest.
-- [ ] 4. **No recursion:** a factory raising on every write → no exception escapes, no new log lines are produced by the mirror, and the process keeps logging to stdout.
-- [ ] 5. The same (logger, event) ten times in 60 s → one row, and the next row after 60 s carries `repeated: 9`; 100 distinct events in one minute with `max_per_minute` 30 → 30 rows and one "dropped" summary row.
-- [ ] 6. `event_logged=True`, `sqlalchemy.engine` errors and records from the mirror's own logger are skipped.
-- [ ] 7. `logging.mirror_level = "off"` → `install_event_mirror` returns None and installs no handler; `critical` level mirrors only critical lines.
-- [ ] 8. `close()` flushes pending rows within 2 s and removes the handler (a later error line writes nothing).
-- [ ] 9. A mirror built with `run_id=7` (process `replay`) stamps `run_id` 7 on every row, including the "dropped" summary row.
-- [ ] 10. Gate and commit `P5-T14: ...`.
+- [x] 1. After `install_event_mirror(... level "error")`, `structlog.get_logger("trader.x").error("thing.failed", symbol="AAA")` and a stdlib `logging.getLogger("finviz").error("boom")` each produce one `event_log` row (`source` `log.test`, message `trader.x: thing.failed`, data with `symbol`) after `flush()`; an `info` and a `warning` produce none.
+- [x] 2. **Masked:** a line with `token="abc123secret"` and a message containing `https://api.telegram.org/bot123456:AAAA.../getUpdates` stores `[REDACTED]` for both; nothing unmasked reaches the row.
+- [x] 3. **Non-blocking:** with the DB paused (a factory whose connect blocks), 5,000 error lines return from `emit` in under 1 s in total, the queue keeps at most `queue_size`, and `dropped` counts the rest.
+- [x] 4. **No recursion:** a factory raising on every write → no exception escapes, no new log lines are produced by the mirror, and the process keeps logging to stdout.
+- [x] 5. The same (logger, event) ten times in 60 s → one row, and the next row after 60 s carries `repeated: 9`; 100 distinct events in one minute with `max_per_minute` 30 → 30 rows and one "dropped" summary row.
+- [x] 6. `event_logged=True`, `sqlalchemy.engine` errors and records from the mirror's own logger are skipped.
+- [x] 7. `logging.mirror_level = "off"` → `install_event_mirror` returns None and installs no handler; `critical` level mirrors only critical lines.
+- [x] 8. `close()` flushes pending rows within 2 s and removes the handler (a later error line writes nothing).
+- [x] 9. A mirror built with `run_id=7` (process `replay`) stamps `run_id` 7 on every row, including the "dropped" summary row.
+- [x] 10. Gate and commit `P5-T14: ...`.
+
+**Build notes (P5-T14 builder, 2026-09-27):**
+- Rate limits are applied by the writer (not in `emit`), so `emit` stays a mask plus `put_nowait` and a burst fills
+  the queue as test 3 expects. Repeats are keyed on (logger, event) and measured on the row's clock time (taken in
+  `emit`). A line cut by the per-minute limit is not remembered for the repeat window.
+- `dropped` counts every line that never became a row: a full queue, the per-minute limit and a failed batch. The
+  "log mirror dropped N lines" row (`data.dropped`) reports all three, once, when the next minute starts (or at
+  `close()`). If that write fails, its count is reported again later.
+- Extras: `EventLogMirror.queued()` (the queue length, used by test 3) and a `source` attribute. `close()` is
+  idempotent. The mirror never logs anything itself, and log lines emitted by its own thread (or by the thread
+  running an inline flush, during the write) are skipped.
+- Structlog exceptions reach the handler already rendered by `format_exc_info`, so `exc_type` and `exc_message` come
+  from the rendered traceback's last line. The traceback itself is never stored.
+- The P5-T1 stub test (`test_every_stub_names_its_owner`) now really calls `install()`, `start()` and
+  `install_event_mirror(None, ...)`: each leaves a harmless handler or daemon thread with a `None` factory in the
+  test process (every write fails and is counted). Left as is (T1 owns that file).
 
 ---
 

@@ -4297,7 +4297,7 @@ git push origin HEAD:trunk
   - `MarketDataService(factory, clock, calendar, client: QuoteClient)` implementing `MarketDataView`: `universe(session_date)` (DB; sorted by ticker; empty when the nightly job hasn't run), `universe_status(session_date)` (from the latest succeeded `nightly` job run for that session, else the snapshot rows' source; `UniverseStatus(None, None, False, None)` when there is no universe), `open_bar_stats(session_date)` (DB), `symbol_ids(tickers)` (DB), `quotes(symbol_ids) -> dict[int, QtQuote]` (always Questrade; re-keyed to DB ids), `opening_bars(session_date, symbol_ids=None) -> OpeningBars` (the cached 5-minute bar at the open first; the rest in one `candles_many` batch, which the client's rate limiter paces; each fetched, complete bar is cached; per-symbol reasons `no_questrade_id`, `questrade_error: HTTP <n>`, `no_bar_at_open`, `bar_not_complete`), `candles(symbol_id, start, end, interval)` (intraday: the cache when it holds every bar of the window, else Questrade then cache; `OneDay`: Questrade), `prior_close(symbol_id, session_date) -> Decimal | None` (`daily_candles` for the previous session, else Questrade `OneDay`, cached), `prior_closes(symbol_ids, session_date) -> dict[int, Decimal]` (DB only, for the pre-market scan).
   - `tests/fakes_questrade.py`: `FakeQuestrade` (in-memory symbols, quotes, bars and per-id errors; records `calls` as `(method, count)`), used again by P2-T13 and P2-T15.
 
-- [ ] **Step 1: Write the fake client and the failing tests**
+- [x] **Step 1: Write the fake client and the failing tests**
 
 `Trader/app/tests/fakes_questrade.py`:
 ```python
@@ -4548,12 +4548,12 @@ async def test_candles_come_from_the_cache_when_complete(db_factory: sessionmake
 
 `Trader/app/tests/market/__init__.py` already exists (P1-T4).
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `uv --directory Trader/app run pytest tests/market/test_data_service.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.market.data_service'`.
 
-- [ ] **Step 3: Implement `trader/market/data_service.py`**
+- [x] **Step 3: Implement `trader/market/data_service.py`**
 
 ```python
 """Market data for strategies and jobs (master plan §7.1): the DB cache first, Questrade second.
@@ -4801,12 +4801,12 @@ class MarketDataService:
         return bars[-1].close
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `uv --directory Trader/app run pytest tests/market/test_data_service.py -q`
 Expected: all pass.
 
-- [ ] **Step 5: Run the gate, commit and push**
+- [x] **Step 5: Run the gate, commit and push**
 
 Run: `uv --directory Trader/app run ruff format .` then `bash Trader/app/scripts/check.sh` → all pass.
 ```bash

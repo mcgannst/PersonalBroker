@@ -7,7 +7,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 1 |
-| Current task | P1-T1 (fixing), P1-T2, P1-T5 (building), P1-T4 (Verifier) |
+| Current task | P1-T1 (fixing), P1-T2 + P1-T8 (building), P1-T4 (Breaker+reviewers), P1-T5 (Verifier) |
 | Gauntlet stage | Breaker + reviewers |
 | Last updated (UTC) | 2026-09-27T05:10:00Z |
 | Last pushed commit | d64518b |
@@ -25,11 +25,11 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | fixing | 2 | V✅ B❌ S✅ C✅(3 should-fix) | f5b6daa |
 | P1-T2 | Database models, migration 0001, test database fixture | T1 | building | 1 | | |
 | P1-T3 | Crypto and runtime settings store | T2 | todo | 0 | | |
-| P1-T4 | Market types, clock and session calendar | T1 | gauntlet | 1 |  | 59be3e7 |
-| P1-T5 | FinViz parser and scraper | T1 | building | 1 | | |
+| P1-T4 | Market types, clock and session calendar | T1 | gauntlet | 1 | V✅ | 59be3e7 |
+| P1-T5 | FinViz parser and scraper | T1 | gauntlet | 1 |  | 2dae157 |
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | todo | 0 | | |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | todo | 0 | | |
-| P1-T8 | Indicators | T4 | todo | 0 | | |
+| P1-T8 | Indicators | T4 | building | 1 |  |  |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | todo | 0 | | |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | todo | 0 | | |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | todo | 0 | | |
@@ -117,3 +117,21 @@ None open.
 
 ### 2026-09-27T04:24:05Z · P1-T1 · Builder · attempt 2 · started
 - Result: fixing gauntlet findings (SecretStr DB URLs, env_setup trailing newline, notify.py errors, test_config nits)
+
+### 2026-09-27T04:24:35Z · P1-T4 · Verifier · attempt 1 · started
+- Notes: verifying in worktree agent-a3af73294d32568cd
+
+### 2026-09-27T04:24:59Z · P1-T5 · Builder · attempt 1 · finished
+- Result: done, all 11 plan steps ticked
+- Commits: be6fa8d (parser), 1813101 (scraper), 2dae157 (switch to shared ET import)
+- Gate: check.sh 33 passed, 2 failed (only the known P1-T1 gauntlet tests), 12 adapter tests pass
+- Notes: parser and scraper code exactly as planned. All expected values matched the spike, no parser fixes needed. ET was defined locally at first because P1-T4 was not on trunk yet, then switched to trader.market.clock once it landed.
+
+### 2026-09-27T04:25:23Z · P1-T4 · Verifier · attempt 1 · finished
+- Result: PASS
+- Commits: verified trunk at f04624d (P1-T4 code 59be3e7)
+- Gate: ruff, format, mypy clean. pytest 33 passed, 2 failed, and both failures are the known P1-T1 breaker tests (password repr leak, env trailing newline). P1-T4 tests 11 passed
+- Findings: git status clean, all 5 P1-T4 plan steps ticked, all 8 listed files present on trunk
+
+### 2026-09-27T04:25:28Z · P1-T5 · Verifier · attempt 1 · started
+- Notes: verifying trunk at 3a5f493

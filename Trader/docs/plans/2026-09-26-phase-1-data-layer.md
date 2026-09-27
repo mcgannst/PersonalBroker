@@ -1510,7 +1510,7 @@ git pull --rebase && git push
   - Exceptions `FinvizError`, `FinvizBlocked(FinvizError)`, `FinvizFilterIgnored(FinvizError)`.
   - `FinvizScraper(http: httpx.Client | None = None, *, min_interval_s: float = 2.0, cache_dir: Path | None = None, cache_ttl_s: float = 43200, sleep: Callable[[float], None] = time.sleep, monotonic: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time)` with `screen(filters: str, view: int = 111, signal: str | None = None) -> ScreenerPage` (all pages merged), `universe(filters: str) -> list[UniverseRow]`, `news(ticker: str, today_et: date) -> list[Headline]`, `close() -> None`.
 
-- [ ] **Step 1: Copy the fixtures**
+- [x] **Step 1: Copy the fixtures**
 
 Run (from `Trader/`):
 ```bash
@@ -1519,7 +1519,7 @@ cp spikes/fixtures/finviz/raw_screener_p1.html spikes/fixtures/finviz/raw_quote_
    spikes/fixtures/finviz/raw_quote_AMD.html app/tests/fixtures/finviz/
 ```
 
-- [ ] **Step 2: Write the failing parser tests**
+- [x] **Step 2: Write the failing parser tests**
 
 `Trader/app/tests/adapters/__init__.py`: empty file.
 
@@ -1596,12 +1596,12 @@ def test_ticker_mapping() -> None:
     assert to_questrade_ticker("AAPL") == "AAPL"
 ```
 
-- [ ] **Step 3: Run to see them fail**
+- [x] **Step 3: Run to see them fail**
 
 Run: `uv run pytest tests/adapters/test_finviz_parser.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.adapters'`.
 
-- [ ] **Step 4: Implement the parser**
+- [x] **Step 4: Implement the parser**
 
 `Trader/app/trader/adapters/__init__.py` and `Trader/app/trader/adapters/finviz/__init__.py`: empty files.
 
@@ -1756,12 +1756,12 @@ def parse_news(html: str, today_et: date) -> list[Headline]:
     return out
 ```
 
-- [ ] **Step 5: Run the parser tests**
+- [x] **Step 5: Run the parser tests**
 
 Run: `uv run pytest tests/adapters/test_finviz_parser.py -q`
 Expected: `7 passed`. If a value differs from the spike's output (for example `_cell_text` joining nested text differently), fix the parser, not the expected value: the expected values come from the working spike parser.
 
-- [ ] **Step 6: Commit the parser**
+- [x] **Step 6: Commit the parser**
 
 ```bash
 cd "/Users/stephen/Documents/Code/Claude Code/Trader"

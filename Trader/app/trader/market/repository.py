@@ -4,7 +4,7 @@ from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 from sqlalchemy import delete, func, select
@@ -12,7 +12,14 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from trader.adapters.questrade.models import QtSymbol
-from trader.db.models import DailyCandle, IntradayCandle, OpenBarStat, Symbol, UniverseSnapshot
+from trader.db.models import (
+    CandleArchive,
+    DailyCandle,
+    IntradayCandle,
+    OpenBarStat,
+    Symbol,
+    UniverseSnapshot,
+)
 from trader.events import log_event
 from trader.market.clock import Clock, et_date
 from trader.market.types import Candle
@@ -132,6 +139,27 @@ def upsert_intraday_candles(
     session.execute(
         stmt.on_conflict_do_update(
             index_elements=[IntradayCandle.symbol_id, IntradayCandle.interval, IntradayCandle.ts],
+            set_={k: stmt.excluded[k] for k in _OHLCV},
+        )
+    )
+    return len(rows)
+
+
+def upsert_candle_archive(
+    session: Session, symbol_id: int, interval_code: Literal["1m", "5m"], candles: Iterable[Candle]
+) -> int:
+    """Keep candles beyond Questrade's ~3-month intraday limit, for replay (SPEC §8). A re-run replaces the
+    bar in place (primary key symbol_id, interval, start_ts), so it never duplicates a row."""
+    rows = {
+        c.start: {"symbol_id": symbol_id, "interval": interval_code, "start_ts": c.start, **_ohlcv(c)}
+        for c in candles
+    }  # ON CONFLICT can't touch one row twice
+    if not rows:
+        return 0
+    stmt = insert(CandleArchive).values(list(rows.values()))
+    session.execute(
+        stmt.on_conflict_do_update(
+            index_elements=[CandleArchive.symbol_id, CandleArchive.interval, CandleArchive.start_ts],
             set_={k: stmt.excluded[k] for k in _OHLCV},
         )
     )

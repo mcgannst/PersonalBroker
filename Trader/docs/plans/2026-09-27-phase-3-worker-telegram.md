@@ -491,17 +491,17 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 - Non-session day → `{"skipped": "not a session"}`.
 
 **Acceptance tests (real DB; fake engine, fake `ArchiveData`, RecordingNotifier, FakeRenderer, FakeIssuer):**
-- [ ] 1. On a holiday nothing runs and nothing is sent.
-- [ ] 2. With 3 universe symbols (two opening bars cached, one not) the archive has three `5m` rows at the session open and the fake data was asked for the one missing symbol only.
-- [ ] 3. With candidates ranked 1–25 and `archive_top_n = 20`, 1-minute candles are archived for ranks 1–20 plus SPY only, and bars outside 09:30–16:00 ET (04:00 and 19:59 bars in the fake data) are not stored.
-- [ ] 4. On 2026-11-27 (13:00 close) the 1-minute window ends at 13:00 ET.
-- [ ] 5. A symbol whose candles raise is listed in `archive.missing`; with SPY missing an `error` event is written; the job result is still returned.
-- [ ] 6. A forced re-run leaves the archive row count unchanged, keeps a journal answer already given, and sends one summary in total.
-- [ ] 7. `end_of_session` is called once with the session date, and an open position it returns appears in the summary view as open.
-- [ ] 8. `daily_summary_view` for a seeded day (one trade +10.8157, `decision_latency_ms` 1200 and 3000, 95 unprotected seconds) gives realized 10.8157, average decision 2.1 s, unprotected 95 s.
-- [ ] 9. The summary message carries the journal buttons from the issuer (kind `journal`, ref `YYYYMMDD`, actions `y`/`n`).
-- [ ] 10. `upsert_candle_archive` inserts, then updates on conflict, and returns the row count.
-- [ ] 11. Gate and commit `P3-T11: ...`.
+- [x] 1. On a holiday nothing runs and nothing is sent.
+- [x] 2. With 3 universe symbols (two opening bars cached, one not) the archive has three `5m` rows at the session open and the fake data was asked for the one missing symbol only.
+- [x] 3. With candidates ranked 1–25 and `archive_top_n = 20`, 1-minute candles are archived for ranks 1–20 plus SPY only, and bars outside 09:30–16:00 ET (04:00 and 19:59 bars in the fake data) are not stored.
+- [x] 4. On 2026-11-27 (13:00 close) the 1-minute window ends at 13:00 ET.
+- [x] 5. A symbol whose candles raise is listed in `archive.missing`; with SPY missing an `error` event is written; the job result is still returned.
+- [x] 6. A forced re-run leaves the archive row count unchanged, keeps a journal answer already given, and sends one summary in total.
+- [x] 7. `end_of_session` is called once with the session date, and an open position it returns appears in the summary view as open.
+- [x] 8. `daily_summary_view` for a seeded day (one trade +10.8157, `decision_latency_ms` 1200 and 3000, 95 unprotected seconds) gives realized 10.8157, average decision 2.1 s, unprotected 95 s.
+- [x] 9. The summary message carries the journal buttons from the issuer (kind `journal`, ref `YYYYMMDD`, actions `y`/`n`).
+- [x] 10. `upsert_candle_archive` inserts, then updates on conflict, and returns the row count.
+- [x] 11. Gate and commit `P3-T11: ...`.
 
 ---
 

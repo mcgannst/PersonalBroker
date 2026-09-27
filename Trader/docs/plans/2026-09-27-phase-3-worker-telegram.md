@@ -171,13 +171,13 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 - `bootstrap.build_core` keeps calling `quiet_http_loggers()` only (it must not configure logging for library users and tests).
 
 **Acceptance tests:**
-- [ ] 1. After `configure_logging("cron")`, a structlog `log.info("x", a=1)` produces one JSON line with `event == "x"`, `a == 1`, `process == "cron"`, `level == "info"` and a UTC timestamp.
-- [ ] 2. A stdlib `logging.getLogger("trader.adapters.finviz.scraper").warning("blocked")` produces one JSON line with that logger name and `level == "warning"`.
-- [ ] 3. Calling `configure_logging` twice leaves exactly one root handler, and a message is printed once.
-- [ ] 4. `httpx`, `httpcore` and `telegram` loggers are at WARNING after configuration: an INFO record from `httpx` containing `bot123:SECRET` is not emitted.
-- [ ] 5. An exception logged with `log.exception` has an `exception` field containing the traceback text.
-- [ ] 6. The existing `tests/test_logging_setup.py` tests still pass.
-- [ ] 7. Gate and commit `P3-T2: ...`.
+- [x] 1. After `configure_logging("cron")`, a structlog `log.info("x", a=1)` produces one JSON line with `event == "x"`, `a == 1`, `process == "cron"`, `level == "info"` and a UTC timestamp.
+- [x] 2. A stdlib `logging.getLogger("trader.adapters.finviz.scraper").warning("blocked")` produces one JSON line with that logger name and `level == "warning"`.
+- [x] 3. Calling `configure_logging` twice leaves exactly one root handler, and a message is printed once.
+- [x] 4. `httpx`, `httpcore` and `telegram` loggers are at WARNING after configuration: an INFO record from `httpx` containing `bot123:SECRET` is not emitted.
+- [x] 5. An exception logged with `log.exception` has an `exception` field containing the traceback text.
+- [x] 6. The existing `tests/test_logging_setup.py` tests still pass.
+- [x] 7. Gate and commit `P3-T2: ...`.
 
 ---
 

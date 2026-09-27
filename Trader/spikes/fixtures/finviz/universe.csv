@@ -1,0 +1,696 @@
+ticker,company,sector,industry,country,market_cap,pe,price,change_pct,volume
+AA,Alcoa Corp,Basic Materials,Aluminum,USA,11310000000.0,8.79,42.85,0.4,3401413.0
+AAAU,Goldman Sachs Physical Gold ETF,Financial,Exchange Traded Fund,USA,,,42.28,0.31,1220165.0
+AADX,Applied Aerospace & Defense Inc,Industrials,Aerospace & Defense,USA,2180000000.0,,12.64,-0.78,1507930.0
+AAOX,Tradr 2X Long AAOI Daily ETF,Financial,Exchange Traded Fund,USA,,,9.6,0.42,9556973.0
+AAOZ,Tradr 2X Short AAOI Daily ETF,Financial,Exchange Traded Fund,USA,,,13.8,-0.14,434608.0
+AAP,Advance Auto Parts Inc,Consumer Cyclical,Auto Parts,USA,2520000000.0,30.29,41.73,0.72,1606051.0
+AAPU,Direxion Daily AAPL Bull 2X ETF,Financial,Exchange Traded Fund,USA,,,46.42,3.0,661869.0
+ABSI,Absci Corp,Healthcare,Biotechnology,USA,1670000000.0,,9.74,-5.85,3206563.0
+ABTC,American Bitcoin Corp,Financial,Capital Markets,USA,662660000.0,,9.1,-5.21,1107043.0
+ACAD,Acadia Pharmaceuticals Inc,Healthcare,Biotechnology,USA,3560000000.0,9.31,20.68,-6.76,3364113.0
+ACHC,Acadia Healthcare Company Inc,Healthcare,Medical Care Facilities,USA,2620000000.0,,28.09,1.04,1150321.0
+ADEA,Adeia Inc,Technology,Software - Application,USA,2810000000.0,23.55,25.48,1.88,775427.0
+ADIG,ADI Global Distribution Inc,Technology,Computer Hardware,USA,1480000000.0,,19.55,-4.45,579895.0
+ADNT,Adient plc,Consumer Cyclical,Auto Parts,USA,1360000000.0,29.48,17.63,3.71,897468.0
+ADPT,Adaptive Biotechnologies Corp,Healthcare,Diagnostics & Research,USA,4700000000.0,,29.43,-0.47,1686003.0
+AEMD,Aethlon Medical Inc,Healthcare,Medical Devices,USA,10070000.0,,6.28,-7.24,133607.0
+AEO,American Eagle Outfitters Inc,Consumer Cyclical,Apparel Retail,USA,2780000000.0,8.49,16.58,3.11,4465617.0
+AESI,Atlas Energy Solutions Inc,Energy,Oil & Gas Equipment & Services,USA,1560000000.0,,12.47,13.47,12172155.0
+AEVA,Aeva Technologies Inc,Technology,Software - Infrastructure,USA,1070000000.0000001,,15.35,-1.73,992972.0
+AGEN,Agenus Inc,Healthcare,Biotechnology,USA,385680000.0,3.22,8.54,0.47,672403.0
+AGIO,Agios Pharmaceuticals Inc,Healthcare,Biotechnology,USA,1950000000.0,,32.58,-0.97,996512.0
+AIPO,Defiance AI & Power Infrastructure ETF,Financial,Exchange Traded Fund,USA,,,28.84,0.73,776282.0
+ALGM,Allegro Microsystems Inc,Technology,Semiconductors,USA,6850000000.0,489.48,36.76,4.64,2555484.0
+ALH,Alliance Laundry Holdings Inc,Consumer Cyclical,"Furnishings, Fixtures & Appliances",USA,4350000000.0,24.61,21.86,2.29,1514773.0
+ALHC,Alignment Healthcare Inc,Healthcare,Healthcare Plans,USA,1700000000.0,43.97,8.21,7.04,10653836.0
+ALK,Alaska Air Group Inc,Industrials,Airlines,USA,4570000000.0,,40.94,2.27,2414948.0
+ALKT,Alkami Technology Inc,Technology,Software - Application,USA,1480000000.0,,13.8,-2.68,3256579.0
+ALLY,Ally Financial Inc,Financial,Credit Services,USA,11800000000.0,9.14,38.79,0.13,2917136.0
+ALM,Almonty Industries Inc,Basic Materials,Other Industrial Metals & Mining,USA,3960000000.0,55.95,13.72,10.65,11521398.0
+ALMS,Alumis Inc,Healthcare,Biotechnology,USA,947820000.0,,7.1,-2.61,1723962.0
+ALOY,REalloys Inc,Basic Materials,Other Industrial Metals & Mining,USA,617830000.0,,8.9,4.46,1735803.0
+AM,Antero Midstream Corp,Energy,Oil & Gas Midstream,USA,9930000000.0,25.12,20.93,-1.41,2730189.0
+AMH,American Homes 4 Rent,Real Estate,REIT - Residential,USA,11020000000.0,24.23,30.64,-0.1,5243754.0
+AMLX,Amylyx Pharmaceuticals Inc,Healthcare,Drug Manufacturers - Specialty & Generic,USA,3700000000.0,,29.49,-2.16,1294475.0
+AMPL,Amplitude Inc,Technology,Software - Application,USA,1660000000.0,,13.3,-2.85,1138916.0
+AMPX,Amprius Technologies Inc,Industrials,Electrical Equipment & Parts,USA,1420000000.0,,9.75,0.62,4023837.0
+AMRX,Amneal Pharmaceuticals Inc,Healthcare,Drug Manufacturers - Specialty & Generic,USA,6310000000.0,41.26,19.77,-0.18,2885071.0
+AMRZ,Amrize Ltd,Basic Materials,Building Materials,USA,20900000000.0,17.55,38.22,2.66,3576220.0
+AMTM,Amentum Holdings Inc,Industrials,Specialty Business Services,USA,4690000000.0,22.99,19.19,-1.08,1509693.0
+AMZU,Direxion Daily AMZN Bull 2X ETF,Financial,Exchange Traded Fund,USA,,,34.23,0.26,2065710.0
+APA,APA Corp,Energy,Oil & Gas E&P,USA,14970000000.0,9.04,42.74,-2.15,5334734.0
+APG,APi Group Corp,Industrials,Engineering & Construction,USA,16770000000.0,,38.46,1.67,2299579.0
+APLD,Applied Digital Corp,Technology,Information Technology Services,USA,7650000000.0,,26.25,-2.99,14009123.0
+APLX,Tradr 2X Long APLD Daily ETF,Financial,Exchange Traded Fund,USA,,,8.01,-6.21,3345316.0
+APPS,Digital Turbine Inc,Technology,Software - Application,USA,1340000000.0,,11.11,2.11,3601350.0
+APPX,Tradr 2X Long APP Daily ETF,Financial,Exchange Traded Fund,USA,,,12.42,-1.11,838733.0
+APUS,Apimeds Pharmaceuticals US Inc,Healthcare,Drug Manufacturers - Specialty & Generic,USA,10940000.0,,7.25,47.36,37110597.0
+AR,Antero Resources Corp,Energy,Oil & Gas E&P,USA,10760000000.0,10.05,35.0,-3.02,4850297.0
+ARE,Alexandria Real Estate Equities Inc,Real Estate,REIT - Office,USA,8700000000.0,,49.93,-1.09,1506151.0
+ARKB,ARK 21Shares Bitcoin ETF,Financial,Exchange Traded Fund,USA,,,27.86,-0.46,1177283.0
+ARLO,Arlo Technologies Inc,Industrials,Building Products & Equipment,USA,1380000000.0,46.37,12.84,-1.38,1119144.0
+AROC,Archrock Inc,Energy,Oil & Gas Equipment & Services,USA,5340000000.0,16.34,30.43,-0.81,1333669.0
+ARQT,Arcutis Biotherapeutics Inc,Healthcare,Biotechnology,USA,3380000000.0,129.99,26.92,2.47,2039977.0
+ASAN,Asana Inc,Technology,Software - Application,USA,2069999999.9999998,,9.02,-1.53,5069581.0
+ASB,Associated Banc-Corp,Financial,Banks - Regional,USA,5550000000.0,10.26,29.37,1.03,2168130.0
+ASO,Academy Sports and Outdoors Inc,Consumer Cyclical,Specialty Retail,USA,3030000000.0,8.19,49.14,2.1,1344175.0
+ASST,Strive Inc,Financial,Asset Management,USA,2870000000.0,,29.44,-1.67,4412638.0
+ASTX,Tradr 2X Long ASTS Daily ETF,Financial,Exchange Traded Fund,USA,,,10.57,2.22,2805192.0
+ATEN,A10 Networks Inc,Technology,Software - Infrastructure,USA,1870000000.0,43.98,25.73,-1.0,749125.0
+AUB,Atlantic Union Bankshares Corp,Financial,Banks - Regional,USA,5540000000.0,11.6,38.78,0.67,1440931.0
+AVAH,Aveanna Healthcare Holdings Inc,Healthcare,Medical Care Facilities,USA,2710000000.0,10.09,12.41,0.24,2284747.0
+AVEX,AEVEX Corp,Industrials,Aerospace & Defense,USA,2040000000.0,20.54,16.07,-3.66,989787.0
+AVTX,Avalo Therapeutics Inc,Healthcare,Biotechnology,USA,829660000.0,,15.47,-1.59,1430636.0
+AXGN,Axogen Inc,Healthcare,Medical Devices,USA,2550000000.0,,43.39,0.16,1221856.0
+AXTA,Axalta Coating Systems Ltd,Basic Materials,Specialty Chemicals,USA,7040000000.0,20.26,32.89,1.95,1573393.0
+AXTX,Tradr 2X Long AXTI Daily ETF,Financial,Exchange Traded Fund,USA,,,36.21,7.86,2171615.0
+BAI,iShares A.I. Innovation and Tech Active ETF,Financial,Exchange Traded Fund,USA,,,47.54,0.96,3563785.0
+BAM,Brookfield Asset Management Ltd,Financial,Asset Management,USA,73050000000.0,25.73,44.59,0.02,2858916.0
+BAX,Baxter International Inc,Healthcare,Medical Instruments & Supplies,USA,12080000000.0,,23.37,-0.47,6569150.0
+BBNX,Beta Bionics Inc,Healthcare,Medical Devices,USA,1160000000.0,,21.51,-1.15,926012.0
+BBWI,Bath & Body Works Inc,Consumer Cyclical,Specialty Retail,USA,3320000000.0,4.27,16.45,-2.08,5732625.0
+BEAM,Beam Therapeutics Inc,Healthcare,Biotechnology,USA,2510000000.0,,24.27,-1.58,1220808.0
+BEN,Franklin Templeton Inc,Financial,Asset Management,USA,16780000000.000002,22.51,33.02,1.44,3650062.0
+BEPC,Brookfield Renewable Corp,Utilities,Utilities - Renewable,USA,5290000000.0,,28.47,0.32,1598147.0
+BETA,BETA Technologies Inc,Industrials,Aerospace & Defense,USA,5580000000.0,,23.85,3.02,1824386.0
+BEX,Tradr 2X Long BE Daily ETF,Financial,Exchange Traded Fund,USA,,,40.19,16.16,2976864.0
+BF-B,Brown-Forman Corp,Consumer Defensive,Beverages - Wineries & Distilleries,USA,12090000000.0,16.86,26.16,0.62,1505010.0
+BFLY,Butterfly Network Inc,Healthcare,Medical Devices,USA,2550000000.0,,9.39,-0.21,3747340.0
+BHVN,Biohaven Ltd,Healthcare,Biotechnology,USA,1960000000.0,,12.99,-1.52,1579122.0
+BIAF,BioAffinity Technologies Inc,Healthcare,Diagnostics & Research,USA,9250000.0,,7.93,1.28,129343.0
+BILL,BILL Holdings Inc,Technology,Software - Application,USA,3770000000.0,,44.25,-1.6,1460428.0
+BIPC,Brookfield Infrastructure Corp,Utilities,Utilities - Regulated Gas,USA,4760000000.0,,34.96,1.25,845811.0
+BITB,Bitwise Bitcoin ETF,Financial,Exchange Traded Fund,USA,,,45.57,-0.48,897584.0
+BITI,ProShares Short Bitcoin ETF,Financial,Exchange Traded Fund,USA,,,17.53,0.63,952252.0
+BITU,ProShares Ultra Bitcoin ETF,Financial,Exchange Traded Fund,USA,,,15.37,-1.09,3282222.0
+BITX,2x Bitcoin ETF,Financial,Exchange Traded Fund,USA,,,19.83,-1.2,8756919.0
+BKKT,Bakkt Inc,Technology,Software - Infrastructure,USA,383090000.0,,8.5,-6.39,1010858.0
+BKSY,BlackSky Technology Inc,Industrials,Specialty Business Services,USA,951500000.0,,23.25,0.35,783354.0
+BKV,BKV Corp,Energy,Oil & Gas E&P,USA,2390000000.0,7.85,21.81,-5.5,2011412.0
+BL,BlackLine Inc,Technology,Software - Application,USA,1630000000.0,49.97,27.99,0.36,826880.0
+BLCR,iShares Large Cap Core Active ETF,Financial,Exchange Traded Fund,USA,,,49.58,0.24,2585368.0
+BLFS,Biolife Solutions Inc,Healthcare,Medical Instruments & Supplies,USA,1880000000.0,39.8,38.49,-0.23,998549.0
+BLZE,Backblaze Inc,Technology,Software - Infrastructure,USA,816460000.0,,13.19,-2.33,1201713.0
+BMNR,BitMine Immersion Technologies Inc,Financial,Capital Markets,USA,16620000000.000002,,27.56,-1.68,32171334.0
+BMNU,T-REX 2X Long BMNR Daily Target ETF,Financial,Exchange Traded Fund,USA,,,22.73,-3.52,4550075.0
+BNC,CEA Industries Inc,Industrials,Farm & Heavy Construction Machinery,USA,251570000.0,3.34,6.11,-2.4,709529.0
+BOBS,Bob's Discount Furniture Inc,Consumer Cyclical,Specialty Retail,USA,1800000000.0,13.42,13.75,0.44,572997.0
+BOIL,ProShares Ultra Bloomberg Natural Gas 2x Shares,Financial,Exchange Traded Fund,USA,,,22.66,-7.28,7537297.0
+BOX,Box Inc,Technology,Software - Infrastructure,USA,4310000000.0,45.3,31.39,-2.88,2073283.0
+BRBR,Bellring Brands Inc,Consumer Defensive,Packaged Foods,USA,919760000.0,5.56,7.91,2.86,7210139.0
+BROS,Dutch Bros Inc,Consumer Cyclical,Restaurants,USA,6620000000.0,53.41,37.89,-1.61,3256313.0
+BRUN,Boost Run Inc,Technology,Software - Infrastructure,USA,1410000000.0,,16.77,0.3,1360893.0
+BRZE,Braze Inc,Technology,Software - Application,USA,2770000000.0,,24.37,-1.22,1277137.0
+BSOL,Bitwise Solana Staking ETF,Financial,Exchange Traded Fund,USA,,,16.79,3.77,8907611.0
+BSX,Boston Scientific Corp,Healthcare,Medical Devices,USA,63650000000.0,17.81,43.92,-1.7,15208284.0
+BSY,Bentley Systems Inc,Technology,Software - Application,USA,9500000000.0,34.65,31.44,-1.44,1889155.0
+BTC,Grayscale Bitcoin Mini Trust ETF,Financial,Exchange Traded Fund,USA,,,37.16,-0.4,1254482.0
+BTGO,BitGo Holdings Inc,Financial,Capital Markets,USA,879240000.0,,7.48,-6.15,1416445.0
+BTU,Peabody Energy Corp,Energy,Thermal Coal,USA,3100000000.0,,25.44,-0.93,1401424.0
+BUG,Global X Cybersecurity ETF,Financial,Exchange Traded Fund,USA,,,44.71,-4.16,1742271.0
+BW,Babcock & Wilcox Enterprises Inc,Industrials,Specialty Industrial Machinery,USA,934010000.0,,6.27,1.62,6482306.0
+BWIN,Baldwin Insurance Group Inc,Financial,Insurance Brokers,USA,4470000000.0,,31.85,0.03,1480154.0
+BXDC,Blackstone Digital Infrastructure Trust Inc,Real Estate,REIT - Specialty,USA,1920000000.0,,19.08,-2.5,2684406.0
+BYND,Beyond Meat Inc,Consumer Defensive,Packaged Foods,USA,152730000.0,,8.35,-9.14,2755997.0
+CADL,Candel Therapeutics Inc,Healthcare,Biotechnology,USA,843230000.0,,11.02,-4.59,799764.0
+CAI,Caris Life Sciences Inc,Healthcare,Biotechnology,USA,9040000000.0,85.9,31.98,-0.9,2919246.0
+CALX,Calix Inc,Technology,Software - Infrastructure,USA,2089999999.9999998,44.1,33.14,-0.39,831891.0
+CAPR,Capricor Therapeutics Inc,Healthcare,Biotechnology,USA,486040000.0,,8.36,-2.45,1919693.0
+CARG,CarGurus Inc,Communication Services,Internet Content & Information,USA,2790000000.0,16.99,31.3,1.0,1179664.0
+CART,Maplebear Inc,Consumer Cyclical,Internet Retail,USA,10000000000.0,23.78,43.19,-0.16,2712711.0
+CC,Chemours Company,Basic Materials,Specialty Chemicals,USA,2180000000.0,,14.46,1.9,1767479.0
+CCL,Carnival Corp Ltd,Consumer Cyclical,Travel Services,USA,30470000000.0,10.02,22.25,2.11,22098935.0
+CCOI,Cogent Communications Holdings Inc,Communication Services,Telecom Services,USA,393850000.0,,7.69,0.65,1752922.0
+CCXI,Churchill Capital Corp XI,Financial,Shell Companies,USA,692350000.0,,12.43,1.64,1478222.0
+CDE,Coeur Mining Inc,Basic Materials,Gold,USA,19760000000.0,15.79,19.22,1.48,32212492.0
+CE,Celanese Corp,Basic Materials,Chemicals,USA,5170000000.0,,47.09,-0.99,1586972.0
+CELH,Celsius Holdings Inc,Consumer Defensive,Beverages - Non-Alcoholic,USA,7080000000.0,121.06,27.99,-1.55,6528183.0
+CENX,Century Aluminum Co,Basic Materials,Aluminum,USA,3800000000.0,6.64,38.39,0.71,869712.0
+CG,Carlyle Group Inc,Financial,Asset Management,USA,14260000000.0,41.47,40.03,1.55,2039910.0
+CGGO,Capital Group Global Growth Equity ETF,Financial,Exchange Traded Fund,USA,,,40.26,0.65,1157906.0
+CGGR,Capital Group Growth ETF,Financial,Exchange Traded Fund,USA,,,48.15,0.12,1995328.0
+CHPT,ChargePoint Holdings Inc,Consumer Cyclical,Specialty Retail,USA,239770000.0,,8.93,-0.56,934073.0
+CHWY,Chewy Inc,Consumer Cyclical,Internet Retail,USA,7340000000.0,27.94,18.27,-0.27,9844754.0
+CHYM,Chime Financial Inc,Technology,Software - Application,USA,10140000000.0,,26.78,-1.07,3998139.0
+CIFR,Cipher Digital Inc,Technology,Information Technology Services,USA,7360000000.0,,17.73,-2.04,32207013.0
+CLDX,Celldex Therapeutics Inc,Healthcare,Biotechnology,USA,2440000000.0,,31.1,-1.21,2023927.0
+CLF,Cleveland-Cliffs Inc,Basic Materials,Steel,USA,6950000000.0,,12.18,-2.56,9090624.0
+CLSK,Cleanspark Inc,Financial,Capital Markets,USA,3580000000.0,,13.95,-2.17,17283030.0
+CLYM,Climb Bio Inc,Healthcare,Biotechnology,USA,669710000.0,,11.66,-1.93,1532863.0
+CMCSA,Comcast Corp,Communication Services,Telecom Services,USA,77750000000.0,7.09,21.91,-0.99,41806673.0
+CMG,Chipotle Mexican Grill,Consumer Cyclical,Restaurants,USA,39650000000.0,28.9,31.33,-2.12,13342097.0
+CNK,Cinemark Holdings Inc,Communication Services,Entertainment,USA,4380000000.0,21.0,37.77,2.14,2212979.0
+CNM,Core & Main Inc,Industrials,Industrial Distribution,USA,8119999999.999999,17.61,42.64,2.45,1936420.0
+CNP,Centerpoint Energy Inc,Utilities,Utilities - Regulated Electric,USA,24270000000.0,21.71,36.84,0.05,6859822.0
+CNX,CNX Resources Corp,Energy,Oil & Gas E&P,USA,4850000000.0,5.48,32.79,-1.86,2272992.0
+CNXC,Concentrix Corp,Technology,Information Technology Services,USA,1650000000.0,,27.08,-7.86,2705160.0
+COGT,Cogent Biosciences Inc,Healthcare,Biotechnology,USA,5610000000.0,,32.31,2.8,2979048.0
+COHX,Tradr 2X Long COHR Daily ETF,Financial,Exchange Traded Fund,USA,,,23.72,3.4,1271233.0
+COLB,Columbia Banking System Inc,Financial,Banks - Regional,USA,8390000000.000001,11.83,29.64,1.58,1847833.0
+COMP,Compass Inc,Real Estate,Real Estate Services,USA,7200000000.0,175.98,9.38,0.97,13712741.0
+CONL,GraniteShares 2x Long COIN Daily ETF,Financial,Exchange Traded Fund,USA,,,6.31,-3.96,17665062.0
+CORZ,Core Scientific Inc,Technology,Software - Infrastructure,USA,5570000000.0,,17.34,-4.3,8820633.0
+CPB,Campbells Co,Consumer Defensive,Packaged Foods,USA,5780000000.0,14.66,19.37,-2.42,7912210.0
+CPRT,Copart Inc,Industrials,Specialty Business Services,USA,25540000000.0,17.79,27.59,-1.6,10903143.0
+CQQQ,Invesco China Technology ETF,Financial,Exchange Traded Fund,USA,,,46.44,-0.3,665216.0
+CRBG,Corebridge Financial Inc,Financial,Asset Management,USA,15540000000.0,19.82,34.87,2.29,3746554.0
+CRCA,ProShares Ultra CRCL,Financial,Exchange Traded Fund,USA,,,20.47,-8.37,523456.0
+CRCG,Leverage Shares 2X Long CRCL Daily ETF,Financial,Exchange Traded Fund,USA,,,13.91,-9.03,2806954.0
+CRDU,Tradr 2X Long CRDO Daily ETF,Financial,Exchange Traded Fund,USA,,,10.69,15.44,9572870.0
+CRGY,Crescent Energy Co,Energy,Oil & Gas E&P,USA,4340000000.0,,13.15,-2.01,4535017.0
+CRI,Carters Inc,Consumer Cyclical,Apparel Retail,USA,1150000000.0,5.86,31.31,3.47,1289751.0
+CRK,Comstock Resources Inc,Energy,Oil & Gas E&P,USA,3850000000.0,7.62,13.12,-5.07,2444865.0
+CRMG,Leverage Shares 2X Long CRM Daily ETF,Financial,Exchange Traded Fund,USA,,,8.22,-3.63,1169280.0
+CRSR,Corsair Gaming Inc,Technology,Computer Hardware,USA,1480000000.0,44.52,13.66,0.81,970061.0
+CRVS,Corvus Pharmaceuticals Inc,Healthcare,Biotechnology,USA,977490000.0,,11.62,-1.53,1099645.0
+CRWG,Leverage Shares 2X Long CRWV Daily ETF,Financial,Exchange Traded Fund,USA,,,18.44,-5.73,1885930.0
+CSGP,Costar Group Inc,Real Estate,Real Estate Services,USA,11380000000.0,154.6,28.09,0.84,6662484.0
+CSQR,Csquare Inc,Technology,Information Technology Services,USA,2830000000.0,,17.01,-1.96,853503.0
+CSX,CSX Corp,Industrials,Railroads,USA,86660000000.0,27.02,46.78,-0.36,8581043.0
+CTRE,CareTrust REIT Inc,Real Estate,REIT - Healthcare Facilities,USA,8840000000.0,23.58,37.41,0.24,1684627.0
+CTRI,Centuri Holdings Inc,Utilities,Utilities - Regulated Gas,USA,2069999999.9999998,66.61,20.51,0.59,1844988.0
+CUBE,CubeSmart,Real Estate,REIT - Industrial,USA,8550000000.000001,25.86,37.82,0.56,2615670.0
+CURB,Curbline Properties Corp,Real Estate,REIT - Retail,USA,3270000000.0,104.71,28.46,0.07,1681777.0
+CUZ,Cousins Properties Inc,Real Estate,REIT - Office,USA,4720000000.0,732.74,28.65,0.56,1384661.0
+CWEN,Clearway Energy Inc,Utilities,Utilities - Renewable,USA,6110000000.0,37.65,29.77,1.99,1144131.0
+CWVX,Tradr 2X Long CRWV Daily ETF,Financial,Exchange Traded Fund,USA,,,15.46,-5.44,1171348.0
+CXW,CoreCivic Inc,Industrials,Security & Protection Services,USA,3180000000.0,25.6,32.13,-6.49,2901909.0
+DAMD,Defiance Daily Target 2X Short AMD ETF,Financial,Exchange Traded Fund,USA,,,8.42,-0.71,5083899.0
+DAN,Dana Inc,Consumer Cyclical,Auto Parts,USA,2920000000.0,,27.14,-0.77,1595175.0
+DBX,Dropbox Inc,Technology,Software - Infrastructure,USA,7030000000.0,17.95,32.32,-1.04,4044006.0
+DFAE,Dimensional Emerging Core Equity Market ETF,Financial,Exchange Traded Fund,USA,,,39.94,1.11,896865.0
+DFDV,DeFi Development Corp,Financial,Asset Management,USA,197030000.0,,6.04,4.32,2945305.0
+DFNS,T3 Defense Inc,Industrials,Aerospace & Defense,USA,22130000.0,,7.79,-1.02,158376.0
+DFTX,Definium Therapeutics Inc,Healthcare,Biotechnology,USA,4860000000.0,,36.17,-1.52,2682911.0
+DKNG,DraftKings Inc,Consumer Cyclical,Gambling,USA,19590000000.0,,22.02,3.53,20470523.0
+DLLL,GraniteShares 2x Long DELL Daily ETF,Financial,Exchange Traded Fund,USA,,,35.67,9.82,3288853.0
+DNA,Ginkgo Bioworks Holdings Inc,Healthcare,Biotechnology,USA,717850000.0,,10.66,4.0,2312459.0
+DNLI,Denali Therapeutics Inc,Healthcare,Biotechnology,USA,3260000000.0,,20.39,-0.39,1257680.0
+DOCS,Doximity Inc,Healthcare,Health Information Services,USA,4700000000.0,31.25,26.35,1.19,2006275.0
+DOW,Dow Inc,Basic Materials,Chemicals,USA,20240000000.0,,28.02,-1.89,8842135.0
+DRIP,Direxion Daily S&P Oil & Gas Exp. & Prod. Bear 2X ETF,Financial,Exchange Traded Fund,USA,,,36.61,2.75,966065.0
+DRS,Leonardo DRS Inc,Industrials,Aerospace & Defense,USA,9920000000.0,31.0,37.16,-1.14,654277.0
+DUST,Direxion Daily Gold Miners Index Bear 2X ETF,Financial,Exchange Traded Fund,USA,,,36.0,-0.83,864120.0
+DVN,Devon Energy Corp,Energy,Oil & Gas E&P,USA,51760000000.0,11.14,47.05,-3.78,10760724.0
+DXYZ,Destiny Tech100 Inc,Financial,Asset Management,USA,1460000000.0,2.96,30.62,5.08,802959.0
+DYN,Dyne Therapeutics Inc,Healthcare,Biotechnology,USA,2990000000.0,,16.03,-2.91,1612918.0
+ELAN,Elanco Animal Health Inc,Healthcare,Drug Manufacturers - Specialty & Generic,USA,11150000000.0,,22.31,-0.18,6454620.0
+ELVN,Enliven Therapeutics Inc,Healthcare,Biotechnology,USA,3280000000.0,,44.75,-0.93,963790.0
+ENOV,Enovis Corp,Healthcare,Medical Devices,USA,1060000000.0,,18.46,1.04,1289134.0
+ENPH,Enphase Energy Inc,Technology,Solar,USA,4280000000.0000005,32.11,32.4,-1.28,4155024.0
+ENR,Energizer Holdings Inc,Industrials,Electrical Equipment & Parts,USA,1510000000.0,18.72,22.0,-0.9,745669.0
+EPD,Enterprise Products Partners L P,Energy,Oil & Gas Midstream,USA,79360000000.0,12.77,36.75,-1.4,5747065.0
+EPRT,Essential Properties Realty Trust Inc,Real Estate,REIT - Retail,USA,5780000000.0,20.62,26.53,0.23,1897936.0
+EQPT,Equipmentshare.Com Inc,Industrials,Rental & Leasing Services,USA,4400000000.0,223.87,17.35,6.31,4279211.0
+ERAS,Erasca Inc,Healthcare,Biotechnology,USA,4980000000.0,,14.25,-1.86,3218199.0
+EROC,ERock Inc,Industrials,Specialty Industrial Machinery,USA,2760000000.0,,12.6,4.48,2279117.0
+ESI,Element Solutions Inc,Basic Materials,Specialty Chemicals,USA,8700000000.0,48.66,35.71,3.51,3689825.0
+ETH,Grayscale Ethereum Staking Mini ETF,Financial,Exchange Traded Fund,USA,,,25.72,-0.08,2087906.0
+ETHA,iShares Ethereum Trust ETF,Financial,Exchange Traded Fund,USA,,,20.31,-0.1,26023005.0
+ETHE,Grayscale Ethereum Staking ETF,Financial,Exchange Traded Fund,USA,,,21.64,-0.14,2945245.0
+ETHT,ProShares Ultra Ether ETF,Financial,Exchange Traded Fund,USA,,,19.65,-0.3,938838.0
+ETHU,2x Ether ETF,Financial,Exchange Traded Fund,USA,,,30.54,-0.41,6129491.0
+ETRA,Electra Therapeutics Inc,Healthcare,Biotechnology,USA,724960000.0,,11.55,-2.28,438461.0
+EUFN,iShares MSCI Europe Financials ETF,Financial,Exchange Traded Fund,USA,,,40.99,1.09,2107027.0
+EWTX,Edgewise Therapeutics Inc,Healthcare,Biotechnology,USA,4269999999.9999995,,39.34,-4.42,2487516.0
+EWZ,iShares MSCI Brazil ETF,Financial,Exchange Traded Fund,USA,,,36.82,-0.24,15939882.0
+EXC,Exelon Corp,Utilities,Utilities - Regulated Electric,USA,41640000000.0,14.78,40.34,0.35,6910496.0
+EXLS,ExlService Holdings Inc,Technology,Information Technology Services,USA,5270000000.0,21.9,34.75,-1.17,1356090.0
+EXTR,Extreme Networks Inc,Technology,Communication Equipment,USA,2840000000.0,68.54,21.52,-0.55,1771565.0
+EYE,National Vision Holdings Inc,Consumer Cyclical,Specialty Retail,USA,1310000000.0,26.71,16.53,0.73,1337439.0
+FA,First Advantage Corp,Industrials,Specialty Business Services,USA,3370000000.0,135.55,19.6,-1.61,1128326.0
+FBIN,Fortune Brands Innovations Inc,Industrials,Building Products & Equipment,USA,4700000000.0,31.89,39.38,3.66,1950940.0
+FBL,GraniteShares 2x Long META Daily ETF,Financial,Exchange Traded Fund,USA,,,34.32,-6.64,1800971.0
+FCEL,Fuelcell Energy Inc,Industrials,Electrical Equipment & Parts,USA,1320000000.0,,16.49,0.61,3779427.0
+FE,Firstenergy Corp,Utilities,Utilities - Regulated Electric,USA,25060000000.0,23.11,43.3,0.25,4121355.0
+FENY,Fidelity MSCI Energy Index ETF,Financial,Exchange Traded Fund,USA,,,34.21,-0.93,1522999.0
+FETH,Fidelity Ethereum Fund,Financial,Exchange Traded Fund,USA,,,26.82,-0.04,1231644.0
+FGI,FGI Industries Ltd,Consumer Cyclical,"Furnishings, Fixtures & Appliances",USA,14790000.0,,7.66,-4.84,9182.0
+FIBK,First Interstate BancSystem Inc,Financial,Banks - Regional,USA,3520000000.0,11.39,36.91,1.1,1646962.0
+FIG,Figma Inc,Technology,Software - Application,USA,11110000000.0,,20.85,-2.3,10433074.0
+FIGR,Figure Technology Solutions Inc,Financial,Capital Markets,USA,7160000000.0,37.67,31.9,-2.33,5001605.0
+FIGS,Figs Inc,Consumer Cyclical,Apparel Manufacturing,USA,2230000000.0,41.52,13.42,7.45,4450105.0
+FIS,Fidelity National Information Services Inc,Technology,Information Technology Services,USA,18260000000.0,5.44,35.41,1.2,6238979.0
+FISV,Fiserv Inc,Technology,Information Technology Services,USA,24720000000.0,8.92,46.48,1.09,6687047.0
+FIVN,Five9 Inc,Technology,Software - Infrastructure,USA,2670000000.0,52.21,35.77,-2.43,1461689.0
+FLNC,Fluence Energy Inc,Utilities,Utilities - Renewable,USA,1450000000.0,,7.85,5.23,8565626.0
+FLY,Firefly Aerospace Inc,Industrials,Aerospace & Defense,USA,4080000000.0,,24.36,5.5,5293398.0
+FLYW,Flywire Corp,Technology,Software - Infrastructure,USA,2120000000.0,66.01,17.4,1.81,1695660.0
+FMC,FMC Corp,Basic Materials,Agricultural Inputs,USA,1490000000.0,,9.58,-0.1,3891606.0
+FND,Floor & Decor Holdings Inc,Consumer Cyclical,Home Improvement Retail,USA,5010000000.0,21.96,47.06,1.38,1605499.0
+FNF,Fidelity National Financial Inc,Financial,Insurance - Specialty,USA,11110000000.0,14.42,41.42,1.47,2752415.0
+FNGU,MicroSectors FANG+ 3X Leveraged ETNs,Financial,Exchange Traded Fund,USA,,,35.72,0.11,1950973.0
+FOUR,Shift4 Payments Inc,Technology,Software - Infrastructure,USA,3040000000.0,61.86,38.45,0.76,1679836.0
+FPS,Forgent Power Solutions Inc,Industrials,Electrical Equipment & Parts,USA,11860000000.0,144.92,38.97,0.05,5801540.0
+FRVO,Fervo Energy Co,Utilities,Utilities - Renewable,USA,4470000000.0,,15.18,-9.16,10460425.0
+FSLY,Fastly Inc,Technology,Software - Application,USA,3980000000.0,,24.96,-6.45,9673681.0
+FTRE,Fortrea Holdings Inc,Healthcare,Biotechnology,USA,1890000000.0,,19.89,-0.65,708906.0
+FUBO,fuboTV Inc,Communication Services,Broadcasting,USA,1050000000.0,2.23,9.64,-0.92,770703.0
+FUN,Six Flags Entertainment Corp,Consumer Cyclical,Leisure,USA,1260000000.0,,12.32,-0.65,1091420.0
+FWDI,Forward Industries Inc,Financial,Capital Markets,USA,621790000.0,,8.42,0.84,2329312.0
+FWRG,First Watch Restaurant Group Inc,Consumer Cyclical,Restaurants,USA,625760000.0,35.89,10.14,-0.78,1012537.0
+G,Genpact Ltd,Technology,Information Technology Services,USA,5560000000.0,9.86,33.1,-0.81,1383464.0
+GAP,Gap Inc,Consumer Cyclical,Apparel Retail,USA,7660000000.0,6.52,21.82,0.6,4213357.0
+GBCI,Glacier Bancorp Inc,Financial,Banks - Regional,USA,5830000000.0,18.31,44.75,0.9,1071408.0
+GDXD,MicroSectors Gold Miners -3X Inverse Leveraged ETNs,Financial,Exchange Traded Fund,USA,,,19.07,-1.9,1867520.0
+GEN,Gen Digital Inc,Technology,Software - Infrastructure,USA,12940000000.0,12.55,21.62,-6.29,29875948.0
+GENB,Generate Biomedicines Inc,Healthcare,Biotechnology,USA,1940000000.0,,15.15,-5.25,1267057.0
+GEO,Geo Group Inc,Industrials,Security & Protection Services,USA,4110000000.0000005,14.73,31.22,-2.32,1421889.0
+GFL,GFL Environmental Inc,Industrials,Waste Management,USA,18430000000.0,,42.27,1.15,2161482.0
+GFS,GlobalFoundries Inc,Technology,Semiconductors,USA,26890000000.0,38.25,49.0,4.14,4944461.0
+GIS,General Mills Inc,Consumer Defensive,Packaged Foods,USA,17990000000.0,,33.64,-3.42,10601545.0
+GLL,ProShares UltraShort Gold -2x Shares,Financial,Exchange Traded Fund,USA,,,23.43,-0.85,2255719.0
+GLND,Greenland Energy Co,Energy,Oil & Gas E&P,USA,242270000.0,,5.54,3.55,120340636.0
+GLPI,Gaming and Leisure Properties Inc,Real Estate,REIT - Specialty,USA,11280000000.0,11.38,38.79,0.67,2525941.0
+GLUE,Monte Rosa Therapeutics Inc,Healthcare,Biotechnology,USA,1000000000.0,,11.77,0.43,802136.0
+GLWG,Leverage Shares 2X Long GLW Daily ETF,Financial,Exchange Traded Fund,USA,,,13.76,3.08,574383.0
+GLXY,Galaxy Digital Inc,Financial,Capital Markets,USA,9480000000.0,,24.24,-3.77,4015992.0
+GME,Gamestop Corp,Consumer Cyclical,Specialty Retail,USA,11800000000.0,15.51,23.39,-6.51,13239432.0
+GPGI,GPGI Inc,Industrials,Metal Fabrication,USA,3370000000.0,,11.61,-2.68,1234196.0
+GPRE,Green Plains Inc,Basic Materials,Chemicals,USA,1050000000.0,9.68,14.92,-0.6,1491964.0
+GRML,Greenland Mines Ltd,Basic Materials,Other Precious Metals & Mining,USA,129410000.0,,14.66,-1.54,22892109.0
+GRND,Grindr Inc,Technology,Software - Application,USA,2740000000.0,30.72,15.77,-0.63,1412752.0
+GRPN,Groupon Inc,Communication Services,Internet Content & Information,USA,866170000.0,,21.3,1.96,690300.0
+GTES,Gates Industrial Corp Ltd,Industrials,Specialty Industrial Machinery,USA,6800000000.0,19.02,26.86,2.28,1562054.0
+GTLB,Gitlab Inc,Technology,Software - Infrastructure,USA,7810000000.0,,46.85,-3.65,3899961.0
+GTX,Garrett Motion Inc,Consumer Cyclical,Auto Parts,USA,4800000000.0,14.07,25.72,1.66,1472069.0
+GXO,GXO Logistics Inc,Industrials,Integrated Freight & Logistics,USA,5180000000.0,39.86,45.2,2.33,1257303.0
+HAL,Halliburton Co,Energy,Oil & Gas Equipment & Services,USA,27290000000.0,17.16,32.76,0.0,9834425.0
+HAPN,Happen Inc,Financial,Banks - Regional,USA,1730000000.0,9.05,15.03,-2.08,2185260.0
+HAWK,HawkEye 360 Inc,Industrials,Aerospace & Defense,USA,1580000000.0,,16.1,0.63,902225.0
+HESM,Hess Midstream LP,Energy,Oil & Gas Midstream,USA,7890000000.0,13.19,38.25,-0.57,1522010.0
+HGV,Hilton Grand Vacations Inc,Consumer Cyclical,Resorts & Casinos,USA,2780000000.0,20.23,35.77,1.97,759983.0
+HIMS,Hims & Hers Health Inc,Healthcare,Drug Manufacturers - Specialty & Generic,USA,6860000000.0,,29.42,0.48,8199575.0
+HIW,Highwoods Properties Inc,Real Estate,REIT - Office,USA,3320000000.0,20.13,30.09,0.27,913464.0
+HL,Hecla Mining Co,Basic Materials,Other Precious Metals & Mining,USA,12220000000.0,23.32,18.19,1.39,22191823.0
+HLF,Herbalife Ltd,Consumer Defensive,Packaged Foods,USA,1320000000.0,8.11,12.55,2.78,2117134.0
+HODL,VanEck Bitcoin ETF,Financial,Exchange Traded Fund,USA,,,23.76,-0.38,549820.0
+HOG,Harley-Davidson Inc,Consumer Cyclical,Recreational Vehicles,USA,2650000000.0,15.74,25.45,-0.27,2295726.0
+HP,Helmerich & Payne Inc,Energy,Oil & Gas Drilling,USA,3850000000.0,,38.57,-3.14,1055795.0
+HPQ,HP Inc,Technology,Computer Hardware,USA,28230000000.0,11.93,31.3,0.51,12013785.0
+HRB,H&R Block Inc,Consumer Cyclical,Personal Services,USA,5200000000.0,7.37,42.19,-0.99,1844047.0
+HTFL,Heartflow Inc,Healthcare,Health Information Services,USA,4280000000.0000005,,49.17,1.05,1159353.0
+HUBG,Hub Group Inc,Industrials,Integrated Freight & Logistics,USA,1860000000.0,17.46,30.34,1.03,1413234.0
+HYMC,Hycroft Mining Holding Corp,Basic Materials,Gold,USA,2000000000.0,,21.48,2.82,1772767.0
+IAUM,iShares Gold Trust Micro,Financial,Exchange Traded Fund,USA,,,42.77,0.42,2576032.0
+IBIT,iShares Bitcoin Trust ETF,Financial,Exchange Traded Fund,USA,,,47.57,-0.5,37632105.0
+IBRX,ImmunityBio Inc,Healthcare,Biotechnology,USA,8950000000.0,,8.44,-2.31,5819350.0
+IE,Ivanhoe Electric Inc,Basic Materials,Copper,USA,1690000000.0,,10.56,5.71,2070554.0
+ILF,iShares Latin America 40 ETF,Financial,Exchange Traded Fund,USA,,,34.75,0.29,2147424.0
+IMMX,Immix Biopharma Inc,Healthcare,Biotechnology,USA,784790000.0,,10.97,-6.24,1828422.0
+IMNM,Immunome Inc,Healthcare,Biotechnology,USA,2430000000.0,,21.41,-4.16,2421688.0
+IMVT,Immunovant Inc,Healthcare,Biotechnology,USA,6880000000.0,,33.3,-2.06,2350111.0
+INDV,Indivior Pharmaceuticals Inc,Healthcare,Drug Manufacturers - Specialty & Generic,USA,4230000000.0000005,12.72,35.82,-0.5,1098489.0
+INFQ,Infleqtion Inc,Technology,Software - Infrastructure,USA,3270000000.0,,14.51,1.47,6694672.0
+INGM,Ingram Micro Holding Corp,Technology,Information Technology Services,USA,6210000000.0,14.69,26.98,2.39,1961492.0
+INTW,GraniteShares 2x Long INTC Daily ETF,Financial,Exchange Traded Fund,USA,,,33.01,-7.01,5073744.0
+IONQ,IonQ Inc,Technology,Computer Hardware,USA,18430000000.0,,45.48,1.11,27579221.0
+IONS,Ionis Pharmaceuticals Inc,Healthcare,Biotechnology,USA,7400000000.0,,44.5,1.57,6202420.0
+IONX,Defiance Daily Target 2X Long IONQ ETF,Financial,Exchange Traded Fund,USA,,,29.5,2.18,1078808.0
+IOT,Samsara Inc,Technology,Software - Infrastructure,USA,22230000000.0,246.49,37.96,-3.46,5208001.0
+IOVA,Iovance Biotherapeutics Inc,Healthcare,Biotechnology,USA,4980000000.0,,11.0,1.85,12633884.0
+IP,International Paper Co,Consumer Cyclical,Packaging & Containers,USA,18550000000.0,,35.02,0.4,4466151.0
+IRDM,Iridium Communications Inc,Communication Services,Telecom Services,USA,5170000000.0,55.55,48.75,-0.29,1077617.0
+IRE,Defiance Daily Target 2X Long IREN ETF,Financial,Exchange Traded Fund,USA,,,10.7,-8.78,6717940.0
+IREX,Tradr 2X Long IREN Daily ETF,Financial,Exchange Traded Fund,USA,,,15.64,-8.72,1627112.0
+IREZ,Tradr 2X Short IREN Daily ETF,Financial,Exchange Traded Fund,USA,,,8.46,8.6,4694286.0
+IVZ,Invesco Ltd,Financial,Asset Management,USA,13650000000.0,,30.92,0.78,7375379.0
+IYZ,iShares U.S. Telecommunications ETF,Financial,Exchange Traded Fund,USA,,,41.58,0.22,315542.0
+JAN,Janus Living Inc,Real Estate,REIT - Residential,USA,9250000000.0,,30.05,-0.5,1125966.0
+JANX,Janux Therapeutics Inc,Healthcare,Biotechnology,USA,996530000.0,,16.3,-2.28,720172.0
+JEF,Jefferies Financial Group Inc,Financial,Capital Markets,USA,10990000000.0,13.29,47.68,3.11,1922790.0
+JETS,ESS U.S.Global Jets ETF,Financial,Exchange Traded Fund,USA,,,28.98,1.83,4166684.0
+JMKE,Jersey Mike's Subs Inc,Consumer Cyclical,Restaurants,USA,5400000000.0,,16.99,-0.99,2471708.0
+KBH,KB Home,Consumer Cyclical,Residential Construction,USA,2920000000.0,13.49,48.01,0.76,1521674.0
+KBR,KBR Inc,Industrials,Engineering & Construction,USA,4350000000.0,10.42,34.54,-0.78,1403354.0
+KD,Kyndryl Holdings Inc,Technology,Information Technology Services,USA,2530000000.0,32.34,11.6,-1.19,3987005.0
+KDP,Keurig Dr Pepper Inc,Consumer Defensive,Beverages - Non-Alcoholic,USA,43480000000.0,32.38,31.95,3.47,8853919.0
+KHC,Kraft Heinz Co,Consumer Defensive,Packaged Foods,USA,28020000000.0,,23.63,-0.96,10454843.0
+KMI,Kinder Morgan Inc,Energy,Oil & Gas Midstream,USA,68470000000.0,19.84,30.75,-1.6,10020006.0
+KMPR,Kemper Corp,Financial,Insurance - Property & Casualty,USA,1490000000.0,,25.32,0.48,793602.0
+KMT,Kennametal Inc,Industrials,Tools & Accessories,USA,2370000000.0,7.05,31.03,3.19,1234501.0
+KOLD,ProShares UltraShort Bloomberg Natural Gas -2x Shares,Financial,Exchange Traded Fund,USA,,,24.69,6.88,5218644.0
+KORU,Direxion Daily MSCI South Korea Bull 3X ETF,Financial,Exchange Traded Fund,USA,,,21.59,7.2,15970335.0
+KRC,Kilroy Realty Corp,Real Estate,REIT - Office,USA,4019999999.9999995,24.1,34.23,0.53,1062680.0
+KRMN,Karman Holdings Inc,Industrials,Aerospace & Defense,USA,4730000000.0,127.1,35.69,2.21,4870957.0
+KSS,Kohl's Corp,Consumer Cyclical,Department Stores,USA,2029999999.9999998,7.81,17.9,3.83,4157799.0
+KTOS,Kratos Defense & Security Solutions Inc,Industrials,Aerospace & Defense,USA,8560000000.000001,262.33,45.62,-2.98,3190723.0
+KURA,Kura Oncology Inc,Healthcare,Biotechnology,USA,957220000.0,,10.76,-0.92,1227274.0
+KVYO,Klaviyo Inc,Technology,Software - Application,USA,4500000000.0,745.28,15.8,-1.92,3781128.0
+LABD,Direxion Daily S&P Biotech Bear 3X ETF,Financial,Exchange Traded Fund,USA,,,7.42,2.34,22300782.0
+LABX,Tradr 2X Long ALAB Daily ETF,Financial,Exchange Traded Fund,USA,,,15.81,1.8,1036412.0
+LASR,nLIGHT Inc,Technology,Semiconductors,USA,2330000000.0,,40.33,-0.71,458751.0
+LAUR,Laureate Education Inc,Consumer Defensive,Education & Training Services,USA,5150000000.0,16.79,37.4,-1.86,849179.0
+LAZ,Lazard Inc,Financial,Capital Markets,USA,3580000000.0,18.0,36.72,1.66,938470.0
+LBRT,Liberty Energy Inc,Energy,Oil & Gas Equipment & Services,USA,3090000000.0,25.73,18.94,3.84,5305484.0
+LEGN,Legend Biotech Corp ADR,Healthcare,Biotechnology,USA,3700000000.0,,19.11,0.26,1428328.0
+LEVI,Levi Strauss & Co,Consumer Cyclical,Apparel Manufacturing,USA,7590000000.0,16.15,19.73,0.05,2132891.0
+LIFE,Ethos Technologies Inc,Financial,Insurance Brokers,USA,2190000000.0,,34.3,-2.86,1263347.0
+LITX,Tradr 2X Long LITE Daily ETF,Financial,Exchange Traded Fund,USA,,,32.08,2.66,1828609.0
+LKQ,LKQ Corp,Consumer Cyclical,Auto Parts,USA,5890000000.0,12.83,23.29,1.26,3458160.0
+LMND,Lemonade Inc,Financial,Insurance - Property & Casualty,USA,3480000000.0,,44.93,-0.77,1141189.0
+LNC,Lincoln National Corp,Financial,Insurance - Life,USA,7980000000.0,3.61,41.69,0.72,1120290.0
+LOFF,Direxion Daily SpaceX Bull 2X ETF,Financial,Exchange Traded Fund,USA,,,16.43,0.61,1554506.0
+LPTH,Lightpath Technologies Inc,Technology,Electronic Components,USA,698960000.0,,9.98,-0.8,1502374.0
+LTH,Life Time Group Holdings Inc,Consumer Cyclical,Leisure,USA,8930000000.0,21.85,39.97,0.28,1986130.0
+LUNR,Intuitive Machines Inc,Industrials,Aerospace & Defense,USA,3570000000.0,,15.61,-0.57,6593392.0
+LUV,Southwest Airlines Co,Industrials,Airlines,USA,20880000000.0,25.89,42.68,2.72,6981509.0
+LVS,Las Vegas Sands Corp,Consumer Cyclical,Resorts & Casinos,USA,25250000000.0,15.19,38.99,0.88,3886700.0
+LW,Lamb Weston Holdings Inc,Consumer Defensive,Packaged Foods,USA,5990000000.0,20.89,43.58,-1.78,1733642.0
+LYFT,Lyft Inc,Technology,Software - Application,USA,5630000000.0,2.08,14.86,0.78,5132791.0
+LYTE,Roundhill Photonics & Optics ETF,Financial,Exchange Traded Fund,USA,,,25.44,0.36,514024.0
+M,Macy's Inc,Consumer Cyclical,Department Stores,USA,5910000000.0,8.27,22.64,1.48,4777122.0
+MAIR,Madison Air Solutions Corp,Industrials,Building Products & Equipment,USA,12620000000.0,,25.16,3.24,2120442.0
+MARA,MARA Holdings Inc,Financial,Capital Markets,USA,4850000000.0,,12.55,-2.86,36795572.0
+MBGL,Mobility Global Inc,Technology,Software - Infrastructure,USA,5270000000.0,,17.87,-2.56,5493615.0
+MDLN,Medline Inc,Healthcare,Medical Instruments & Supplies,USA,45620000000.0,40.69,34.7,0.12,7797835.0
+METC,Ramaco Resources Inc,Basic Materials,Coking Coal,USA,522380000.0,,9.02,-1.31,1604468.0
+METU,Direxion Daily META Bull 2X ETF,Financial,Exchange Traded Fund,USA,,,33.03,-6.67,5671331.0
+MGM,MGM Resorts International,Consumer Cyclical,Resorts & Casinos,USA,8199999999.999999,19.72,32.58,-3.29,11255586.0
+MGNI,Magnite Inc,Communication Services,Advertising Agencies,USA,3440000000.0,21.95,23.97,-0.42,1555926.0
+MGY,Magnolia Oil & Gas Corp,Energy,Oil & Gas E&P,USA,5710000000.0,10.56,24.11,-2.55,4089640.0
+MIAX,Miami International Holdings Inc,Financial,Capital Markets,USA,3460000000.0,44.95,34.9,-2.08,1589683.0
+MIR,Mirion Technologies Inc,Industrials,Specialty Industrial Machinery,USA,3880000000.0,176.76,15.59,-0.7,1934014.0
+MKC,McCormick & Co Inc,Consumer Defensive,Packaged Foods,USA,12900000000.0,7.98,47.94,0.25,2687495.0
+MLYS,Mineralys Therapeutics Inc,Healthcare,Biotechnology,USA,2290000000.0,,25.86,-2.75,1192717.0
+MMED,MiniMed Group Inc,Healthcare,Medical Instruments & Supplies,USA,5620000000.0,,19.98,-2.25,2554395.0
+MNRO,Monro Inc,Consumer Cyclical,Auto Parts,USA,429570000.0,68.39,13.74,-1.72,761215.0
+MNST,Monster Beverage Corp,Consumer Defensive,Beverages - Non-Alcoholic,USA,84450000000.0,40.01,43.11,1.03,8977373.0
+MNTN,MNTN Inc,Technology,Software - Application,USA,823580000.0,14.66,11.01,0.92,370298.0
+MOS,Mosaic Company,Basic Materials,Agricultural Inputs,USA,7310000000.0,,23.01,-2.87,9100896.0
+MP,MP Materials Corp,Basic Materials,Other Industrial Metals & Mining,USA,8700000000.0,,48.83,-0.95,3853066.0
+MRAM,Everspin Technologies Inc,Technology,Semiconductors,USA,449740000.0,,18.47,3.3,991103.0
+MRP,Millrose Properties Inc,Real Estate,REIT - Residential,USA,4190000000.0000005,9.48,27.19,0.48,1862208.0
+MSFL,GraniteShares 2x Long MSFT Daily ETF,Financial,Exchange Traded Fund,USA,,,26.71,7.4,723151.0
+MSFU,Direxion Daily MSFT Bull 2X ETF,Financial,Exchange Traded Fund,USA,,,39.82,7.3,6483793.0
+MSTU,T-Rex 2X Long MSTR Daily Target ETF,Financial,Exchange Traded Fund,USA,,,42.84,-3.71,4252723.0
+MSTX,Defiance Daily Target 2x Long MSTR ETF,Financial,Exchange Traded Fund,USA,,,19.67,-3.86,5582323.0
+MSTY,YieldMax MSTR Option Income Strategy ETF,Financial,Exchange Traded Fund,USA,,,16.49,-2.08,2585418.0
+MTCH,Match Group Inc,Communication Services,Internet Content & Information,USA,9310000000.0,14.32,40.55,-0.61,2347708.0
+MTG,MGIC Investment Corp,Financial,Insurance - Specialty,USA,5840000000.0,8.9,28.48,-0.87,2025734.0
+MUD,Direxion Daily MU Bear 1X ETF,Financial,Exchange Traded Fund,USA,,,8.95,-0.33,4952070.0
+MULL,GraniteShares 2x Long MU Daily ETF,Financial,Exchange Traded Fund,USA,,,26.41,0.3,4642106.0
+MUR,Murphy Oil Corp,Energy,Oil & Gas E&P,USA,5210000000.0,18.01,36.33,-2.81,1572237.0
+MUU,Direxion Daily MU Bull 2X ETF,Financial,Exchange Traded Fund,USA,,,37.85,0.37,17254507.0
+MUZ,Defiance Daily Target 2X Short MU ETF,Financial,Exchange Traded Fund,USA,,,6.66,-0.89,8584321.0
+MVLL,GraniteShares 2x Long MRVL Daily ETF,Financial,Exchange Traded Fund,USA,,,35.44,2.34,1482119.0
+MWA,Mueller Water Products Inc,Industrials,Specialty Industrial Machinery,USA,3380000000.0,15.32,21.63,0.75,1191342.0
+MWH,SOLV Energy Inc,Utilities,Utilities - Renewable,USA,5100000000.0,,25.2,0.6,1381132.0
+NAIL,Direxion Daily Homebuilders & Supplies Bull 3X ETF,Financial,Exchange Traded Fund,USA,,,30.58,3.7,1570047.0
+NASA,Tema Space Innovators ETF,Financial,Exchange Traded Fund,USA,,,24.54,0.86,933187.0
+NAVN,Navan Inc,Technology,Software - Application,USA,5060000000.0,,19.42,-0.08,2281587.0
+NBIG,Leverage Shares 2X Long NBIS Daily ETF,Financial,Exchange Traded Fund,USA,,,18.47,-5.09,2009002.0
+NBIL,GraniteShares 2x Long NBIS Daily ETF,Financial,Exchange Traded Fund,USA,,,26.79,-5.07,2615898.0
+NBIZ,Tradr 2X Short NBIS Daily ETF,Financial,Exchange Traded Fund,USA,,,20.53,4.85,1840738.0
+NCLH,Norwegian Cruise Line Holdings Ltd,Consumer Cyclical,Travel Services,USA,6710000000.0,9.23,14.61,2.96,18789298.0
+NCNO,Ncino Inc,Technology,Software - Application,USA,2049999999.9999998,64.34,19.41,-2.8,1237792.0
+NE,Noble Corp Plc,Energy,Oil & Gas Drilling,USA,6840000000.0,46.29,42.82,-2.1,957886.0
+NEBX,Tradr 2X Long NBIS Daily ETF,Financial,Exchange Traded Fund,USA,,,27.42,-5.25,1549454.0
+NEO,Neogenomics Inc,Healthcare,Diagnostics & Research,USA,2480000000.0,,19.33,-1.18,2019688.0
+NESR,National Energy Services Reunited Corp,Energy,Oil & Gas Equipment & Services,USA,3240000000.0,35.29,32.13,-1.95,1405427.0
+NFXL,Direxion Daily NFLX Bull 2X ETF,Financial,Exchange Traded Fund,USA,,,14.49,-1.63,589799.0
+NI,NiSource Inc,Utilities,Utilities - Regulated Gas,USA,18900000000.0,20.88,39.42,0.77,5005020.0
+NIQ,NIQ Global Intelligence plc,Technology,Software - Application,USA,5260000000.0,,17.83,-1.71,716161.0
+NKE,Nike Inc,Consumer Cyclical,Footwear & Accessories,USA,53040000000.0,17.04,35.75,-0.67,38245982.0
+NMAX,Newsmax Inc,Communication Services,Broadcasting,USA,1400000000.0,,10.87,-1.0,686376.0
+NMRK,Newmark Group Inc,Real Estate,Real Estate Services,USA,2370000000.0,16.24,13.06,-0.31,2511460.0
+NN,NextNav Inc,Technology,Software - Infrastructure,USA,2430000000.0,,14.38,-0.48,2546512.0
+NNE,Nano Nuclear Energy Inc,Industrials,Specialty Industrial Machinery,USA,912330000.0,,16.99,-0.18,1328921.0
+NNN,NNN REIT Inc,Real Estate,REIT - Retail,USA,7930000000.0,20.35,41.3,0.29,2005377.0
+NOG,Northern Oil and Gas Inc,Energy,Oil & Gas E&P,USA,2480000000.0,,23.29,-1.31,1542491.0
+NOV,NOV Inc,Energy,Oil & Gas Equipment & Services,USA,7080000000.0,76.24,19.86,-0.2,2822532.0
+NOWL,GraniteShares 2x Long NOW Daily ETF,Financial,Exchange Traded Fund,USA,,,7.25,-3.2,2959737.0
+NRIX,Nurix Therapeutics Inc,Healthcare,Biotechnology,USA,2390000000.0,,23.01,-2.71,1540070.0
+NTLA,Intellia Therapeutics Inc,Healthcare,Biotechnology,USA,1650000000.0,,11.75,-3.37,2985547.0
+NTSK,Netskope Inc,Technology,Software - Infrastructure,USA,7220000000.0,,17.67,-4.85,5859305.0
+NUAI,New Era Energy & Digital Inc,Technology,Software - Infrastructure,USA,752310000.0,,7.06,1.73,7851912.0
+NVAX,Novavax Inc,Healthcare,Biotechnology,USA,1750000000.0,,10.63,0.28,3910299.0
+NVDL,GraniteShares 2x Long NVDA Daily ETF,Financial,Exchange Traded Fund,USA,,,35.72,0.45,5906311.0
+NVDX,T-Rex 2X Long NVIDIA Daily Target ETF,Financial,Exchange Traded Fund,USA,,,20.11,0.4,3681915.0
+NVST,Envista Holdings Corp,Healthcare,Medical Instruments & Supplies,USA,3850000000.0,41.61,23.95,-0.5,3245286.0
+NVTS,Navitas Semiconductor Corp,Technology,Semiconductors,USA,3190000000.0,,12.2,3.04,9899649.0
+NWS,News Corp,Communication Services,Entertainment,USA,15980000000.0,30.91,31.75,0.6,698006.0
+NWSA,News Corp,Communication Services,Entertainment,USA,15980000000.0,27.73,28.49,0.18,2835226.0
+NXTC,Nextcure Inc,Healthcare,Biotechnology,USA,23250000.0,,5.08,-3.79,71790.0
+OCTV,Octave Intelligence Plc,Technology,Software - Application,USA,5050000000.0,,18.83,-1.15,1318133.0
+OCUL,Ocular Therapeutix Inc,Healthcare,Biotechnology,USA,2120000000.0,,9.65,-1.73,1621507.0
+OGE,Oge Energy Corp,Utilities,Utilities - Regulated Electric,USA,9260000000.0,19.63,44.81,1.2,2275027.0
+OHI,Omega Healthcare Investors Inc,Real Estate,REIT - Healthcare Facilities,USA,14020000000.0,16.53,46.28,-0.11,1374188.0
+OIG,Orion180 Insurance Group Inc,Financial,Insurance - Property & Casualty,USA,947740000.0,,9.57,-2.94,456695.0
+OII,Oceaneering International Inc,Energy,Oil & Gas Equipment & Services,USA,4600000000.0,13.32,46.26,-0.88,900135.0
+OKLL,Defiance Daily Target 2x Long OKLO ETF,Financial,Exchange Traded Fund,USA,,,10.14,-1.46,1689260.0
+OKLO,Oklo Inc,Utilities,Utilities - Independent Power Producers,USA,7080000000.0,,38.04,-0.65,6777984.0
+OLMA,Olema Pharmaceuticals Inc,Healthcare,Biotechnology,USA,765600000.0,,8.75,-3.21,1382802.0
+OLN,Olin Corp,Basic Materials,Chemicals,USA,1870000000.0,,16.4,0.86,1685046.0
+OMDA,Omada Health Inc,Healthcare,Health Information Services,USA,1200000000.0,298.78,19.66,-0.3,873791.0
+OMER,Omeros Corp,Healthcare,Biotechnology,USA,1450000000.0,13.97,20.08,-0.25,942084.0
+ONDL,Defiance Daily Target 2X Long ONDS ETF,Financial,Exchange Traded Fund,USA,,,5.73,0.35,1058727.0
+OPCH,Option Care Health Inc,Healthcare,Medical Care Facilities,USA,3460000000.0,17.46,23.07,0.57,1168895.0
+OPLN,Openlane Inc,Consumer Cyclical,Auto & Truck Dealerships,USA,4280000000.0000005,,34.82,0.93,1355846.0
+ORCU,Direxion Daily ORCL Bull 2X ETF,Financial,Exchange Traded Fund,USA,,,6.56,-3.81,4200153.0
+ORCX,Defiance Daily Target 2X Long ORCL ETF,Financial,Exchange Traded Fund,USA,,,18.38,-3.67,1794788.0
+ORI,Old Republic International Corp,Financial,Insurance - Property & Casualty,USA,9110000000.0,8.27,37.74,-0.53,1479914.0
+ORIC,ORIC Pharmaceuticals Inc,Healthcare,Biotechnology,USA,1360000000.0,,13.16,-0.15,2493810.0
+OSCR,Oscar Health Inc,Healthcare,Healthcare Plans,USA,9140000000.0,21.62,29.6,2.53,4899332.0
+OUST,Ouster Inc,Technology,Electronic Components,USA,3150000000.0,,43.72,5.68,2933236.0
+OUT,Outfront Media Inc,Real Estate,REIT - Specialty,USA,4870000000.0,20.18,27.65,-1.0,1493952.0
+OZK,Bank OZK,Financial,Banks - Regional,USA,5120000000.0,7.75,46.89,0.62,1106142.0
+PATH,UiPath Inc,Technology,Software - Infrastructure,USA,6490000000.0,18.54,12.46,-1.11,45670211.0
+PAY,Paymentus Holdings Inc,Technology,Software - Infrastructure,USA,3800000000.0,45.81,30.17,-2.52,969953.0
+PCG,PG&E Corp,Utilities,Utilities - Regulated Electric,USA,27180000000.0,9.0,12.34,0.16,33445701.0
+PCOR,Procore Technologies Inc,Technology,Software - Application,USA,7490000000.0,,49.3,-0.4,2943803.0
+PD,Pagerduty Inc,Technology,Software - Application,USA,1130000000.0,7.2,14.38,-3.81,1670595.0
+PEB,Pebblebrook Hotel Trust,Real Estate,REIT - Hotel & Motel,USA,2080000000.0,,18.42,-0.97,4153007.0
+PEGA,Pegasystems Inc,Technology,Software - Application,USA,5550000000.0,19.06,33.74,-1.42,1110111.0
+PENN,PENN Entertainment Inc,Consumer Cyclical,Resorts & Casinos,USA,2100000000.0,,15.65,1.03,3032913.0
+PFE,Pfizer Inc,Healthcare,Drug Manufacturers - General,USA,163410000000.0,37.96,28.67,0.92,27763690.0
+PGNY,Progyny Inc,Healthcare,Healthcare Plans,USA,1950000000.0,27.63,25.44,-2.04,1110668.0
+PGY,Pagaya Technologies Ltd,Technology,Software - Infrastructure,USA,1470000000.0,13.62,17.62,-5.88,3396190.0
+PINS,Pinterest Inc,Communication Services,Internet Content & Information,USA,10700000000.0,55.09,18.9,0.96,8897570.0
+PL,Planet Labs PBC,Industrials,Aerospace & Defense,USA,6340000000.0,,17.43,-1.08,14018257.0
+PLAB,Photronics Inc,Technology,Semiconductor Equipment & Materials,USA,1790000000.0,10.75,30.4,1.98,623865.0
+PLAY,Dave & Buster's Entertainment Inc,Communication Services,Entertainment,USA,230580000.0,,6.62,0.0,1857191.0
+PLNT,Planet Fitness Inc,Consumer Cyclical,Leisure,USA,3220000000.0,14.48,42.68,4.81,3626798.0
+PLTZ,Defiance Daily Target 2x Short PLTR ETF,Financial,Exchange Traded Fund,USA,,,7.72,2.8,2297503.0
+POR,Portland General Electric Co,Utilities,Utilities - Regulated Electric,USA,5510000000.0,20.74,46.85,0.56,2146732.0
+PPC,Pilgrim's Pride Corp,Consumer Defensive,Packaged Foods,USA,6620000000.0,12.16,27.82,2.05,1403784.0
+PPL,PPL Corp,Utilities,Utilities - Regulated Electric,USA,24100000000.0,19.02,32.03,0.19,6892395.0
+PPLI,People Inc,Communication Services,Internet Content & Information,USA,2980000000.0,7.28,40.0,11.33,3095453.0
+PPTA,Perpetua Resources Corp,Basic Materials,Other Precious Metals & Mining,USA,2940000000.0,,23.49,0.3,674045.0
+PR,Permian Resources Holdings Inc,Energy,Oil & Gas E&P,USA,17890000000.0,14.18,21.36,-2.24,9931916.0
+PRCH,Porch Group Inc,Financial,Insurance - Property & Casualty,USA,1880000000.0,,16.53,0.36,2638223.0
+PRCT,Procept BioRobotics Corp,Healthcare,Medical Devices,USA,985110000.0,,17.2,-1.71,1954243.0
+PRGO,Perrigo Company plc,Healthcare,Drug Manufacturers - Specialty & Generic,USA,2140000000.0000002,,15.42,5.04,4279817.0
+PRM,Perimeter Solutions Inc,Basic Materials,Specialty Chemicals,USA,4760000000.0,,29.11,3.74,1217842.0
+PRMB,Primo Brands Corp,Consumer Defensive,Beverages - Non-Alcoholic,USA,7060000000.0,71.32,19.5,0.88,2169568.0
+PRVA,Privia Health Group Inc,Healthcare,Health Information Services,USA,2520000000.0,91.46,19.71,1.65,1393839.0
+PSKY,Paramount Skydance Corp,Communication Services,Entertainment,USA,11170000000.0,,9.96,-2.16,16853732.0
+PSN,Parsons Corp,Technology,Information Technology Services,USA,4600000000.0,29.79,43.07,1.48,1068747.0
+PSNL,Personalis Inc,Healthcare,Diagnostics & Research,USA,1760000000.0,,16.46,-0.66,1016100.0
+PTIR,GraniteShares 2x Long PLTR Daily ETF,Financial,Exchange Traded Fund,USA,,,21.65,-2.91,2160923.0
+PTRN,Pattern Group Inc,Consumer Cyclical,Internet Retail,USA,3020000000.0,,17.02,-5.13,2100675.0
+PUMP,ProPetro Holding Corp,Energy,Oil & Gas Equipment & Services,USA,1180000000.0,,9.59,0.63,3825915.0
+PURR,Hyperliquid Strategies Inc,Financial,Capital Markets,USA,3060000000.0,19.78,12.85,-8.8,31488725.0
+PWP,Perella Weinberg Partners,Financial,Capital Markets,USA,1380000000.0,55.25,14.47,4.78,2131217.0
+PZZA,Papa John's International Inc,Consumer Cyclical,Restaurants,USA,643620000.0,24.54,19.55,-3.31,1983542.0
+QBTS,D-Wave Quantum Inc,Technology,Computer Hardware,USA,6610000000.0,,17.41,-0.4,14523787.0
+QDEL,QuidelOrtho Corp,Healthcare,Medical Devices,USA,750220000.0,,10.94,2.34,1379771.0
+QMCO,Quantum Corp,Technology,Computer Hardware,USA,1250000000.0,,31.68,7.43,4241080.0
+QNT,Quantinuum Inc,Technology,Software - Application,USA,13040000000.0,,49.53,0.28,1758085.0
+QTTB,Q32 Bio Inc,Healthcare,Biotechnology,USA,261079999.99999997,2.92,8.77,-4.88,515625.0
+QXO,QXO Inc,Industrials,Industrial Distribution,USA,12900000000.0,,12.43,1.39,16540397.0
+RAM,Roundhill T-REX 2X Long DRAM Daily Target ETF,Financial,Exchange Traded Fund,USA,,,14.47,3.65,6043271.0
+RARE,Ultragenyx Pharmaceutical Inc,Healthcare,Biotechnology,USA,1430000000.0,,14.5,-1.83,4306057.0
+RBLX,Roblox Corp,Communication Services,Electronic Gaming & Multimedia,USA,33180000000.0,,46.44,-4.89,13383841.0
+RCAT,Red Cat Holdings Inc,Industrials,Aerospace & Defense,USA,1020000000.0,,6.66,-2.06,5977846.0
+RCUS,Arcus Biosciences Inc,Healthcare,Biotechnology,USA,3180000000.0,,24.97,-0.36,1717349.0
+RDN,Radian Group Inc,Financial,Insurance - Specialty,USA,4370000000.0,8.48,33.02,-1.55,1304808.0
+RDW,Redwire Corp,Industrials,Aerospace & Defense,USA,2900000000.0,,11.62,0.17,13335857.0
+RELY,Remitly Global Inc,Technology,Software - Infrastructure,USA,4520000000.0,15.37,21.36,0.95,3381674.0
+REPL,Replimune Group Inc,Healthcare,Biotechnology,USA,1160000000.0,,12.36,-1.9,1647261.0
+REXR,Rexford Industrial Realty Inc,Real Estate,REIT - Industrial,USA,8359999999.999999,,37.47,-1.37,1822866.0
+REYN,Reynolds Consumer Products Inc,Consumer Cyclical,Packaging & Containers,USA,4570000000.0,13.26,21.67,0.37,1357779.0
+REZI,Resideo Technologies Inc,Industrials,Industrial Distribution,USA,2770000000.0,8.08,18.27,-0.16,1334777.0
+RF,Regions Financial Corp,Financial,Banks - Regional,USA,23530000000.0,11.23,27.62,1.32,10153437.0
+RGNX,Regenxbio Inc,Healthcare,Biotechnology,USA,488500000.0,,7.4,2.21,1276586.0
+RGTI,Rigetti Computing Inc,Technology,Computer Hardware,USA,5560000000.0,,16.66,0.97,17541331.0
+RHI,Robert Half Inc,Industrials,Staffing & Employment Services,USA,3780000000.0,32.11,36.89,3.07,2857659.0
+RIOT,Riot Platforms Inc,Financial,Capital Markets,USA,8630000000.0,,23.0,-2.04,16677920.0
+RIVN,Rivian Automotive Inc,Consumer Cyclical,Auto Manufacturers,USA,22400000000.0,,15.47,1.18,16693867.0
+RKLX,Defiance Daily Target 2X Long RKLB ETF,Financial,Exchange Traded Fund,USA,,,19.34,0.83,2686947.0
+RKLZ,Defiance Daily Target 2x Short RKLB ETF,Financial,Exchange Traded Fund,USA,,,14.02,-0.55,497641.0
+RKT,Rocket Companies Inc,Financial,Mortgage Finance,USA,34460000000.0,80.97,12.17,2.01,31281976.0
+RLAY,Relay Therapeutics Inc,Healthcare,Biotechnology,USA,3830000000.0,,17.47,-1.47,2983655.0
+ROL,Rollins Inc,Consumer Cyclical,Personal Services,USA,14450000000.0,27.26,30.03,-1.22,9264362.0
+RPD,Rapid7 Inc,Technology,Software - Infrastructure,USA,783200000.0,38.19,11.62,-9.57,1822097.0
+RRC,Range Resources Corp,Energy,Oil & Gas E&P,USA,9020000000.0,10.65,38.61,-1.35,3028537.0
+RSI,Rush Street Interactive Inc,Consumer Cyclical,Gambling,USA,4610000000.0,67.02,19.87,1.69,2876437.0
+RUM,RUM Group Inc,Communication Services,Internet Content & Information,USA,4139999999.9999995,,8.36,-2.79,2712762.0
+RXO,RXO Inc,Industrials,Trucking,USA,3260000000.0,,19.79,-0.7,1970288.0
+RYAN,Ryan Specialty Holdings Inc,Financial,Insurance Brokers,USA,9690000000.0,55.61,37.89,3.13,1739563.0
+S,SentinelOne Inc,Technology,Software - Infrastructure,USA,7790000000.0,,22.38,-6.67,10464305.0
+SAIL,Sailpoint Inc,Technology,Software - Infrastructure,USA,11780000000.0,,20.64,-6.69,3616702.0
+SARO,StandardAero Inc,Industrials,Aerospace & Defense,USA,7530000000.0,23.41,22.74,2.52,4301203.0
+SBET,Sharplink Inc,Financial,Capital Markets,USA,2089999999.9999998,,9.63,-3.22,5399352.0
+SBH,Sally Beauty Holdings Inc,Consumer Cyclical,Specialty Retail,USA,1610000000.0,8.93,17.18,1.06,1008486.0
+SCO,ProShares UltraShort Bloomberg Crude Oil -2x Shares,Financial,Exchange Traded Fund,USA,,,20.4,2.67,6778247.0
+SDGR,Schrodinger Inc,Healthcare,Health Information Services,USA,2160000000.0,,28.85,-2.04,1370001.0
+SDOT,Sadot Group Inc,Consumer Defensive,Farm Products,USA,16020000.0,,11.01,-1.96,34560.0
+SDOW,ProShares UltraPro Short Dow30 -3x Shares,Financial,Exchange Traded Fund,USA,,,24.71,-2.68,5435268.0
+SECZ,Securitize Corp,Technology,Software - Application,USA,2610000000.0,,15.96,-3.45,6876763.0
+SGMT,Sagimet Biosciences Inc,Healthcare,Biotechnology,USA,569100000.0,,9.24,1.43,1247044.0
+SGOL,Abrdn Gold ETF Trust,Financial,Exchange Traded Fund,USA,,,40.83,0.39,2861120.0
+SGRY,Surgery Partners Inc,Healthcare,Medical Care Facilities,USA,1890000000.0,,14.4,1.41,1762754.0
+SHOO,Steven Madden Ltd,Consumer Cyclical,Footwear & Accessories,USA,3300000000.0,22.59,45.06,1.88,845806.0
+SILJ,Amplify Junior Silver Miners ETF,Financial,Exchange Traded Fund,USA,,,29.22,1.0,2627826.0
+SION,Sionna Therapeutics Inc,Healthcare,Biotechnology,USA,236460000.0,,5.23,0.0,1402392.0
+SIRI,Sirius XM Holdings Inc,Communication Services,Entertainment,USA,8710000000.0,10.18,25.85,-2.91,4930600.0
+SKDD,GraniteShares 2x Short SK Hynix Daily ETF,Financial,Exchange Traded Fund,USA,,,6.63,-5.42,3615455.0
+SKHL,Direxion Daily SK Hynix Bull 2X ETF,Financial,Exchange Traded Fund,USA,,,11.77,5.37,2255748.0
+SKHU,ProShares Ultra SK hynix,Financial,Exchange Traded Fund,USA,,,23.88,5.11,279227.0
+SKHX,Leverage Shares 2x Long SK Hynix Daily ETF,Financial,Exchange Traded Fund,USA,,,18.24,5.43,1121081.0
+SKHZ,Leverage Shares 1x Short SK Hynix Daily ETF,Financial,Exchange Traded Fund,USA,,,9.28,-2.62,1205672.0
+SKUU,GraniteShares 2x Long SK Hynix Daily ETF,Financial,Exchange Traded Fund,USA,,,30.6,5.44,1060831.0
+SLDB,Solid Biosciences Inc,Healthcare,Biotechnology,USA,781670000.0,,7.29,-2.54,1420530.0
+SLDE,Slide Insurance Holdings Inc,Financial,Insurance - Property & Casualty,USA,2700000000.0,5.63,23.1,-1.91,875224.0
+SLE,Super League Enterprise Inc,Communication Services,Internet Content & Information,USA,12440000.0,,5.03,-6.16,161999.0
+SLGN,Silgan Holdings Inc,Consumer Cyclical,Packaging & Containers,USA,3800000000.0,14.11,35.91,1.3,2064038.0
+SLM,SLM Corp,Financial,Credit Services,USA,4450000000.0,6.62,23.66,2.65,2179902.0
+SLS,SELLAS Life Sciences Group Inc,Healthcare,Biotechnology,USA,2340000000.0,,11.61,-3.09,4452916.0
+SM,SM Energy Co,Energy,Oil & Gas E&P,USA,8070000000.0,6.68,33.91,-3.39,3055824.0
+SMCI,Super Micro Computer Inc,Technology,Computer Hardware,USA,28420000000.0,13.16,43.26,4.22,49323237.0
+SMCX,Defiance Daily Target 2x Long SMCI ETF,Financial,Exchange Traded Fund,USA,,,15.26,8.3,6289333.0
+SMMT,Summit Therapeutics Inc,Healthcare,Biotechnology,USA,12450000000.0,,15.61,-4.7,3807975.0
+SMR,NuScale Power Corp,Industrials,Specialty Industrial Machinery,USA,3620000000.0,,8.42,-0.59,29275173.0
+SNDG,Leverage Shares 2X Long SNDK Daily ETF,Financial,Exchange Traded Fund,USA,,,10.86,2.45,5649164.0
+SNDQ,Tradr 2X Short SNDK Daily ETF,Financial,Exchange Traded Fund,USA,,,10.26,-2.66,25183215.0
+SNDU,T-REX 2X Long SNDK Daily Target ETF,Financial,Exchange Traded Fund,USA,,,27.12,2.42,3484018.0
+SNDX,Syndax Pharmaceuticals Inc,Healthcare,Biotechnology,USA,1630000000.0,,18.2,1.28,1343102.0
+SNK,GraniteShares 2x Short SpaceX Daily ETF,Financial,Exchange Traded Fund,USA,,,15.02,-0.66,782701.0
+SNXX,Tradr 2X Long SNDK Daily ETF,Financial,Exchange Traded Fund,USA,,,17.56,2.51,41982035.0
+SOFI,SoFi Technologies Inc,Financial,Credit Services,USA,21410000000.0,34.96,16.58,-1.31,31590765.0
+SOFX,Defiance Daily Target 2X Long SOFI ETF,Financial,Exchange Traded Fund,USA,,,7.73,-2.89,667204.0
+SONO,Sonos Inc,Technology,Consumer Electronics,USA,2150000000.0,40.84,18.17,1.88,2263137.0
+SOXS,Direxion Daily Semiconductor Bear 3X ETF,Financial,Exchange Traded Fund,USA,,,32.43,-3.57,68878637.0
+SPAL,GraniteShares 2x Long SpaceX Daily ETF,Financial,Exchange Traded Fund,USA,,,16.63,0.64,619161.0
+SPAX,T-REX 2X Long SPCX Daily Target ETF,Financial,Exchange Traded Fund,USA,,,9.95,0.71,1783515.0
+SPCF,ProShares Ultra SpaceX ETF,Financial,Exchange Traded Fund,USA,,,16.27,0.62,1366416.0
+SPCG,Tradr 2X Short SpaceX Daily ETF,Financial,Exchange Traded Fund,USA,,,15.6,-0.83,1568326.0
+SPCH,Leverage Shares 2X Long SPCX Daily ETF,Financial,Exchange Traded Fund,USA,,,9.78,0.67,14648796.0
+SPCQ,Defiance Daily Target 2X Short SPCX ETF,Financial,Exchange Traded Fund,USA,,,11.07,-0.18,2211375.0
+SPCU,Defiance Daily Target 2X Long SPCX ETF,Financial,Exchange Traded Fund,USA,,,13.03,0.77,759165.0
+SPT,Sprout Social Inc,Technology,Software - Application,USA,578430000.0,,9.54,-1.85,887474.0
+SPXS,Direxion Daily S&P 500 Bear 3X ETF,Financial,Exchange Traded Fund,USA,,,23.91,-1.44,16113497.0
+SPXU,ProShares UltraPro Short S&P 500,Financial,Exchange Traded Fund,USA,,,33.59,-1.5,8291434.0
+SQQQ,ProShares UltraPro Short QQQ -3x Shares,Financial,Exchange Traded Fund,USA,,,33.75,-1.26,48494463.0
+SRPT,Sarepta Therapeutics Inc,Healthcare,Biotechnology,USA,1970000000.0,,18.67,1.52,2218839.0
+SRRK,Scholar Rock Holding Corp,Healthcare,Biotechnology,USA,5920000000.0,,48.63,0.04,1875896.0
+SRTY,ProShares UltraPro Short Russell2000 -3x Shares,Financial,Exchange Traded Fund,USA,,,25.59,-0.2,1561599.0
+SSPC,Leverage Shares 2X Short SPCX Daily ETF,Financial,Exchange Traded Fund,USA,,,9.12,-0.98,5549613.0
+SSRM,SSR Mining Inc,Basic Materials,Gold,USA,7280000000.0,32.91,35.68,-0.39,1745783.0
+ST,Sensata Technologies Holding Plc,Technology,Scientific & Technical Instruments,USA,6140000000.0,69.68,42.19,2.75,1139625.0
+STAG,STAG Industrial Inc,Real Estate,REIT - Industrial,USA,7090000000.0,28.22,36.79,-1.34,3005182.0
+STDN,Standard Nuclear Inc,Basic Materials,Specialty Chemicals,USA,1930000000.0,,12.34,0.73,227335.0
+STEP,StepStone Group Inc,Financial,Asset Management,USA,5350000000.0,,44.36,1.86,848934.0
+SVIX,-1x Short VIX Futures ETF,Financial,Exchange Traded Fund,USA,,,29.22,1.81,1357862.0
+SYM,Symbotic Inc,Industrials,Specialty Industrial Machinery,USA,26290000000.0,481.93,43.47,-1.29,916165.0
+T,AT&T Inc,Communication Services,Telecom Services,USA,173910000000.0,8.39,25.38,-0.28,22918581.0
+TALO,Talos Energy Inc,Energy,Oil & Gas E&P,USA,2750000000.0,,16.47,-3.23,2278668.0
+TAP,Molson Coors Beverage Company,Consumer Defensive,Beverages - Brewers,USA,6780000000.0,,35.95,-1.1,3256730.0
+TDC,Teradata Corp,Technology,Software - Infrastructure,USA,2690000000.0,6.09,28.94,-1.77,1233464.0
+TDS,Telephone And Data Systems Inc,Communication Services,Telecom Services,USA,3860000000.0,13.17,35.85,-1.32,1391535.0
+TENB,Tenable Holdings Inc,Technology,Software - Infrastructure,USA,3690000000.0,579.41,33.49,-6.66,2962693.0
+TFC,Truist Financial Corp,Financial,Banks - Regional,USA,58220000000.0,10.94,47.66,1.02,7173737.0
+TH,Target Hospitality Corp,Industrials,Specialty Business Services,USA,2049999999.9999998,,20.58,-4.06,2115595.0
+TMF,Direxion Daily 20+ Year Treasury Bull 3X Shares,Financial,Exchange Traded Fund,USA,,,27.21,-0.51,10947243.0
+TNDM,Tandem Diabetes Care Inc,Healthcare,Medical Devices,USA,1090000000.0,,15.72,3.29,2839699.0
+TNGX,Tango Therapeutics Inc,Healthcare,Biotechnology,USA,4200000000.0,,24.92,1.18,3255113.0
+TOST,Toast Inc,Technology,Software - Infrastructure,USA,17780000000.0,39.1,30.6,1.63,8523583.0
+TPG,TPG Inc,Financial,Asset Management,USA,17070000000.0,66.98,44.39,1.74,1255757.0
+TREX,TREX Co Inc,Industrials,Building Products & Equipment,USA,4560000000.0,26.47,44.79,3.63,2006309.0
+TRLV,Trulieve Cannabis Corp,Healthcare,Drug Manufacturers - Specialty & Generic,USA,2350000000.0,,12.21,-0.49,1011513.0
+TRVI,Trevi Therapeutics Inc,Healthcare,Biotechnology,USA,2049999999.9999998,,14.41,-1.81,1364965.0
+TSCO,Tractor Supply Co,Consumer Cyclical,Specialty Retail,USA,16809999999.999998,16.85,32.27,2.64,8710896.0
+TSDD,GraniteShares 2x Short TSLA Daily ETF,Financial,Exchange Traded Fund,USA,,,7.41,3.06,7499877.0
+TSLL,Direxion Daily TSLA Bull 2X ETF,Financial,Exchange Traded Fund,USA,,,9.94,-3.02,89582039.0
+TSLQ,Tradr 2X Short TSLA Daily ETF,Financial,Exchange Traded Fund,USA,,,17.71,3.15,6240578.0
+TSLR,GraniteShares 2x Long TSLA Daily ETF,Financial,Exchange Traded Fund,USA,,,17.25,-3.31,3476023.0
+TSLT,T-REX 2X Long Tesla Daily Target ETF,Financial,Exchange Traded Fund,USA,,,13.92,-3.0,3072448.0
+TSLZ,T-Rex 2X Inverse Tesla Daily Target ETF,Financial,Exchange Traded Fund,USA,,,11.19,3.18,3908128.0
+TTD,Trade Desk Inc,Communication Services,Advertising Agencies,USA,5920000000.0,14.95,12.6,-0.24,14519864.0
+TTEK,Tetra Tech Inc,Industrials,Engineering & Construction,USA,8680000000.0,20.4,33.91,0.8,2047451.0
+TZA,Direxion Small Cap Bear 3X ETF,Financial,Exchange Traded Fund,USA,,,45.44,-0.15,4816493.0
+U,Unity Software Inc,Technology,Software - Application,USA,18290000000.0,,41.55,0.31,15158071.0
+UDR,UDR Inc,Real Estate,REIT - Residential,USA,17670000000.0,21.56,33.84,0.86,3649478.0
+UEC,Uranium Energy Corp,Energy,Uranium,USA,4660000000.0,,9.41,-0.63,6719259.0
+UGI,UGI Corp,Utilities,Utilities - Regulated Gas,USA,7830000000.0,12.19,36.51,0.38,1388279.0
+UGL,ProShares Ultra Gold 2x Shares,Financial,Exchange Traded Fund,USA,,,48.85,0.83,2574601.0
+UMAC,Unusual Machines Inc,Technology,Computer Hardware,USA,1200000000.0,,24.05,0.5,2326566.0
+UPST,Upstart Holdings Inc,Financial,Credit Services,USA,2320000000.0,43.35,23.81,-3.37,4593066.0
+URA,Global X Uranium ETF,Financial,Exchange Traded Fund,USA,,,40.91,0.12,2081319.0
+USAR,USA Rare Earth Inc,Basic Materials,Other Industrial Metals & Mining,USA,5690000000.0,,15.18,-1.3,10058439.0
+USDE,StableCoinX Inc,Financial,Capital Markets,USA,468980000.0,,17.25,21.31,8004617.0
+UTI,Universal Technical Institute Inc,Consumer Defensive,Education & Training Services,USA,1120000000.0,33.0,20.3,-1.79,1719857.0
+UUUU,Energy Fuels Inc,Energy,Uranium,USA,3010000000.0,,11.35,0.27,5021921.0
+UVIX,2x Long VIX Futures ETF,Financial,Exchange Traded Fund,USA,,,35.79,-2.53,2334917.0
+UVXY,ProShares Ultra VIX Short-Term Futures ETF 1.5x Shares,Financial,Exchange Traded Fund,USA,,,16.85,-2.03,6409062.0
+VCYT,Veracyte Inc,Healthcare,Diagnostics & Research,USA,3650000000.0,32.23,45.43,-6.41,1725812.0
+VEEE,Twin Vee PowerCats Co,Consumer Cyclical,Recreational Vehicles,USA,8150000.0,,13.95,-1.41,63395.0
+VELO,Velo3D Inc,Technology,Computer Hardware,USA,362960000.0,,11.29,2.45,1080582.0
+VERA,Vera Therapeutics Inc,Healthcare,Biotechnology,USA,2340000000.0,,32.54,-2.4,1250504.0
+VERX,Vertex Inc,Technology,Software - Application,USA,1840000000.0,528.84,11.37,-2.65,1079552.0
+VG,Venture Global Inc,Energy,Oil & Gas Midstream,USA,31550000000.0,9.59,12.62,-4.61,14792014.0
+VIAV,Viavi Solutions Inc,Technology,Communication Equipment,USA,10040000000.0,,40.68,9.27,8408814.0
+VIR,Vir Biotechnology Inc,Healthcare,Biotechnology,USA,1800000000.0,,10.66,-0.56,1126020.0
+VITL,Vital Farms Inc,Consumer Defensive,Farm Products,USA,427170000.0,,9.95,-1.39,1306428.0
+VIXY,ProShares VIX Short-Term Futures ETF,Financial,Exchange Traded Fund,USA,,,16.61,-1.72,1586597.0
+VKTX,Viking Therapeutics Inc,Healthcare,Biotechnology,USA,4150000000.0000005,,35.56,-3.24,13579165.0
+VNO,Vornado Realty Trust,Real Estate,REIT - Office,USA,7060000000.0,1400.4,34.73,1.02,1073913.0
+VNOM,Viper Energy Inc,Energy,Oil & Gas Midstream,USA,14700000000.0,320.52,40.93,-1.71,2242726.0
+VNT,Vontier Corp,Technology,Scientific & Technical Instruments,USA,4260000000.0,13.08,31.48,1.84,989259.0
+VOR,Vor Biopharma Inc,Healthcare,Biotechnology,USA,1100000000.0,,18.52,0.43,792829.0
+VOYG,Voyager Technologies Inc,Industrials,Aerospace & Defense,USA,1910000000.0,,31.35,0.8,2519072.0
+VRDN,Viridian Therapeutics Inc,Healthcare,Biotechnology,USA,2320000000.0,,20.47,-0.92,2090689.0
+VRNS,Varonis Systems Inc,Technology,Software - Infrastructure,USA,5310000000.0,,46.25,-3.55,1617785.0
+VSH,Vishay Intertechnology Inc,Technology,Semiconductors,USA,4990000000.0,170.06,32.55,2.36,2374408.0
+VSNT,Versant Media Group Inc,Communication Services,Entertainment,USA,4550000000.0,6.17,32.8,-2.09,1322712.0
+VSTS,Vestis Corp,Industrials,Rental & Leasing Services,USA,1800000000.0,,13.65,-1.37,1244459.0
+VVV,Valvoline Inc,Consumer Cyclical,Auto & Truck Dealerships,USA,3690000000.0,36.65,28.92,2.01,2376404.0
+VXX,iPath Series B S&P 500 VIX Short-Term FuturesTM ETN,Financial,Exchange Traded Fund,USA,,,17.3,-1.54,6815908.0
+VZ,Verizon Communications Inc,Communication Services,Telecom Services,USA,195610000000.0,12.26,47.08,-0.51,13421710.0
+WAY,Waystar Holding Corp,Healthcare,Health Information Services,USA,4740000000.0,35.17,24.7,0.24,1260743.0
+WDCX,Tradr 2X Long WDC Daily ETF,Financial,Exchange Traded Fund,USA,,,17.51,2.4,1402489.0
+WERN,Werner Enterprises Inc,Industrials,Trucking,USA,1970000000.0,,32.89,-1.76,992026.0
+WHLR,Wheeler Real Estate Investment Trust Inc,Real Estate,REIT - Retail,USA,2950000.0,,5.2,39.04,13231573.0
+WHR,Whirlpool Corp,Consumer Cyclical,"Furnishings, Fixtures & Appliances",USA,2069999999.9999998,10.66,31.71,-3.85,3185569.0
+WKC,World Kinect Corp,Energy,Oil & Gas Refining & Marketing,USA,1820000000.0,,35.65,-0.89,680010.0
+WMG,Warner Music Group Corp,Communication Services,Entertainment,USA,14200000000.0,21.46,27.14,-0.55,1502917.0
+WNC,Wabash National Corp,Industrials,Farm & Heavy Construction Machinery,USA,530809999.99999994,,13.03,11.27,1177265.0
+WOLF,Wolfspeed Inc,Technology,Semiconductors,USA,1460000000.0,,27.57,4.83,1533069.0
+WRBY,Warby Parker Inc,Healthcare,Medical Instruments & Supplies,USA,3300000000.0,440.03,26.71,1.67,3833109.0
+WSBC,Wesbanco Inc,Financial,Banks - Regional,USA,3710000000.0,11.22,38.66,0.62,792673.0
+WSC,WillScot Holdings Corp,Industrials,Rental & Leasing Services,USA,3290000000.0,,18.17,2.37,2745884.0
+WT,WisdomTree Inc,Financial,Asset Management,USA,3690000000.0,46.7,24.33,1.42,1478105.0
+WTRG,Essential Utilities Inc,Utilities,Utilities - Regulated Water,USA,11220000000.0,20.19,39.53,-0.53,1332411.0
+WTTR,Select Water Solutions Inc,Energy,Oil & Gas Equipment & Services,USA,2560000000.0,74.22,19.84,1.59,4766849.0
+WULF,TeraWulf Inc,Financial,Capital Markets,USA,7850000000.0,,15.74,-3.38,25037593.0
+WY,Weyerhaeuser Co,Real Estate,REIT - Specialty,USA,14420000000.0,30.6,20.01,-0.65,7127725.0
+WYFI,Whitefiber Inc,Technology,Information Technology Services,USA,762200000.0,,19.62,-3.16,1191312.0
+XE,X-Energy Inc,Industrials,Specialty Industrial Machinery,USA,6130000000.0,,15.08,-4.07,5152094.0
+XHLD,TEN Holdings Inc,Communication Services,Broadcasting,USA,155110000.0,,12.95,1.97,1289003.0
+XLB,State Street Materials Select Sector SPDR ETF,Financial,Exchange Traded Fund,USA,,,49.8,0.24,9943646.0
+XLRE,State Street Real Estate Select Sector SPDR ETF,Financial,Exchange Traded Fund,USA,,,41.56,-0.22,5782272.0
+XLU,State Street Utilities Select Sector SPDR ETF,Financial,Exchange Traded Fund,USA,,,39.51,0.38,30294920.0
+XNCR,Xencor Inc,Healthcare,Biotechnology,USA,1770000000.0,,23.8,-0.34,1169672.0
+XPRO,Expro Ltd,Energy,Oil & Gas Equipment & Services,USA,1830000000.0,90.87,16.33,-2.33,614524.0
+XRP,Bitwise XRP ETF,Financial,Exchange Traded Fund,USA,,,17.59,2.93,2100105.0
+YELP,Yelp Inc,Communication Services,Internet Content & Information,USA,978370000.0,8.63,18.03,-1.85,906906.0
+YETI,YETI Holdings Inc,Consumer Cyclical,Leisure,USA,3090000000.0,18.4,42.28,0.69,1071830.0
+YINN,Direxion Daily FTSE China Bull 3X ETF,Financial,Exchange Traded Fund,USA,,,24.89,-2.43,1805968.0
+YOU,Clear Secure Inc,Technology,Software - Application,USA,5360000000.0,27.03,39.6,2.72,2150253.0
+YSS,York Space Systems Inc,Industrials,Aerospace & Defense,USA,1310000000.0,,9.57,-2.45,2023499.0
+Z,Zillow Group Inc,Communication Services,Internet Content & Information,USA,6430000000.0,126.19,28.43,1.03,4349717.0
+ZETA,Zeta Global Holdings Corp,Technology,Software - Infrastructure,USA,7390000000.0,,29.45,-0.41,4457060.0
+ZG,Zillow Group Inc,Communication Services,Internet Content & Information,USA,6430000000.0,130.05,29.3,1.35,811417.0
+ZSL,ProShares UltraShort Silver -2x Shares,Financial,Exchange Traded Fund,USA,,,24.45,-1.73,2883273.0

@@ -1,0 +1,362 @@
+{
+ "AAPL": [
+  {
+   "ts": "2026-09-26T06:07:00",
+   "date_raw": "Today 06:07AM",
+   "headline": "China, U.S. agree to $30 billion tariff cut, launch AI dialogue",
+   "source": "Investing.com",
+   "url": "https://finance.yahoo.com/economy/policy/articles/china-u-agree-30-billion-100725747.html"
+  },
+  {
+   "ts": "2026-09-25T16:18:00",
+   "date_raw": "Sep-25-26 04:18PM",
+   "headline": "Weekly Wrap: The Crypto Rally Continues",
+   "source": "CryptoProwl",
+   "url": "https://finance.yahoo.com/markets/crypto/articles/weekly-wrap-crypto-rally-continues-201800965.html"
+  },
+  {
+   "ts": "2026-09-25T16:02:00",
+   "date_raw": "04:02PM",
+   "headline": "Nvidia, AMD Love This High-Tech Facilitator. So Does Wall Street.",
+   "source": "Investor's Business Daily",
+   "url": "https://www.investors.com/research/ibd-stock-analysis/ase-technology-rides-ai-boom-alongside-amd-apple-nvidia-tsmc?mod=IBD_FV"
+  },
+  {
+   "ts": "2026-09-25T15:38:00",
+   "date_raw": "03:38PM",
+   "headline": "Trump says China's Xi 'seemed to like' renaming AI as super intelligence",
+   "source": "Yahoo Finance",
+   "url": "https://finance.yahoo.com/markets/article/trump-says-chinas-xi-seemed-to-like-renaming-ai-as-super-intelligence-193805901.html"
+  },
+  {
+   "ts": "2026-09-25T15:22:00",
+   "date_raw": "03:22PM",
+   "headline": "Deer Park Town Center Trades For $125M, Suburban Retail Buying Spree Rolls On",
+   "source": "Bisnow",
+   "url": "https://finance.yahoo.com/real-estate/articles/deer-park-town-center-trades-192241282.html"
+  },
+  {
+   "ts": "2026-09-25T14:53:00",
+   "date_raw": "02:53PM",
+   "headline": "Apple on pace for first record close since July",
+   "source": "MarketWatch",
+   "url": "https://www.marketwatch.com/livecoverage/stock-market-today-dow-s-p-500-and-nasdaq-set-to-rise-as-oil-prices-ease-treasury-yields-slip/card/apple-on-pace-for-first-record-close-since-july-xCkBcoHNmufP7XUdetu0?mod=mw_FV"
+  },
+  {
+   "ts": "2026-09-25T14:33:00",
+   "date_raw": "02:33PM",
+   "headline": "Trump-Xi Meeting Puts These 5 Chinese AI Stocks in Focus",
+   "source": "Zacks",
+   "url": "https://finviz.com/news/395691/trump-xi-meeting-puts-these-5-chinese-ai-stocks-in-focus"
+  },
+  {
+   "ts": "2026-09-25T13:52:00",
+   "date_raw": "01:52PM",
+   "headline": "Qualcomm Stocks Jump as Apple Extends the Royalty Bridge",
+   "source": "GuruFocus.com",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/qualcomm-stocks-jump-apple-extends-175240580.html"
+  },
+  {
+   "ts": "2026-09-25T13:14:00",
+   "date_raw": "01:14PM",
+   "headline": "Meta Stock Soared 27% on Muse AI. The Hard Part Comes Next.",
+   "source": "Barrons.com",
+   "url": "https://www.barrons.com/articles/meta-stock-price-buy-sell-muse-ai-f5cbec05?mod=bar_FV"
+  },
+  {
+   "ts": "2026-09-25T13:04:00",
+   "date_raw": "01:04PM",
+   "headline": "What Musk's Tesla and SpaceX Stocks Are Doing After That White House State Dinner",
+   "source": "Barrons.com",
+   "url": "https://www.barrons.com/articles/elon-musk-tesla-spacex-stock-trump-xi-a47adcbd?mod=bar_FV"
+  }
+ ],
+ "AMD": [
+  {
+   "ts": "2026-09-25T16:34:00",
+   "date_raw": "Sep-25-26 04:34PM",
+   "headline": "How Much Track Is Left For MRVL Stock?",
+   "source": "Trefis",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/much-track-left-mrvl-stock-203433066.html"
+  },
+  {
+   "ts": "2026-09-25T16:02:00",
+   "date_raw": "04:02PM",
+   "headline": "Nvidia, AMD Love This High-Tech Facilitator. So Does Wall Street.",
+   "source": "Investor's Business Daily",
+   "url": "https://www.investors.com/research/ibd-stock-analysis/ase-technology-rides-ai-boom-alongside-amd-apple-nvidia-tsmc?mod=IBD_FV"
+  },
+  {
+   "ts": "2026-09-25T15:38:00",
+   "date_raw": "03:38PM",
+   "headline": "Trump says China's Xi 'seemed to like' renaming AI as super intelligence",
+   "source": "Yahoo Finance",
+   "url": "https://finance.yahoo.com/markets/article/trump-says-chinas-xi-seemed-to-like-renaming-ai-as-super-intelligence-193805901.html"
+  },
+  {
+   "ts": "2026-09-25T14:34:00",
+   "date_raw": "02:34PM",
+   "headline": "Is AMD Stock Priced Right Against Its Chip Peers?",
+   "source": "Trefis",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/amd-stock-priced-against-chip-183430014.html"
+  },
+  {
+   "ts": "2026-09-25T14:33:00",
+   "date_raw": "02:33PM",
+   "headline": "Trump-Xi Meeting Puts These 5 Chinese AI Stocks in Focus",
+   "source": "Zacks",
+   "url": "https://finviz.com/news/395691/trump-xi-meeting-puts-these-5-chinese-ai-stocks-in-focus"
+  },
+  {
+   "ts": "2026-09-25T14:30:00",
+   "date_raw": "02:30PM",
+   "headline": "Investing.coms stocks of the week",
+   "source": "Investing.com",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/investing-com-stocks-week-183046002.html"
+  },
+  {
+   "ts": "2026-09-25T12:54:00",
+   "date_raw": "12:54PM",
+   "headline": "5-Star Analyst Drops Stunning New Price Target on AMD Stock",
+   "source": "GuruFocus.com",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/5-star-analyst-drops-stunning-165406447.html"
+  },
+  {
+   "ts": "2026-09-25T11:59:00",
+   "date_raw": "11:59AM",
+   "headline": "AMD Stocks Move Higher as $1 Trillion Demands Full Systems",
+   "source": "GuruFocus.com",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/amd-stocks-move-higher-1-155903297.html"
+  },
+  {
+   "ts": "2026-09-25T11:14:00",
+   "date_raw": "11:14AM",
+   "headline": "BofA raises AMD target to $720, sees server CPU TAM tripling to $211B by 2030",
+   "source": "Investing.com",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/bofa-raises-amd-target-720-151401054.html"
+  },
+  {
+   "ts": "2026-09-25T10:20:00",
+   "date_raw": "10:20AM",
+   "headline": "What Could Go Wrong At Micron From Here?",
+   "source": "Trefis",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/could-wrong-micron-142007045.html"
+  }
+ ],
+ "SOFI": [
+  {
+   "ts": "2026-09-25T16:45:00",
+   "date_raw": "Sep-25-26 04:45PM",
+   "headline": "How Much Upside Does PayPal Stock Have Without A Buyer?",
+   "source": "Trefis",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/much-upside-does-paypal-stock-204555825.html"
+  },
+  {
+   "ts": "2026-09-25T16:27:00",
+   "date_raw": "04:27PM",
+   "headline": "The UK Just Ran the Worlds First Interbank Tokenized Deposit Transactions. The Same Platform Is Headed to 25 US Banks.",
+   "source": "Forkast News",
+   "url": "https://finance.yahoo.com/markets/crypto/articles/uk-just-ran-world-first-202758750.html"
+  },
+  {
+   "ts": "2026-09-25T12:53:00",
+   "date_raw": "12:53PM",
+   "headline": "Mastercard Stock Holds Flat as $25 Billion Stablecoin Settlement Goes Live",
+   "source": "GuruFocus.com",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/mastercard-stock-holds-flat-25-165334527.html"
+  },
+  {
+   "ts": "2026-09-25T12:46:00",
+   "date_raw": "12:46PM",
+   "headline": "Robinhood and Coinbase Are Changing How Investors Buy IPO Stocks",
+   "source": "Barrons.com",
+   "url": "https://www.barrons.com/articles/oura-ipo-coinbase-robinhood-retail-investors-c6863040?mod=bar_FV"
+  },
+  {
+   "ts": "2026-09-25T07:48:00",
+   "date_raw": "07:48AM",
+   "headline": "SoFi, Mastercard activate stablecoin settlement for SoFi Bank card programme",
+   "source": "Electronic Payments",
+   "url": "https://finance.yahoo.com/markets/crypto/articles/sofi-mastercard-activate-stablecoin-settlement-114804841.html"
+  },
+  {
+   "ts": "2026-09-23T20:24:00",
+   "date_raw": "Sep-23-26 08:24PM",
+   "headline": "Metas Agent-Commerce Layer Just Went Live. The Settlement Rails Were Built for This.",
+   "source": "Forkast News",
+   "url": "https://finance.yahoo.com/technology/ai/articles/meta-agent-commerce-layer-just-002429293.html"
+  },
+  {
+   "ts": "2026-09-23T16:22:00",
+   "date_raw": "04:22PM",
+   "headline": "Gen Z Is Getting an Early Start on Investing. Here's How Early.",
+   "source": "Barrons.com",
+   "url": "https://www.barrons.com/advisor/articles/genz-investing-early-e5538895?mod=bar_FV"
+  },
+  {
+   "ts": "2026-09-23T15:36:00",
+   "date_raw": "03:36PM",
+   "headline": "PYPL Showered Owners With Cash. The Stock Still Lagged The Market",
+   "source": "Trefis",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/pypl-showered-owners-cash-stock-193649986.html"
+  },
+  {
+   "ts": "2026-09-23T13:32:00",
+   "date_raw": "01:32PM",
+   "headline": "Mastercard Goes Live With SoFiUSD Settlement for $25 Billion Card Program",
+   "source": "GuruFocus.com",
+   "url": "https://finance.yahoo.com/markets/crypto/articles/mastercard-goes-live-sofiusd-settlement-173234106.html"
+  },
+  {
+   "ts": "2026-09-23T09:00:00",
+   "date_raw": "09:00AM",
+   "headline": "Financial Ambitions Haven't Changed, The Playbook Has: SoFi Study Reveals Younger Generations Are Redefining the American Dream",
+   "source": "Business Wire",
+   "url": "https://www.businesswire.com/news/home/20260923079636/en/Making"
+  }
+ ],
+ "CCL": [
+  {
+   "ts": "2026-09-25T09:31:00",
+   "date_raw": "Sep-25-26 09:31AM",
+   "headline": "Is Carnival Corp. (CCL) a 'Buy' Ahead of Earnings?",
+   "source": "Zacks",
+   "url": "https://finviz.com/news/395632/is-carnival-corp-ccl-a-buy-ahead-of-earnings"
+  },
+  {
+   "ts": "2026-09-24T13:52:00",
+   "date_raw": "Sep-24-26 01:52PM",
+   "headline": "Carnival hit by rising oil costs as BofA cuts price target",
+   "source": "Proactive",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/carnival-hit-rising-oil-costs-175200105.html"
+  },
+  {
+   "ts": "2026-09-24T11:00:00",
+   "date_raw": "11:00AM",
+   "headline": "Carnival Corporation Stock Has Fallen More Than 25% in 2026. Its September 29 Earnings Will Test the Transitory Story",
+   "source": "TIKR",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/carnival-corporation-stock-fallen-more-150014926.html"
+  },
+  {
+   "ts": "2026-09-24T10:54:00",
+   "date_raw": "10:54AM",
+   "headline": "SEABOURN INVITES TRAVELERS TO EXPLORE THE MEDITERRANEAN AND BEYOND WITH LIMITED-TIME SPECIAL OFFER",
+   "source": "PR Newswire",
+   "url": "https://finviz.com/news/395319/seabourn-invites-travelers-to-explore-the-mediterranean-and-beyond-with-limited-time-special-offer"
+  },
+  {
+   "ts": "2026-09-24T10:00:00",
+   "date_raw": "10:00AM",
+   "headline": "Princess Cruises Invites Guests to Celebrate the Holidays at Sea",
+   "source": "PR Newswire",
+   "url": "https://finviz.com/news/395303/princess-cruises-invites-guests-to-celebrate-the-holidays-at-sea"
+  },
+  {
+   "ts": "2026-09-23T17:30:00",
+   "date_raw": "Sep-23-26 05:30PM",
+   "headline": "Is Carnival Stock Cheap, Or Is The Cash Already Spoken For?",
+   "source": "Trefis",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/carnival-stock-cheap-cash-already-213055372.html"
+  },
+  {
+   "ts": "2026-09-23T14:27:00",
+   "date_raw": "02:27PM",
+   "headline": "Carnival faces fuel, pricing headwinds ahead of third-quarter results",
+   "source": "Proactive",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/carnival-faces-fuel-pricing-headwinds-182700588.html"
+  },
+  {
+   "ts": "2026-09-23T13:57:00",
+   "date_raw": "01:57PM",
+   "headline": "Should You Buy Carnival Stock While Europe Sails Emptier?",
+   "source": "Trefis",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/buy-carnival-stock-while-europe-175729375.html"
+  },
+  {
+   "ts": "2026-09-23T04:29:00",
+   "date_raw": "04:29AM",
+   "headline": "Royal Caribbean Buys 50% Stake in Sandals Resorts for $3 Billion",
+   "source": "Bloomberg",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/royal-caribbean-buys-50-stake-082908054.html"
+  },
+  {
+   "ts": "2026-09-22T09:44:00",
+   "date_raw": "Sep-22-26 09:44AM",
+   "headline": "Air, Cruise Lines Stage Uneven Rally As Oil Ebbs; Are They Ready To Rebound?",
+   "source": "Investor's Business Daily",
+   "url": "https://www.investors.com/news/air-lines-cruise-lines-oil-prices-delta-united-american-royal-caribbean-carnival-norwegian-cruise-line?mod=IBD_FV"
+  }
+ ],
+ "AA": [
+  {
+   "ts": "2026-09-23T16:15:00",
+   "date_raw": "Sep-23-26 04:15PM",
+   "headline": "Alcoa Corporation Announces Closing of Debt Offering to Finance Cash Consideration for Acquisition of South32s Bauxite, Alumina and Aluminum Assets",
+   "source": "Business Wire",
+   "url": "https://www.businesswire.com/news/home/20260922244955/en/"
+  },
+  {
+   "ts": "2026-09-15T08:59:00",
+   "date_raw": "Sep-15-26 08:59AM",
+   "headline": "Alcoa Schedules Third Quarter 2026 Earnings Release and Conference Call",
+   "source": "Business Wire",
+   "url": "https://www.businesswire.com/news/home/20260914249546/en/"
+  },
+  {
+   "ts": "2026-09-10T13:05:00",
+   "date_raw": "Sep-10-26 01:05PM",
+   "headline": "Cutting Canada tariffs alone won't flatten US aluminum premium, Alcoa says",
+   "source": "Reuters",
+   "url": "https://finance.yahoo.com/economy/policy/articles/cutting-canada-tariffs-alone-wont-170514242.html"
+  },
+  {
+   "ts": "2026-09-09T17:23:00",
+   "date_raw": "Sep-09-26 05:23PM",
+   "headline": "Alcoa Corporation Announces Pricing of Debt Offering to Finance Cash Consideration for Acquisition of South32s Bauxite, Alumina and Aluminum Assets",
+   "source": "Business Wire",
+   "url": "https://www.businesswire.com/news/home/20260909282427/en/"
+  },
+  {
+   "ts": "2026-08-27T08:30:00",
+   "date_raw": "Aug-27-26 08:30AM",
+   "headline": "Alcoa to Participate in Jefferies Global Industrials Conference 2026",
+   "source": "Business Wire",
+   "url": "https://www.businesswire.com/news/home/20260826228474/en/"
+  },
+  {
+   "ts": "2026-08-25T04:39:00",
+   "date_raw": "Aug-25-26 04:39AM",
+   "headline": "Alcoa starts construction on gallium plant at Wagerup refinery",
+   "source": "Mining Technology",
+   "url": "https://finance.yahoo.com/m/c4ff7df8-957d-3a19-b2e9-ea2b93b3df36/alcoa-starts-construction-on.html"
+  },
+  {
+   "ts": "2026-08-23T05:21:00",
+   "date_raw": "Aug-23-26 05:21AM",
+   "headline": "Could Canada fully supply the U.S. with aluminium?",
+   "source": "Investing.com",
+   "url": "https://finance.yahoo.com/markets/commodities/articles/could-canada-fully-supply-u-092128571.html"
+  },
+  {
+   "ts": "2026-08-14T23:49:00",
+   "date_raw": "Aug-14-26 11:49PM",
+   "headline": "U.S., Canada face sticking points before 50% tariff deadline",
+   "source": "Investing.com",
+   "url": "https://finance.yahoo.com/m/41ce8006-cb70-30cf-843c-4afc58070d59/u.s.%2C-canada-face-sticking.html"
+  },
+  {
+   "ts": "2026-08-14T18:05:00",
+   "date_raw": "06:05PM",
+   "headline": "Stanley Druckenmiller's Bold Second Quarter 2026 Move: Slashing Alcoa Corp at a -2. ...",
+   "source": "GuruFocus.com",
+   "url": "https://finance.yahoo.com/markets/stocks/articles/stanley-druckenmillers-bold-second-quarter-220528292.html"
+  },
+  {
+   "ts": "2026-08-14T06:00:00",
+   "date_raw": "06:00AM",
+   "headline": "Trump Supporters Imperil $4 Billion Aluminum Plant Central to His Industrial Push",
+   "source": "Bloomberg",
+   "url": "https://finance.yahoo.com/economy/policy/articles/trump-supporters-imperil-4-billion-100019066.html"
+  }
+ ]
+}

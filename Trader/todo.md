@@ -43,3 +43,10 @@ Results and scripts are in [`spikes/`](spikes/README.md). Run 2026-09-26.
 
 - [x] **Archive intraday candles nightly?** Decided 2026-09-26: save what replay needs: the 9:30–9:35 bar for every universe symbol, plus 1-min regular-hours candles for the top 20 candidates and SPY each day (SPEC §8, `candle_archive`).
 - [x] **Keep or drop ETFs** in the universe. Decided 2026-09-26: drop them with FinViz's `ind_stocksonly` filter (542 stocks when tested). SPY is still fetched for the overlay.
+
+## Build (plan saved 2026-09-26)
+
+- Master plan: [`docs/plans/2026-09-26-build-master-plan.md`](docs/plans/2026-09-26-build-master-plan.md). Gauntlet process, shared state file, all phases.
+- Phase 1 detailed plan: [`docs/plans/2026-09-26-phase-1-data-layer.md`](docs/plans/2026-09-26-phase-1-data-layer.md).
+- Live build state: [`docs/build/BUILD_STATE.md`](docs/build/BUILD_STATE.md).
+- S1 follow-up, S2 and live S4 are assumed to pass (Stephen, 2026-09-26); still worth running Monday with `trader questrade-check` once P1-T7 is built.

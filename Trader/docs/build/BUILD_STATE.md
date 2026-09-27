@@ -28,9 +28,9 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T4 | Market types, clock and session calendar | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 4af1355 |
 | P1-T5 | FinViz parser and scraper | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | b1d45e5 |
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 0607f11 |
-| P1-T7 | Questrade data client and `questrade-check` CLI | T6 | fixing | 2 | V✅ B❌ S+C❌ | 879520e |
+| P1-T7 | Questrade data client and `questrade-check` CLI | T6 | gauntlet | 2 | V✅ B❌ S+C❌ → fix f14f4fa (verify+review running) | f14f4fa |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
-| P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | gauntlet | 1 |  | f9d089f |
+| P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | gauntlet | 1 | V✅ | f9d089f |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | todo | 0 | | |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | todo | 0 | | |
 
@@ -560,3 +560,23 @@ None open.
 - Gate: check.sh 261 passed, 2 failed (only tests/gauntlet/test_p1_t7_breaker.py, which belongs to P1-T7's fix round). 10 new tests in tests/jobs
 - LIVE: nightly 2026-09-28 succeeded, detail source=finviz, universe=543, unresolved=[], candle_errors=0. Second run: skipped. notify: sent
 - Notes: small changes from the plan. (1) nightly maps tickers to Questrade form (to_questrade_ticker) because the plan's own BF-B test needs it. (2) The no-previous-universe error event is now written before the re-raise, so it isn't rolled back. (3) Daily candle date = et_date(start), not the UTC date. (4) notify exits 1 on failure and prints only the exception type, never the URL that holds the bot token. Risk: a transport timeout in candles_many would abort the whole nightly until the P1-T7 fix lands (its breaker test_candles_many_isolates_transport_errors)
+
+### 2026-09-27T05:21:34Z · P1-T9 · Verifier · attempt 1 · started
+- Notes: verifying at 979e54e
+
+### 2026-09-27T05:23:04Z · P1-T9 · Verifier · attempt 1 · finished
+- Result: PASS at 979e54e
+- Gate: check.sh 261 passed, 2 failed (only the known P1-T7 breaker tests in tests/gauntlet/test_p1_t7_breaker.py). ruff/format/mypy clean
+- Findings: Steps 1-12 ticked, all task files on trunk, tree clean. LIVE read-only: symbols 543, universe_snapshots(2026-09-28) 543 finviz, daily_candles 11373 over 543 symbols, intraday 5m 7567 over 543 symbols, open_bar_stats(2026-09-28) 543 with 0 NULL avg_open_vol_14d and 2 NULL atr14, job_runs nightly id 1 succeeded (candle_errors 0, unresolved none)
+
+### 2026-09-27T05:23:29Z · P1-T7 · Builder · attempt 2 · finished
+- Result: done. All 10 gauntlet findings fixed, each with a regression test. test_p1_t7_breaker.py passes unedited
+- Commits: f14f4fa
+- Gate: check.sh passed (281 tests, including the P1-T9 code on trunk)
+- Notes: public names and signatures unchanged except QtQuote.delay is now int | None. Additive: TokenBucket.now(), TokenBucket.pause_until(), MAX_CANDLES_PER_REQUEST, INTERVAL_LENGTH. A non-object candles payload raises ValueError, so it becomes a per-request error. The existing clamp test now uses FifteenMinutes because 88 days of OneMinute trips the 20k guard. Resolved a cli.py rebase conflict with P1-T9's nightly and notify commands (kept both)
+
+### 2026-09-27T05:24:00Z · P1-T9 · Breaker · attempt 1 · started
+- Notes: writing Trader/app/tests/gauntlet/test_p1_t9_breaker.py
+
+### 2026-09-27T05:24:01Z · P1-T9 · Spec+Code reviewer · attempt 1 · started
+- Notes: reviewing 348ac1e, 4adc532, f9d089f

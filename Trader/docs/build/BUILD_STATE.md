@@ -7,7 +7,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 2 (P2-T0 planning finishing) |
-| Current task | B1 gauntlet, B2 (T6/T7) building, T12 gauntlet, P3-T0 planning |
+| Current task | B1+T12 gauntlets; T8, T9, T10→T11 building; P3-T0 planning |
 | Gauntlet stage | Breaker + reviewers |
 | Last updated (UTC) | 2026-09-27T04:44:00Z |
 | Last pushed commit | d64518b |
@@ -36,9 +36,9 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | accepted | 2 | review ✅ + should-fix round ✅ (orchestrator ran check.sh: 333 passed) | ad82bfa |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | accepted | 2 | review ❌ → fix ff0e1ce (plan code re-validated: 585 passed) | ff0e1ce |
 | P2-T1 | Migration 0002: trading tables, views, ledger trigger, factories | P1 | gauntlet | 1 | V✅ (Breaker+review folded into P2-B1 gauntlet) | 2cab471 |
-| P2-B1 | Batch 1: T2 runs/settings, T3 ledger, T4 fill model, T5 sim broker | P2-T1, plan fix | gauntlet | 1 | built T2-T5 (fe80311); V+B and review running | fe80311 |
-| P2-B2 | Batch 2: T6 framework, T7 market data, T8 orb_sip, T9 spy_overlay | B1 V✅ | building | 1 | T6→T7 building; T8, T9 start when T7 lands |  |
-| P2-B3 | Batch 3: T10 risk/kill switches, T11 proposals, T12 Claude catalysts | B2 V✅ | todo | 0 | | |
+| P2-B1 | Batch 1: T2 runs/settings, T3 ledger, T4 fill model, T5 sim broker | P2-T1, plan fix | fixing | 2 | V✅ B❌(3/35) S+C❌(1 must, 6 should) | 1ef2f6d |
+| P2-B2 | Batch 2: T6 framework, T7 market data, T8 orb_sip, T9 spy_overlay | B1 V✅ | building | 1 | T6, T7 done; T8 + T9 building in parallel |  |
+| P2-B3 | Batch 3: T10 risk/kill switches, T11 proposals, T12 Claude catalysts | B2 V✅ | building | 1 | T12 built (gauntlet running); T10→T11 building |  |
 | P2-B4 | Batch 4: T13 orchestrator, T14 premarket (LIVE), T15 full day | B3 V✅ | todo | 0 | | |
 | P2-T2 | Runs, sim account, full runtime settings | T1 | todo | 0 | | |
 | P2-T3 | Ledger with T+1 settlement | T1, T2 | todo | 0 | | |
@@ -748,3 +748,48 @@ None open.
 - Commits: 638cc24 (T2), 75c1172 (T4), 166749a (T3), fe80311 (T5)
 - Gate: check.sh passed on trunk fe80311 (456 tests)
 - Notes: plan code applied verbatim (extracted programmatically). Only deviation is placement: the T2 settings fields go after universe_fallback_stale_after_sessions, the last Phase 1 field
+
+### 2026-09-27 00:33 MT · P2-B3 (P2-T10, P2-T11) · builder · attempt 1 · started
+- Notes: batch 3 builder, T12 already on trunk. Applying T10 then T11 from the phase 2 plan.
+
+### 2026-09-27 00:34 MT · P2-T12 · Spec+Code reviewer · attempt 1 · finished
+- Result: PASS (0 must-fix, 3 should-fix, 6 nits)
+- Commits reviewed: e4c9f39 (code matches plan Step 4 apart from ruff formatting)
+- Findings (should-fix): headlines not delimited as untrusted data in the prompt. A guarded upsert drops the cost of a racing duplicate call, so spent() undercounts. One error event per over-budget name instead of one alert per session.
+- Findings (nit): title length uncapped, cache tokens not costed, cross-process budget not atomic, gather leaves in-flight tasks on error, client timeout belongs in T14, headlines overwritten with [] on unclassified rows
+
+### 2026-09-27 00:35 MT · P2-T9 · builder · attempt 1 · started
+- Notes: spy_overlay plug-in 1.0.0, batch B2
+
+### 2026-09-27 00:35 MT · P2-T8 · builder · attempt 1 · started
+- Result: building orb_sip plug-in 1.0.0 (batch B2)
+
+### 2026-09-27 00:35 MT · P2-T6+T7 (B2 part 1) · Builder · attempt 1 · finished
+- Result: done, both tasks applied from the plan verbatim, all checkboxes ticked
+- Commits: 6dd8a25 (P2-T6), 8e7d8a1 (P2-T7), both on trunk
+- Gate: check.sh passed (492 tests), T6 27 tests, T7 9 tests
+- Notes: no deviations. T7 is on trunk, so T8/T9 can start
+
+### 2026-09-27 00:36 MT · P2-B1 · Spec+Code reviewer · attempt 1 · finished
+- Result: FAIL (1 must-fix, 6 should-fix, 9 nits)
+- Commits reviewed: e73ac57, 2cab471, 638cc24, 75c1172, 166749a, fe80311
+- Findings: must-fix trades.exit_reason String(50) vs orders.reason String(100) means a long exit reason can never fill and aborts every fill in the batch (sim_broker.py:435, 0002_trading.py:297). Should-fix: no per-order isolation in on_quotes, fills outside RTH, non-atomic account_state, lock-order inversion, sell fill does not re-check the position is open, no buying-power backstop at fill
+- Notes: FillModel protocol, entry cutoff, T+1, append-only trigger, fills.order_id unique, Decimal and Clock all match plan and SPEC
+
+### 2026-09-27 00:36 MT · P2-T6+T7 · Spec+Code reviewer · attempt 1 · started
+- Notes: reviewing 6dd8a25 (P2-T6) and 8e7d8a1 (P2-T7) on origin/trunk
+
+### 2026-09-27 00:36 MT · P2-T6/T7 · Verifier+Breaker · attempt 1 · started
+- Notes: verifying T6/T7 and writing tests/gauntlet/test_p2_t6t7_breaker.py
+
+### 2026-09-27 00:38 MT · P2-B1 · Breaker · attempt 1 · finished
+- Result: FAIL (verify part PASS: git clean, P2-T1..T5 ticked, check.sh green with 456 passed)
+- Commits: 1ef2f6d (tests/gauntlet/test_p2_b1_breaker.py, 10 tests, 35 cases, 32 pass)
+- Findings: test_an_entry_never_fills_before_the_session_opens (an entry fills on a 09:00 ET pre-market quote), test_a_crossed_market_never_fills[buy|sell] (bid > ask fills at an impossible price)
+- Notes: possible deadlock (not a double fill) if two on_quotes callers split a position's stop and exit orders under SKIP LOCKED. Not tested, raised for the reviewers
+
+### 2026-09-27 00:37 MT · P2-T12 · Breaker · attempt 1 · finished
+- Result: FAIL (2 of 8 tests, 21 of 23 cases pass)
+- Commits: 17a37e6
+- Gate: check.sh passed before the new tests (456 tests)
+- Findings: test_racing_gets_for_one_name_never_lose_a_calls_cost (two concurrent get() calls for one name both call Claude and the second call's cost is dropped by the on-conflict WHERE, so spent under-reports), test_headline_prompt_injection_stays_data (headline titles with newlines can forge Ticker/Pre-market gap/Earnings date lines in the prompt)

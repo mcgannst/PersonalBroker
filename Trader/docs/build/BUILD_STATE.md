@@ -34,7 +34,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 42bd500 |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | accepted | 2 | review ✅ + should-fix round ✅ (orchestrator ran check.sh: 333 passed) | ad82bfa |
-| P2-T0 | Write the Phase 2 plan | P1-REVIEW | gauntlet | 1 | plan code test-run by planner: 564 passed; review running | 89356c6 |
+| P2-T0 | Write the Phase 2 plan | P1-REVIEW | fixing | 2 | V+S ❌ (M1 dep, S1 overnight-hold) | 89356c6 |
 | P2-T1 | Migration 0002: trading tables, views, ledger trigger, factories | P1 | gauntlet | 1 |  | 2cab471 |
 | P2-T2 | Runs, sim account, full runtime settings | T1 | todo | 0 | | |
 | P2-T3 | Ledger with T+1 settlement | T1, T2 | todo | 0 | | |
@@ -681,3 +681,11 @@ None open.
 - Commits: e73ac57, 2cab471
 - Gate: check.sh passed (353 tests), new file tests/db/test_migration_0002.py has 20 tests
 - Notes: LIVE trader_dev upgraded 0001 to 0002 (head). App role trader_dev_app can SELECT the new tables and views and has INSERT/UPDATE via default privileges. No deviations from the plan code
+
+### 2026-09-27 00:12 MT · P2-T1 · Verifier · attempt 1 · started
+- Notes: pull, clean status, check.sh, checkboxes, alembic current on trader_dev
+
+### 2026-09-27 00:12 MT · P2-T0 · Verifier + Spec reviewer · attempt 1 · finished
+- Result: FAIL (1 must-fix)
+- Findings: must-fix: task table line 28, P2-T10 uses EnterLong/Exit/Cancel from P2-T6 but does not depend on T6. should-fix: expired cancel proposals just expire, so a late entry fill can be held overnight in manual mode (BR-42, RF4). Staleness from last_trade_time is an unconfirmed SPEC reading. SimBroker is tied to QuoteFillModel and QtQuote, so the P5 candle fill model cannot plug in. No step updates master plan 7.1 for the refined contracts. P2-T14 Files omits tests/test_cli.py. Plus nits.
+- Notes: no placeholders. Every task has Files, Interfaces, TDD code and a commit step. Coverage of BR/SPEC items complete. Review Focus 1-5 each pinned by named tests. Claude model IDs and prices, httpx2 and output_config verified against the claude-api skill.

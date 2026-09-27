@@ -2499,7 +2499,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 git pull --rebase && git push
 ```
 
-- [ ] **Step 7: LIVE: hand the token chain from `.env.dev` to the database**
+- [x] **Step 7: LIVE: hand the token chain from `.env.dev` to the database**
 
 This is the one-time ownership transfer in the Global Constraints. Do these three commands in order, without running anything else that uses Questrade in between:
 ```bash

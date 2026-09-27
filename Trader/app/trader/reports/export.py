@@ -1,9 +1,16 @@
-"""The trades CSV export (BR-62, SPEC §11 `/export/trades.csv`). P5-T6 extends this module.
+"""The trades CSV export (BR-62, SPEC §11 `/export/trades.csv`).
 
 `trades_csv` yields whole CSV lines (header first), so the API can stream them. One run only, optionally a
 session-date range (inclusive). Times are UTC ISO (`...Z`), Decimals exactly as stored, a missing value is
-an empty cell. Text cells that a spreadsheet would read as a formula (starting with `=`, `+`, `-`, `@`, a tab
-or a carriage return) get a leading `'` (CSV injection guard); numbers are never changed.
+an empty cell.
+
+After the P4 fifteen columns, P5-T12 adds seven that make each row traceable: the run's sim account
+`currency`, the position's strategy config `strategy_version`, `config_revision` and `config_scope`
+(`live` or `replay`), the position's `stop_loss` and `unprotected_seconds`, and the run's `run_mode`
+(`live` or `replay`). A trade without a config or a run without a sim account leaves those cells empty.
+
+Text cells that a spreadsheet would read as a formula (starting with `=`, `+`, `-`, `@`, a tab or a carriage
+return) get a leading `'` (CSV injection guard), the new text columns included; numbers are never changed.
 
 Rows are read through a server-side cursor. Closing the generator early (the API closes it when a client
 disconnects) closes the cursor and ends the read transaction at once.
@@ -36,6 +43,14 @@ TRADE_CSV_COLUMNS: tuple[str, ...] = (
     "exit_reason",
     "opened_at",
     "closed_at",
+    # P5-T12 (BR-62): traceability
+    "currency",
+    "strategy_version",
+    "config_revision",
+    "config_scope",
+    "stop_loss",
+    "unprotected_seconds",
+    "run_mode",
 )
 
 FORMULA_STARTS = ("=", "+", "-", "@", "\t", "\r")
@@ -86,10 +101,19 @@ def trades_csv(
             t.exit_reason,
             t.opened_at,
             t.closed_at,
+            m.SimAccount.currency,
+            m.StrategyConfig.version,
+            m.StrategyConfig.revision,
+            m.StrategyConfig.scope,
+            m.Position.stop_loss,
+            m.Position.unprotected_seconds,
+            m.Run.mode,
         )
         .join(m.Symbol, m.Symbol.id == t.symbol_id)
         .join(m.Position, m.Position.id == t.position_id)
+        .join(m.Run, m.Run.id == t.run_id)
         .outerjoin(m.StrategyConfig, m.StrategyConfig.id == m.Position.strategy_config_id)
+        .outerjoin(m.SimAccount, m.SimAccount.run_id == t.run_id)  # unique per run: at most one row
         .where(t.run_id == run_id)
         .order_by(t.closed_at, t.id)
         .execution_options(yield_per=_BATCH)

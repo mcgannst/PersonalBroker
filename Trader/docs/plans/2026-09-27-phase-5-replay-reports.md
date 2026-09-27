@@ -649,10 +649,10 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - **Export:** existing columns, order and CSV-injection guard unchanged; the new text cells go through `safe_cell`; numbers as stored.
 
 **Acceptance tests:**
-- [ ] 1. `GET /api/reports/weekly?week=2026-11-25` and `?week=2026-11-28` (the Saturday) return the report stored for week ending 2026-11-27 with its facts, commentary and status; `?week=2026-11-30` (no report) → 404; no session → 401.
-- [ ] 2. `telegram_status` is `sent` when a `sent` notification with key `weekly:2026-11-27` exists, else null.
-- [ ] 3. The CSV header is the 22 columns in order; a trade of a replay run with a replay-scoped config shows `config_scope = replay` and `run_mode = replay`; the P4-T7 export tests pass (they use the constant).
-- [ ] 4. Gate and commit `P5-T12: ...`.
+- [x] 1. `GET /api/reports/weekly?week=2026-11-25` and `?week=2026-11-28` (the Saturday) return the report stored for week ending 2026-11-27 with its facts, commentary and status; `?week=2026-11-30` (no report) → 404; no session → 401.
+- [x] 2. `telegram_status` is `sent` when a `sent` notification with key `weekly:2026-11-27` exists, else null.
+- [x] 3. The CSV header is the 22 columns in order; a trade of a replay run with a replay-scoped config shows `config_scope = replay` and `run_mode = replay`; the P4-T7 export tests pass (they use the constant).
+- [x] 4. Gate and commit `P5-T12: ...`.
 
 ---
 

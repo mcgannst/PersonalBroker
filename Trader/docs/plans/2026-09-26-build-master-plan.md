@@ -166,7 +166,9 @@ Log to the SHARED state file in the main checkout, by absolute path:
 Append a "started" entry now and a "finished"/"failed" entry at the end, each ONE `cat >> ... <<'EOF'`
 command (§3.2). Never edit or stage the worktree's own copy of BUILD_STATE.md.
 Secrets: docker/.env.dev exists only in the main checkout. For LIVE steps use
-`uv --directory <your worktree>/Trader/app run --env-file "/Users/stephen/Documents/Code/Claude Code/Trader/Trader/docker/.env.dev" ...`.
+`uv --directory <your worktree>/Trader/app run --env-file ../../../../../Trader/docker/.env.dev ...`
+(uv splits --env-file values on spaces, so use this RELATIVE path, which resolves from a worktree's
+Trader/app to the main checkout. From the main checkout itself use scripts/trader-dev.sh).
 Never print, cat or commit secrets. Stage files by explicit path.
 Shell rules (a hook enforces them): one command per Bash call. No chaining with the and-and, semicolon
 or or-or operators, no `cd` at all, and no `git -C`. Run git from your working directory. Use

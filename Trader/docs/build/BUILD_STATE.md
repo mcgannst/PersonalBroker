@@ -7,7 +7,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 1 |
-| Current task | P1-T1 (fixing), P1-T2 + P1-T8 (building), P1-T4 (Breaker+reviewers), P1-T5 (Verifier) |
+| Current task | P1-T1 (fixing), P1-T8 (building), P1-T2 (Verifier), P1-T4 + P1-T5 (Breaker+reviewers) |
 | Gauntlet stage | Breaker + reviewers |
 | Last updated (UTC) | 2026-09-27T05:10:00Z |
 | Last pushed commit | d64518b |
@@ -23,7 +23,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | ID | Title | Depends on | Status | Attempt | Stage results | Last commit |
 |---|---|---|---|---|---|---|
 | P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | fixing | 2 | V✅ B❌ S✅ C✅(3 should-fix) | f5b6daa |
-| P1-T2 | Database models, migration 0001, test database fixture | T1 | building | 1 | | |
+| P1-T2 | Database models, migration 0001, test database fixture | T1 | gauntlet | 1 |  | 8cb3256 |
 | P1-T3 | Crypto and runtime settings store | T2 | todo | 0 | | |
 | P1-T4 | Market types, clock and session calendar | T1 | gauntlet | 1 | V✅ | 59be3e7 |
 | P1-T5 | FinViz parser and scraper | T1 | gauntlet | 1 |  | 2dae157 |
@@ -135,3 +135,43 @@ None open.
 
 ### 2026-09-27T04:25:28Z · P1-T5 · Verifier · attempt 1 · started
 - Notes: verifying trunk at 3a5f493
+
+### 2026-09-27T04:26:08Z · P1-T4 · Code reviewer · attempt 1 · started
+- Notes: reviewing trader/market/{types,clock,calendar}.py and tests
+
+### 2026-09-27T04:26:08Z · P1-T4 · Spec reviewer · attempt 1 · started
+- Notes: reviewing P1-T4 commits against phase-1 plan, SPEC §2/§3a/§9/§10 and Global Constraints
+
+### 2026-09-27T04:26:11Z · P1-T8 · Builder · attempt 1 · started
+- Notes: worktree agent-a331babb68f674bd5, synced to trunk 3a5f493
+
+### 2026-09-27T04:26:11Z · P1-T4 · Breaker · attempt 1 · started
+- Notes: writing gauntlet tests in tests/gauntlet/test_p1_t4_breaker.py
+
+### 2026-09-27T04:26:37Z · P1-T5 · Verifier · attempt 1 · finished
+- Result: PASS
+- Commits: none (read-only), verified trunk at 3a5f493
+- Gate: check.sh ruff, format and mypy clean. pytest 37 passed, 2 failed (only the known P1-T1 breaker tests test_database_password_never_leaks_via_repr_str_or_json and test_env_setup_handles_file_without_trailing_newline). tests/adapters 12 passed
+- Findings: all 11 P1-T5 checkboxes ticked. All files and 3 fixtures tracked on trunk. Scraper tests all use respx.mock, parser tests read fixtures only, so no real network
+
+### 2026-09-27T04:26:52Z · P1-T2 · Builder · attempt 1 · finished
+- Result: done, all 10 plan steps complete and ticked
+- Commits: 3a5f493, 8cb3256
+- Gate: check.sh 37 passed, 2 failed (only the known P1-T1 breaker tests), ruff and mypy clean. tests/db 4 passed
+- LIVE: alembic upgrade head on trader_dev, alembic current = 0001 (head), app role count(*) from trader.symbols = 0
+- Notes: typing fix in 0001 (_ohlcv returns list[sa.Column[Any]], mypy strict rejected Column[object]). uv --env-file splits paths on spaces, so used a relative path ../../../../../Trader/docker/.env.dev from the app dir. No INFO line from alembic because the plan's alembic.ini sets root logging to WARNING
+
+### 2026-09-27T04:27:13Z · P1-T1 · Builder · attempt 2 · finished
+- Result: done. All 4 gauntlet findings fixed (SecretStr DB URLs + plan updated, env_setup newline and temp cleanup, notify.py lazy env and non-zero exits without leaking the token, test_config nits)
+- Commits: 3a3a50f
+- Gate: check.sh passed (47 tests, including both P1-T1 breaker tests)
+- Notes: new tests/test_build_scripts.py (8 tests). Trader/build/ is outside the ruff gate. env_setup.py has a pre-existing 113-char line there
+
+### 2026-09-27T04:27:16Z · P1-T5 · Spec reviewer · attempt 1 · started
+- Notes: reviewing P1-T5 commits against phase-1 plan, SPEC §2 and §4.2, S5 findings, Global Constraints
+
+### 2026-09-27T04:27:18Z · P1-T5 · Code reviewer · attempt 1 · started
+- Notes: reviewing trader/adapters/finviz/{parser,scraper}.py and tests
+
+### 2026-09-27T04:27:18Z · P1-T5 · Breaker · attempt 1 · started
+- Notes: writing Trader/app/tests/gauntlet/test_p1_t5_breaker.py

@@ -605,14 +605,14 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
   - P4-T10 needs supervisord `stopwaitsecs` ≥ 40 s so the worker's "stopped" heartbeat is written on shutdown.
 
 **Acceptance tests:**
-- [ ] 1. `build_notifier` returns `NullNotifier` without Telegram env vars and `TelegramNotifier` with them (fake env, no network).
-- [ ] 2. `run_worker(once=True)` with a test `Core` (testcontainers DB, `FakeQuestrade`, `FakeTelegramApi` injected through monkeypatched builders) completes one step, writes a heartbeat and returns 0.
-- [ ] 3. CLI smoke tests (Typer `CliRunner`, builders monkeypatched to fakes): `preopen`, `checkin --at 11:30`, `event orb_open`, `event --due`, `postclose` each run on a session date and print their result; on a holiday they print "not a trading session" and exit 0; `event` with a `missed` result exits 1 with one line.
-- [ ] 4. `premarket` success sends the brief once, a second run sends nothing; `token-refresh` failure writes the `questrade.token` error event.
-- [ ] 5. `tests/test_crontab.py`: the file's first non-comment line is `CRON_TZ=America/New_York`; every other line has five valid cron fields and a command; the set of (schedule, command) pairs equals the table above (which matches SPEC §9 plus the documented 12:55 line); every command's first word after `trader` is a registered Typer command (checked against `cli.app`).
-- [ ] 6. The crontab's times, read in ET, are the SPEC §9 times on a date in EDT (2026-10-06) and in EST (2026-12-01): 09:36 stays 09:36 ET on both (a check that the file has no UTC conversion baked in).
-- [ ] 7. The master plan §7.1 rows are updated as described.
-- [ ] 8. Gate and commit `P3-T12: ...`.
+- [x] 1. `build_notifier` returns `NullNotifier` without Telegram env vars and `TelegramNotifier` with them (fake env, no network).
+- [x] 2. `run_worker(once=True)` with a test `Core` (testcontainers DB, `FakeQuestrade`, `FakeTelegramApi` injected through monkeypatched builders) completes one step, writes a heartbeat and returns 0.
+- [x] 3. CLI smoke tests (Typer `CliRunner`, builders monkeypatched to fakes): `preopen`, `checkin --at 11:30`, `event orb_open`, `event --due`, `postclose` each run on a session date and print their result; on a holiday they print "not a trading session" and exit 0; `event` with a `missed` result exits 1 with one line.
+- [x] 4. `premarket` success sends the brief once, a second run sends nothing; `token-refresh` failure writes the `questrade.token` error event.
+- [x] 5. `tests/test_crontab.py`: the file's first non-comment line is `CRON_TZ=America/New_York`; every other line has five valid cron fields and a command; the set of (schedule, command) pairs equals the table above (which matches SPEC §9 plus the documented 12:55 line); every command's first word after `trader` is a registered Typer command (checked against `cli.app`).
+- [x] 6. The crontab's times, read in ET, are the SPEC §9 times on a date in EDT (2026-10-06) and in EST (2026-12-01): 09:36 stays 09:36 ET on both (a check that the file has no UTC conversion baked in).
+- [x] 7. The master plan §7.1 rows are updated as described.
+- [x] 8. Gate and commit `P3-T12: ...`.
 
 **LIVE steps** (dev bot @StephenTraderDevBot and `trader_dev`; token and chat id come from `.env.dev`, never printed). Safety rules: only the dev bot's token (the one in `Trader/docker/.env.dev`) is ever used; no prod token or prod database. Nothing in Phase 3 can place a real order: Questrade is used read-only (quotes, candles, token refresh; SPEC §4.1), every order is a `SimBroker` row, and agents never call the QuestTrade MCP order tools. Never print the token, the chat id or a Telegram URL.
 1. `uv --directory Trader/app run --env-file ../../../../../Trader/docker/.env.dev trader telegram-test` → prints `sent message <id>`; the message appears in Stephen's chat with the dev bot. Record the message id.
@@ -620,6 +620,13 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 3. Only when the session is not open and not about to open (a weekend or holiday, or a session day before 09:00 or after 16:30 ET; otherwise skip and say so, because in-session the step would fire real strategy events into `trader_dev` and send proposals to Stephen): `uv --directory Trader/app run --env-file ../../../../../Trader/docker/.env.dev python -m trader.worker --once` → exit 0 (the relay's cursors start at the current maximum ids, so no old rows are sent); then `SELECT process, phase, beat_at FROM trader.worker_heartbeats` through the dev database shows `worker` with a fresh `beat_at` and phase `stopped` (a once-run marks the heartbeat stopped on exit, as any shutdown does). Run the query with a short Python one-liner through `uv ... run python -c` using `trader.bootstrap.build_core()`, printing only the three columns. A `permission denied` error means the app role can't write the new tables: escalate (§5.4) with the error text.
 4. On a trading day before 09:20 ET only (skip otherwise and say so): `uv --directory Trader/app run --env-file ../../../../../Trader/docker/.env.dev trader preopen` → a pre-open message arrives; the `worker` check is `error` (no worker is running on the dev host yet), which is expected until P4-T11 deploys it.
 Record each result in the activity log. Do not run a long-polling worker against the dev bot for more than one `--once` step (the orchestrator does not poll, but a later deployed worker will).
+
+**Build notes (P3-T12 builder attempt 1, 2026-09-27):**
+- `open_engine(core, stack, *, client=None)`: the worker shares ONE lazily-connected Questrade client per process (P2 `build_engine` asks for one client per process, for its token cache) and closes each session's catalyst stack before the next session's engine opens; cron commands open their own client lazily on their stack. `build_notifier(core, api=None)` also takes the API client from `open_telegram` so it is closed with its stack.
+- The `ProposalView` builder moved to `trader/notify/views.py` with the bot's meaning of `risk_usd` (qty x per-share risk); `tests/notify/test_relay.py` now expects 4.62 (33 x 0.14) instead of the risk budget 5.00. The same module holds the one `StatusView` builder used by `/status` and the check-ins; `CheckinDeps` gains optional `token_health` and `killswitches` (defaults: the DB token state and `KillSwitches(factory, clock)`).
+- `TELEGRAM_LIMIT` is defined once in `notify/messages.py` (re-exported by `notify/notifier.py`).
+- `tests/conftest.py` gains an autouse fixture that makes `trader.logging_setup.configure_logging` a no-op in tests: the CLI and the worker now call it through the module attribute, and a real call would leave a root handler on a closed CliRunner stream for every later test (and break `tests/test_logging_setup.py`, which imports the function by name and is unaffected).
+- LIVE (Sunday 2026-09-27): `telegram-test` → `sent message 38`; `--buttons` → `sent message 39`; `python -m trader.worker --once` → exit 0, heartbeat `worker stopped` at 18:11:42Z, relay cursors created at the current maximum ids; `preopen`, `checkin --at 11:30`, `event --due`, `event flatten`, `postclose` → "not a trading session", exit 0; `event --due --force` refused (exit 2). Step 4's pre-open message on a trading day is still to be seen (first weekday run).
 
 ---
 

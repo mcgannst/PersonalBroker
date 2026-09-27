@@ -177,6 +177,80 @@ def nightly(
 
 
 @app.command()
+def premarket(
+    date_: str | None = typer.Option(None, "--date", help="Session YYYY-MM-DD (default: today in ET)"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Pre-market scan: gappers and news, headlines, Claude catalysts, brief (SPEC §9, 08:00 ET)."""
+    import asyncio
+    from datetime import date as date_cls
+    from pathlib import Path
+    from typing import Any
+
+    import anthropic
+
+    from trader.adapters.claude.catalyst import CatalystClassifier, CatalystService, CatalystStore
+    from trader.adapters.finviz.scraper import FinvizScraper
+    from trader.adapters.questrade.auth import QuestradeAuth
+    from trader.adapters.questrade.client import QuestradeClient
+    from trader.bootstrap import build_core
+    from trader.jobs.premarket import PremarketDeps, run_premarket
+    from trader.jobs.runner import run_job
+    from trader.market.clock import et_date
+    from trader.market.data_service import MarketDataService
+
+    core = build_core()
+    settings = core.settings.load()
+    session_date = date_cls.fromisoformat(date_) if date_ else et_date(core.clock.now())
+    if not core.calendar.is_session(session_date):
+        typer.echo(f"premarket {session_date}: not a trading session, nothing to do")
+        return
+    auth = QuestradeAuth(core.factory, core.crypto, core.clock)
+    api_key = core.env.anthropic_api_key
+    cache_dir = Path.home() / ".cache" / "trader" / "finviz"
+
+    with FinvizScraper(
+        min_interval_s=settings.finviz_min_interval_seconds,
+        cache_dir=cache_dir,
+        cache_ttl_s=settings.finviz_cache_hours * 3600,
+    ) as finviz:
+
+        def job() -> dict[str, Any]:
+            async def go() -> dict[str, Any]:
+                claude = (
+                    anthropic.AsyncAnthropic(api_key=api_key.get_secret_value(), timeout=30, max_retries=1)
+                    if api_key
+                    else None
+                )
+                try:
+                    async with QuestradeClient(auth, core.clock) as qt:
+                        classifier = CatalystClassifier(claude, core.settings.load) if claude else None
+                        service = CatalystService(
+                            core.factory,
+                            core.clock,
+                            CatalystStore(core.factory, core.clock),
+                            classifier,
+                            finviz,
+                        )
+                        data = MarketDataService(core.factory, core.clock, core.calendar, qt)
+                        deps = PremarketDeps(core.factory, core.clock, finviz, data, service, settings)
+                        return await run_premarket(deps, session_date)
+                finally:
+                    if claude is not None:
+                        await claude.close()
+
+            return asyncio.run(go())
+
+        out = run_job(core.factory, core.clock, "premarket", session_date, job, force=force)
+    if out.status == "succeeded":
+        typer.echo(out.detail["brief"])
+    else:
+        typer.echo(f"premarket {session_date}: {out.status} {out.error or ''}")
+    if out.status == "failed":
+        raise typer.Exit(1)
+
+
+@app.command()
 def notify(text: str) -> None:
     """Send a Telegram message to Stephen through the configured bot."""
     import httpx

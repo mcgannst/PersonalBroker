@@ -8,3 +8,12 @@ def test_version_command() -> None:
     result = CliRunner().invoke(app, ["version"])
     assert result.exit_code == 0
     assert result.stdout.strip() == __version__
+
+
+def test_premarket_command_is_registered() -> None:
+    from typer.testing import CliRunner
+
+    from trader.cli import app
+
+    result = CliRunner().invoke(app, ["premarket", "--help"])
+    assert result.exit_code == 0 and "--date" in result.output

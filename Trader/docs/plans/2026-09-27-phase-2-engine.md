@@ -8291,7 +8291,7 @@ git push origin HEAD:trunk
   - `format_brief(session_date, top, catalysts, over, screen_errors) -> str`: one line per candidate (`AAA +5.00% [gap, news] earnings_beat, bullish, quality 82: <reason>`), then `Not classified (over cap): ...` and `FinViz screens failed: ...` lines when relevant. Sending it on Telegram is P3 (the Notifier); here it is printed and stored in `job_runs.detail`.
   - CLI `trader premarket [--date YYYY-MM-DD] [--force]`: today's ET session by default; does nothing on a non-session day; `ANTHROPIC_API_KEY` unset means names are stored `unknown` ("claude not configured").
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `Trader/app/tests/jobs/test_premarket.py`:
 ```python
@@ -8442,12 +8442,12 @@ async def test_the_cost_of_every_call_is_stored(db_factory: sessionmaker[Session
     assert store.spent(DAY + timedelta(days=1)) == 0
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `uv --directory Trader/app run pytest tests/jobs/test_premarket.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.jobs.premarket'`.
 
-- [ ] **Step 3: Implement `trader/jobs/premarket.py`**
+- [x] **Step 3: Implement `trader/jobs/premarket.py`**
 
 ```python
 """Pre-market scan (SPEC §4.2, §4.3, §9 at 08:00 ET; BR-03, BR-05).
@@ -8602,12 +8602,12 @@ async def run_premarket(deps: PremarketDeps, session_date: date) -> dict[str, An
     return detail
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `uv --directory Trader/app run pytest tests/jobs/test_premarket.py -q`
 Expected: all pass.
 
-- [ ] **Step 5: Add the `premarket` command**
+- [x] **Step 5: Add the `premarket` command**
 
 Add to `Trader/app/trader/cli.py` (after `nightly`):
 ```python
@@ -8688,7 +8688,7 @@ def test_premarket_command_is_registered() -> None:
     assert result.exit_code == 0 and "--date" in result.output
 ```
 
-- [ ] **Step 6: Run the gate, commit and push**
+- [x] **Step 6: Run the gate, commit and push**
 
 Run: `uv --directory Trader/app run ruff format .` then `bash Trader/app/scripts/check.sh` → all pass.
 ```bash

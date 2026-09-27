@@ -1030,7 +1030,7 @@ Expected: `0` (no permission error).
   - `trader.settings_store.RuntimeSettings` (pydantic, frozen; DB keys are the aliases): `approval_mode: Literal["manual","auto"] = "manual"`; `markets_enabled: list[Literal["US","TSX"]] = ["US"]`; `universe_finviz_filters` (key `universe.finviz_filters`) default `"ind_stocksonly,sh_price_5to50,sh_avgvol_o1000,ta_averagetruerange_o0.5,geo_usa"`; `universe_extra_symbols` (key `universe.extra_symbols`) default `["SPY"]`; `finviz_min_interval_seconds` (key `finviz.min_interval_seconds`, ≥ 2.0) default `2.0`; `finviz_cache_hours` (key `finviz.cache_hours`) default `12.0`; `open_bar_lookback_sessions` (key `open_bar.lookback_sessions`, 5–30) default `14`.
   - `trader.settings_store.SettingsStore(factory: sessionmaker[Session], now: Callable[[], datetime])` with `load() -> RuntimeSettings` and `set(key: str, value: Any, actor: str) -> RuntimeSettings` (raises `KeyError` for unknown keys, `pydantic.ValidationError` for bad values; writes `settings` and `audit_log` in one transaction).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `Trader/app/tests/test_crypto.py`:
 ```python
@@ -1121,12 +1121,12 @@ def test_unknown_rows_in_db_are_ignored(db_factory: sessionmaker[Session]) -> No
     assert store(db_factory).load() == RuntimeSettings()
 ```
 
-- [ ] **Step 2: Run to see them fail**
+- [x] **Step 2: Run to see them fail**
 
 Run: `uv run pytest tests/test_crypto.py tests/db/test_settings_store.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.crypto'`.
 
-- [ ] **Step 3: Implement `trader/crypto.py`**
+- [x] **Step 3: Implement `trader/crypto.py`**
 
 ```python
 """Fernet encryption for secrets at rest (SPEC §14)."""
@@ -1151,7 +1151,7 @@ class Crypto:
             return None
 ```
 
-- [ ] **Step 4: Implement `trader/settings_store.py`**
+- [x] **Step 4: Implement `trader/settings_store.py`**
 
 ```python
 """Runtime settings stored one key per row in trader.settings (SPEC §13), with an audit trail."""
@@ -1220,12 +1220,12 @@ class SettingsStore:
         return updated
 ```
 
-- [ ] **Step 5: Run the tests, then the gate**
+- [x] **Step 5: Run the tests, then the gate**
 
 Run: `uv run pytest tests/test_crypto.py tests/db/test_settings_store.py -q` → `8 passed`.
 Run: `uv run ruff format . && bash scripts/check.sh` → all pass.
 
-- [ ] **Step 6: Commit and push**
+- [x] **Step 6: Commit and push**
 
 ```bash
 cd "/Users/stephen/Documents/Code/Claude Code/Trader"

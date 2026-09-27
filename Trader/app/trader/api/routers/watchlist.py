@@ -7,11 +7,12 @@ An uploaded list replaces FinViz for its session (resolved decision 5); deleting
   the next nightly prepares).
 - `POST` takes `multipart/form-data` only (else 415): `file` (the CSV, required), `date` (optional, the same
   default; it must be a session day not before today's, else 422) and `run_nightly` (optional boolean). A
-  request larger than the file limit plus a small form allowance is refused before it is parsed. The CSV
+  request larger than the file limit plus a small form allowance is refused before it is parsed (by its
+  Content-Length) or while it is parsed (a running count, for a chunked body). The CSV
   rules are `trader.market.watchlist.parse_watchlist_csv`; a file it refuses gives 422 with nothing stored.
   A second upload for the date replaces the first. `run_nightly=true` launches `nightly --date <date>
-  --force` through `services.jobs`; when a nightly is already running the list is still stored and
-  `launched.launched` is false.
+  --force` through `services.jobs`; when a nightly is already running (or starts in the meantime) the list
+  is still stored, the answer is a 200 and `launched.launched` is false.
 - `DELETE /{date}` removes the list (404 when none).
 Writes are audited (`watchlist.upload`, `watchlist.delete`) with the actor `web:<username>`.
 """
@@ -22,6 +23,7 @@ from typing import Annotated
 import anyio
 from fastapi import APIRouter, Query, Request
 from starlette.datastructures import UploadFile
+from starlette.types import Message, Receive
 
 from trader.api.deps import ApiServices, CsrfUser, CurrentUser, Services, actor
 from trader.api.errors import ApiError
@@ -102,6 +104,23 @@ def _too_large() -> ApiError:
     return _invalid("file", f"The file is larger than {MAX_BYTES // 1024} KB")
 
 
+def _capped_receive(receive: Receive, limit: int) -> Receive:
+    """`receive` with a running count of the body bytes: past `limit` it raises the too-large error, so a
+    body with no Content-Length (chunked) is refused while it is parsed, before more of it is spooled."""
+    seen = 0
+
+    async def capped() -> Message:
+        nonlocal seen
+        message = await receive()
+        if message["type"] == "http.request":
+            seen += len(message.get("body", b""))
+            if seen > limit:
+                raise _too_large()
+        return message
+
+    return capped
+
+
 @router.get("/watchlist")
 def read_watchlist(
     _user: CurrentUser,
@@ -124,7 +143,8 @@ async def upload_watchlist(request: Request, user: CsrfUser, services: Services)
     if length.isdigit() and int(length) > MAX_BYTES + FORM_ALLOWANCE:
         raise _too_large()
 
-    async with request.form(max_files=1, max_fields=4, max_part_size=1024) as form:
+    capped = Request(request.scope, receive=_capped_receive(request.receive, MAX_BYTES + FORM_ALLOWANCE))
+    async with capped.form(max_files=1, max_fields=4, max_part_size=1024) as form:
         upload = form.get("file")
         if not isinstance(upload, UploadFile):
             raise _invalid("file", "Choose a CSV file to upload")
@@ -156,15 +176,21 @@ async def upload_watchlist(request: Request, user: CsrfUser, services: Services)
 
     launched: JobLaunchOut | None = None
     if run_nightly:
+        not_launched = JobLaunchOut(
+            job="nightly",
+            session_date=day,
+            launched=False,
+            message="nightly is already running; run it again when it has finished",
+        )
         if services.jobs.running("nightly"):
-            launched = JobLaunchOut(
-                job="nightly",
-                session_date=day,
-                launched=False,
-                message="nightly is already running; run it again when it has finished",
-            )
+            launched = not_launched
         else:
-            launched = await services.jobs.launch("nightly", day, True, who)
+            try:
+                launched = await services.jobs.launch("nightly", day, True, who)
+            except ApiError as exc:
+                if exc.status != 409:  # the list is stored: only a launch that raced another is a 200
+                    raise
+                launched = not_launched
 
     return WatchlistUploadOut(
         watchlist=_watchlist_out(row),

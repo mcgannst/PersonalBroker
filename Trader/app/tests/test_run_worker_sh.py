@@ -60,6 +60,19 @@ def test_script_is_valid_bash() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_the_trap_is_set_before_the_child_and_a_stop_before_child_is_known_is_forwarded() -> None:
+    """Fix round 1 (structural: the window is a few instructions wide). The trap is installed before the
+    fork, and a stop that landed between the fork and `child=$!` is forwarded right after it."""
+    lines = [ln.strip() for ln in SCRIPT.read_text().splitlines()]
+    trap = next(i for i, ln in enumerate(lines) if ln.startswith("trap on_stop TERM INT"))
+    fork = lines.index("python -m trader.worker &")
+    assign = lines.index("child=$!")
+    assert trap < fork < assign
+    after = lines[assign + 1 : assign + 5]
+    assert 'if [ "$stopping" -eq 1 ]; then' in after
+    assert any(ln.startswith('kill -TERM "$child"') for ln in after)
+
+
 def test_clean_exit_returns_0_at_once(env: dict[str, str]) -> None:
     result = _run({**env, "STUB_EXIT": "0"})
     assert result.returncode == 0

@@ -111,6 +111,8 @@ def test_run_without_a_body_and_a_bad_body(db_factory: sessionmaker[Session]) ->
     with _client(db_factory, spawn) as client:
         assert client.post("/api/jobs/preopen/run").status_code == 202
         assert client.post("/api/jobs/postclose/run", json={"date": "not-a-date"}).status_code == 422
+        for force in ("true", 1, "yes", 0):  # fix round 1: a JSON boolean only
+            assert client.post("/api/jobs/postclose/run", json={"force": force}).status_code == 422, force
     assert [argv for argv, _ in spawn.calls] == [("trader", "preopen")]
 
 

@@ -33,9 +33,14 @@ AUDIT_ACTION = "credentials.questrade.seed"
 EVENT_SOURCE = "questrade.token"
 
 
+MIN_CUT = 8  # a shorter "token" is not a secret worth cutting, and cutting it would mangle the message
+
+
 def _safe(message: str, token: str) -> str:
-    """`message` masked by pattern, and with the token itself cut out."""
-    return redact_text(message.replace(token, REDACTED))
+    """`message` masked by pattern, and with the token itself cut out (when it is at least MIN_CUT long)."""
+    if len(token) >= MIN_CUT:
+        message = message.replace(token, REDACTED)
+    return redact_text(message)
 
 
 def _record(services: Services, who: str, ok: bool, message: str) -> None:

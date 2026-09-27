@@ -171,7 +171,18 @@ def test_reset_of_expectancy_and_daily_loss(world: World) -> None:
     ]
 
 
-@pytest.mark.parametrize("reason", ["ab", "   ab   ", "", "x" * 501])
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "ab",
+        "   ab   ",
+        "",
+        "x" * 501,
+        "​​​",  # fix round 1: zero-width spaces are not visible characters
+        "a‍‍b",  # joiners pad two letters to four
+        "﻿⁠‎",  # BOM, word joiner, bidi mark
+    ],
+)
 def test_reset_reason_must_be_three_to_five_hundred_characters(world: World, reason: str) -> None:
     trip(world, "max_drawdown_pct")
     r = world.client.post("/api/killswitch/max_drawdown_pct/reset", json={"reason": reason})

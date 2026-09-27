@@ -4,6 +4,9 @@
 #                      `trader create-admin`; worker and cron never migrate.
 #   Then MIGRATION_DATABASE_URL and ADMIN_PASSWORD_INITIAL are unset, so no long-running process holds
 #   them, and the mode's process is exec'd: supervisord (all), the api, run-worker.sh or supercronic.
+#   The unset reaches only this process tree: a `docker exec` shell starts from the container's own
+#   environment (the env file), so it still sees both keys. Removing them there needs them out of the
+#   runtime env file altogether (e.g. a one-shot migrate container with its own env file): see P4-T19.
 # It prints the mode, the Alembic revision and exit codes only: never an environment value (so no xtrace).
 set -eu
 

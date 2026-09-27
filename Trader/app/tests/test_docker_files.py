@@ -539,6 +539,32 @@ def test_deploy_refuses_an_env_file_missing_a_required_key(
     _no_secret_in(result.stdout + result.stderr)
 
 
+@pytest.mark.parametrize(
+    ("line", "accepted"),
+    [
+        ("SESSION_SECRET=", False),
+        ("SESSION_SECRET= ", False),
+        ('SESSION_SECRET=""', False),
+        ("SESSION_SECRET=''", False),
+        ("# SESSION_SECRET=x", False),
+        (f"SESSION_SECRET= {SESSION_SECRET}", True),  # fix round 1: a space after `=` is still a value
+        (f'SESSION_SECRET="{SESSION_SECRET}"', True),
+        (f"export SESSION_SECRET={SESSION_SECRET}", True),
+    ],
+)
+def test_deploy_needs_a_non_empty_value_for_each_required_key(
+    deploy_env: dict[str, str], tmp_path: Path, line: str, accepted: bool
+) -> None:
+    env_file = _env_file(tmp_path / "env.value", skip=("SESSION_SECRET",))
+    env_file.write_text(env_file.read_text() + line + "\n")
+    result = _deploy({**deploy_env, "TRADER_ENV_FILE": str(env_file)}, "dev")
+    assert (result.returncode == 0) is accepted, (line, result.stdout + result.stderr)
+    if not accepted:
+        assert "SESSION_SECRET" in result.stderr
+        assert _log(Path(deploy_env["STUB_LOG"])) == []
+    _no_secret_in(result.stdout + result.stderr)
+
+
 def test_deploy_refuses_a_missing_env_file(deploy_env: dict[str, str], tmp_path: Path) -> None:
     result = _deploy({**deploy_env, "TRADER_ENV_FILE": str(tmp_path / "absent")}, "dev")
     assert result.returncode == 1

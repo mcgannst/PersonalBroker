@@ -420,6 +420,8 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 
 **Build notes (T6, 2026-09-27):** the decision time is added only to a human decision (`Approved via telegram|web`, `Rejected`, `Rejected: <reason>`); `Approved (auto)` (auto mode, or an exit auto-submitted on expiry) keeps its P3 wording, because nobody decided and `tests/integration/test_worker_day.py` pins it exactly. `GET /api/proposals?status=all` is newest first (pending stays oldest first); `date` filters by the signal's ET session date; `limit` is 1–200. A not-tripped check before `reset` uses `KillSwitches.active` for the current session (as the page shows it). `decision_message` in `trader.api.routers.proposals` builds the page text.
 
+**Fix round 1 (P4-BB attempt 2, 2026-09-27):** a reset reason needs at least 3 VISIBLE characters: format characters (Unicode category Cf: zero-width spaces and joiners, BOM, bidi marks) don't count (`ResetIn` in `trader.api.schemas`, `_visible_reason`); the 422 never echoes the reason.
+
 ---
 
 ### Task P4-T7: Performance, journal and CSV export
@@ -523,6 +525,13 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - [x] 6. Telegram test with `telegram_configured` false → 409; true → one `RecordingNotifier` message of kind `reply`.
 - [x] 7. Gate and commit `P4-T9: ...`.
 
+**Fix round 1 (P4-BB attempt 2, 2026-09-27):**
+- `GET /api/events`: `since` and `before` are at most `2**63 - 1` (a bigint), so a larger id is a 422, never a database error.
+- `JobRunIn.force` is a `StrictBool`: only a JSON `true`/`false` (`"true"` or `1` → 422).
+- The launcher writes the `job.run_manual` audit row once the spawn has been tried (after: job, date, force; a failed spawn adds `"launched": false`); an audit write that fails is logged, not raised, because the child is already running. When waiting for a child fails (no exit code), it writes one `warning` event under its own source `jobs.manual.lost` (data: job, date, error_type); `jobs.manual` events always carry an exit code.
+- The token paste cuts the pasted token out of an error message only when it is at least 8 characters (a shorter one would mangle the message); pattern masking still applies.
+- The Telegram test route's own DB work (the audit row) already runs in the thread pool. The rest is inside `TelegramNotifier.send` (`_claim`, `_record_*`: short synchronous queries on the loop), shared with the worker; it can't move to a thread from the route because the notifier's PTB client belongs to the app's event loop. Left for a notifier-level change (`asyncio.to_thread` around those three calls), outside this task's files.
+
 ---
 
 ### Task P4-T10: Watchlist CSV upload and the nightly manual source
@@ -550,6 +559,10 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - [x] 4. `run_nightly=true` calls the fake launcher with `nightly`, the date and `force=True`.
 - [x] 5. `run_nightly` (fakes as in the P1 nightly tests) for a session with a manual watchlist never calls FinViz, stores `universe_snapshots` with `source = "manual"` for exactly those tickers plus SPY, and reports `source: manual`; without a watchlist it behaves as before (the existing nightly tests pass).
 - [x] 6. Gate and commit `P4-T10: ...`.
+
+**Fix round 1 (P4-BB attempt 2, 2026-09-27):**
+- The upload is capped while it streams: the form is parsed from a `receive` wrapper with a running byte count, and past `MAX_BYTES + FORM_ALLOWANCE` (16 KB) it stops with the same 422 "The file is larger than 256 KB" as the Content-Length check, so a chunked body (no Content-Length) is refused before more of it is spooled to `/tmp` (Starlette's `max_part_size` covers only non-file fields). The status stays 422, not 413, to match this plan's CSV rules and the existing tests.
+- `run_nightly=true` that loses a launch race (the launcher's 409 after the list was stored) is a 200 with `launched.launched: false` and the "already running" message, like the pre-check.
 
 ---
 
@@ -804,6 +817,11 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - Additive beyond the plan: supercronic checksums per architecture (`SUPERCRONIC_SHA1SUM_AMD64`/`_ARM64`, v0.2.49) because `smoke.sh` builds natively on arm64; the web stage runs on `$BUILDPLATFORM` (static output); program `priority` (cron 300, worker 200, api 100) fixes the stop order; `run-worker.sh` forwards INT as TERM (a background child of a non-interactive shell ignores INT); `entrypoint.sh` honours `TRADER_DOCKER_DIR` (default `/app/docker`, used by the tests) and exits 64 on an unknown mode; `deploy.sh` accepts `TRADER_HEALTH_URL`, `TRADER_HEALTH_TIMEOUT`, `TRADER_HEALTH_INTERVAL`, `TRADER_DEPLOY_SSH`.
 - Until T3 and T18 land, the image's `api` exits (`NotImplementedError: P4-T3`) and `trader create-admin` is an unknown command (the entrypoint reports its exit code and carries on).
 
+**Fix round 1 (P4-BB attempt 2, 2026-09-27):**
+- `deploy.sh` `has_key` needs a non-empty value: `KEY=v`, `KEY= v`, `export KEY=v` and `KEY="v"` count; `KEY=`, `KEY= `, `KEY=""` and a commented line don't.
+- `run-worker.sh` installs the TERM/INT trap before starting the worker, and forwards a stop that arrived between the fork and `child=$!` right after it, so no stop signal is lost.
+- `entrypoint.sh` unsets `MIGRATION_DATABASE_URL` and `ADMIN_PASSWORD_INITIAL` for its own process tree only. A `docker exec` shell starts from the container's environment (the env file), so it still sees both keys. Removing them there needs them out of the runtime env file (e.g. a one-shot migrate container with its own env file): see the note in P4-T19.
+
 ---
 
 ### Task P4-T18: Wiring: service composition, CLI commands, worker additions, route sweep, contract checks, §7.1 rows
@@ -882,6 +900,8 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 8. **Restart safety:** `docker --context shared-docker-server restart trader-dev` → comes back healthy; the heartbeat row went through `stopped` before the restart (its `detail` or the supervisord log shows the worker exited 0 within 60 s).
 9. **First trading day pre-open** (P3-T12 review point 4): on the first trading day after the deploy (Mon 2026-09-28 if deployed before then), before 09:20 ET (07:20 MT), confirm the container's cron runs `trader preopen` at 09:20 ET: a pre-open message arrives in Stephen's dev chat with the `worker` check OK, and `job_runs` has `preopen` succeeded for the session. If the phase ends after that time, record the check for the next trading morning (the orchestrator does it) instead of waiting.
 10. **One real Telegram tap** (Stephen's step, non-blocking): run `uv --directory Trader/app run --env-file ../../../../../Trader/docker/.env.dev trader telegram-test --buttons` and ask Stephen (Telegram progress message) to tap one test button; the containerised bot answers `Invalid button` and writes a `warning` event (source `telegram`), which proves the button round trip through the deployed worker. **Default if Stephen doesn't tap before the phase ends:** record it as open; the first real proposal of the soak (P6) proves the same round trip, and the build does not wait.
+
+**Note from P4-BB fix round 1 (2026-09-27):** the entrypoint unsets `MIGRATION_DATABASE_URL` and `ADMIN_PASSWORD_INITIAL` for the long-running processes only; a `docker exec trader-dev ...` shell still sees them (the container env comes from the env file). Treat `docker exec` access as owner-level database access. If that is not acceptable, split the owner URL and the initial admin password into a separate env file used only by a one-shot migrate container (`entrypoint.sh migrate`), and record the choice here.
 
 ---
 

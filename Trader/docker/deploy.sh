@@ -43,8 +43,10 @@ if [ ! -f "$env_file" ]; then
 fi
 env_file="$(cd "$(dirname "$env_file")" && pwd)/$(basename "$env_file")"
 
+# A key counts when it has a non-empty value: `KEY=v`, `KEY= v`, `export KEY=v`, `KEY="v"`; never `KEY=`,
+# `KEY=""`, `KEY= ` or a commented line.
 has_key() {
-  grep -Eq "^[[:space:]]*(export[[:space:]]+)?$1=[^[:space:]]" "$env_file"
+  grep -Eq "^[[:space:]]*(export[[:space:]]+)?$1=[[:space:]]*[\"']?[^[:space:]\"']" "$env_file"
 }
 for key in DATABASE_URL MIGRATION_DATABASE_URL APP_ENCRYPTION_KEY SESSION_SECRET; do
   if ! has_key "$key"; then

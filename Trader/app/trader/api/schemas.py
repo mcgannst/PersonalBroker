@@ -8,12 +8,13 @@ JSON (null when unknown). Nothing here reads the database: the pure mappings `Pr
 """
 
 import datetime as dt
+import unicodedata
 import warnings
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, SecretStr, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, SecretStr, StrictBool, StringConstraints
 
 from trader.db import models as m
 from trader.market.sessions import SessionPhase
@@ -499,8 +500,24 @@ class KillSwitchesOut(ApiModel):
     history: list[KillSwitchEventOut]
 
 
+MIN_REASON_VISIBLE = 3
+
+
+def _visible_reason(value: str) -> str:
+    """Format characters (Unicode category Cf: zero-width spaces and joiners, bidi marks) don't count
+    toward the 3-character minimum. The message never echoes the reason."""
+    visible = "".join(ch for ch in value if unicodedata.category(ch) != "Cf").strip()
+    if len(visible) < MIN_REASON_VISIBLE:
+        raise ValueError(f"The reason needs at least {MIN_REASON_VISIBLE} visible characters")
+    return value
+
+
 class ResetIn(ApiModel):
-    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=500)]
+    reason: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=3, max_length=500),
+        AfterValidator(_visible_reason),
+    ]
 
 
 # --- performance and journal ----------------------------------------------------------------------------
@@ -640,7 +657,7 @@ class JobRunOut(ApiModel):
 
 class JobRunIn(ApiModel):
     date: dt.date | None = None
-    force: bool = False
+    force: StrictBool = False  # a JSON true/false only: "true" or 1 is a 422
 
 
 class JobLaunchOut(ApiModel):

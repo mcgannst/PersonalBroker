@@ -130,6 +130,17 @@ def test_blank_or_long_token_is_422_without_echo(db_factory: sessionmaker[Sessio
 
 
 @pytest.mark.db
+def test_a_short_token_is_not_cut_out_of_the_message(db_factory: sessionmaker[Session]) -> None:
+    """Fix round 1: cutting a 1-7 character "token" out of Questrade's message would mangle it (every "e"
+    replaced); only a token of at least 8 characters is cut."""
+    store = FakeCredentialStore()
+    store.access_error = QuestradeAuthError("The refresh token was rejected")
+    resp = _client(db_factory, store).post("/api/credentials/questrade", json={"refresh_token": "e"})
+    assert resp.status_code == 422
+    assert resp.json()["error"]["message"] == "The refresh token was rejected"
+
+
+@pytest.mark.db
 def test_paste_needs_a_session(db_factory: sessionmaker[Session]) -> None:
     services = make_services(test_core(db_factory, FixedClock(NOW)))
     client = make_client(services, credentials.router, user=None)

@@ -1,16 +1,21 @@
 """P4-T10 acceptance tests 3 and 4: `GET/POST /api/watchlist` and `DELETE /api/watchlist/{date}`."""
 
+import asyncio
+from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from tests.api.conftest import make_client
+from tests.api.conftest import BASE_URL, make_client
 from tests.fakes_api import FakeJobLauncher, make_services, test_core
+from trader.api.launcher import already_running
 from trader.api.routers import watchlist
+from trader.api.schemas import JobLaunchOut, ManualJob
 from trader.db import models as m
 from trader.market.clock import FixedClock
 from trader.market.watchlist import MAX_BYTES, get_watchlist
@@ -163,6 +168,69 @@ def test_run_nightly_while_nightly_runs_stores_but_does_not_launch(db_factory: s
     r = _upload(client, run_nightly="true")
     assert r.status_code == 200, r.text
     assert jobs.launches == []
+    launched = r.json()["launched"]
+    assert launched["launched"] is False and "already running" in launched["message"]
+    assert get_watchlist(db_factory, NEXT) is not None
+
+
+# --- fix round 1 (P4-BB) ------
+
+
+def test_a_chunked_upload_over_the_limit_is_refused_while_it_streams(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """No Content-Length (a chunked body): the running byte count stops the parse once it passes the file
+    limit plus the form allowance, long before the whole body has been read."""
+    client = _client(db_factory)
+    boundary = "fixroundboundary"
+    head = (
+        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="big.csv"\r\n'
+        "Content-Type: text/csv\r\n\r\n"
+    ).encode()
+    chunk = b"AAPL\n" * 13_107  # about 64 KB
+    total_chunks = 64  # about 4 MB in all: 16 times the limit
+    sent = 0
+
+    async def body() -> AsyncIterator[bytes]:
+        nonlocal sent
+        yield head
+        for _ in range(total_chunks):
+            sent += 1
+            yield chunk
+        yield f"\r\n--{boundary}--\r\n".encode()
+
+    async def post() -> httpx.Response:
+        # httpx's ASGI transport hands the body to the app chunk by chunk, as a server does (the TestClient
+        # reads it all first), so `sent` shows how much of it the app pulled.
+        transport = httpx.ASGITransport(app=client.app)
+        async with httpx.AsyncClient(transport=transport, base_url=BASE_URL) as http:
+            return await http.post(
+                "/api/watchlist",
+                content=body(),
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            )
+
+    r = asyncio.run(post())
+    assert "content-length" not in {k.lower() for k in r.request.headers}
+    assert r.status_code == 422 and "larger than" in r.json()["error"]["message"], r.text
+    assert sent < total_chunks // 2, sent  # stopped early, not after reading everything
+    assert get_watchlist(db_factory, NEXT) is None
+    assert _audits(db_factory, "watchlist.upload") == []
+
+
+class RacingLauncher(FakeJobLauncher):
+    """`running` says no, then `launch` finds a nightly already started (another tab won the race)."""
+
+    async def launch(
+        self, job: ManualJob, session_date: date | None, force: bool, actor: str
+    ) -> JobLaunchOut:
+        raise already_running(job)
+
+
+def test_run_nightly_losing_the_launch_race_is_still_a_200(db_factory: sessionmaker[Session]) -> None:
+    client = _client(db_factory, RacingLauncher())
+    r = _upload(client, run_nightly="true")
+    assert r.status_code == 200, r.text
     launched = r.json()["launched"]
     assert launched["launched"] is False and "already running" in launched["message"]
     assert get_watchlist(db_factory, NEXT) is not None

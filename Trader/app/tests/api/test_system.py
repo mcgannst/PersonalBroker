@@ -209,6 +209,10 @@ def test_events_level_and_source_filters(db_factory: sessionmaker[Session]) -> N
     assert client.get("/api/events", params={"limit": 0}).status_code == 422
     assert client.get("/api/events", params={"limit": 501}).status_code == 422
     assert client.get("/api/events", params={"since": -1}).status_code == 422
+    # fix round 1: an id past a bigint is a 422, never a database error; the largest bigint is fine
+    for name in ("since", "before"):
+        assert client.get("/api/events", params={name: str(2**63)}).status_code == 422, name
+        assert client.get("/api/events", params={name: str(2**63 - 1)}).status_code == 200, name
 
 
 @pytest.mark.db

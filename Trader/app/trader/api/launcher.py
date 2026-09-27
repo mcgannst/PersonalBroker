@@ -7,8 +7,10 @@ the API's environment, not awaited (a reaper task waits for it); a non-zero exit
   own `run_job` lock and skip rules still apply inside the child.
 - The child's output is inherited (it reaches `docker logs`); none of it is stored. When it exits non-zero
   the launcher writes one `warning` event (source `jobs.manual`, data: job, date, exit code), so a refusal
-  that happens before the job records a `job_runs` row still shows on the System page.
-- Every launch writes an `audit_log` row `job.run_manual` (after: job, date, force) before the child starts.
+  that happens before the job records a `job_runs` row still shows on the System page. When waiting for
+  the child fails (no exit code), one `warning` event under `jobs.manual.lost` says its outcome is unknown.
+- Every launch writes an `audit_log` row `job.run_manual` (after: job, date, force) once the spawn has
+  been tried; a spawn that failed adds `"launched": false`.
 """
 
 import asyncio
@@ -39,6 +41,7 @@ CLI_ARGS: Mapping[ManualJob, tuple[str, ...]] = {
 }
 NO_OPTIONS: frozenset[str] = frozenset({"token-refresh"})
 EXIT_EVENT_SOURCE = "jobs.manual"
+LOST_EVENT_SOURCE = "jobs.manual.lost"  # waiting for the child failed: no exit code to report
 AUDIT_ACTION = "job.run_manual"
 
 
@@ -109,13 +112,13 @@ class SubprocessJobLauncher:
             raise already_running(job)
         self._starting.add(job)
         try:
-            await anyio.to_thread.run_sync(self._audit, actor, job, session_date, force)
             shown = session_date or self._default_date(job)
             argv = command(self._executable, job, session_date, force)
             try:
                 proc = await self._spawn(*argv, stdin=asyncio.subprocess.DEVNULL)
             except Exception as exc:
                 log.error("api.job_launch_failed", job=job, error_type=type(exc).__name__)
+                await self._audit_quietly(actor, job, session_date, force, launched=False)
                 return JobLaunchOut(
                     job=job,
                     session_date=shown,
@@ -126,6 +129,7 @@ class SubprocessJobLauncher:
         finally:
             self._starting.discard(job)
         log.info("api.job_launched", job=job, session_date=session_date, force=force, pid=proc.pid)
+        await self._audit_quietly(actor, job, session_date, force, launched=True)
         task = asyncio.create_task(self._reap(job, session_date, proc), name=f"reap-{job}")
         self._reapers.add(task)
         task.add_done_callback(self._reapers.discard)
@@ -161,22 +165,44 @@ class SubprocessJobLauncher:
 
     async def _reap(self, job: str, session_date: date | None, proc: Any) -> None:
         code: int | None = None
+        lost: str | None = None  # the error type when waiting for the child failed
         try:
             code = await proc.wait()
         except Exception as exc:
-            log.error("api.job_wait_failed", job=job, error_type=type(exc).__name__)
+            lost = type(exc).__name__
+            log.error("api.job_wait_failed", job=job, error_type=lost)
         finally:
             if self._children.get(job) is proc:
                 del self._children[job]
         log.info("api.job_exited", job=job, exit_code=code)
-        if code:
-            try:
+        if not code and lost is None:
+            return
+        try:
+            if lost is not None:
+                await anyio.to_thread.run_sync(self._record_lost, job, session_date, lost)
+            elif code:
                 await anyio.to_thread.run_sync(self._record_exit, job, session_date, code)
-            except Exception as exc:
-                log.error("api.job_exit_event_failed", job=job, error_type=type(exc).__name__)
+        except Exception as exc:
+            log.error("api.job_exit_event_failed", job=job, error_type=type(exc).__name__)
 
-    def _audit(self, actor: str, job: str, session_date: date | None, force: bool) -> None:
-        after = {"job": job, "date": session_date.isoformat() if session_date else None, "force": force}
+    async def _audit_quietly(
+        self, actor: str, job: str, session_date: date | None, force: bool, *, launched: bool
+    ) -> None:
+        """The `job.run_manual` audit row, written once the spawn has been tried. A failure is logged, not
+        raised: the child (when it started) is already running and tracked."""
+        try:
+            await anyio.to_thread.run_sync(self._audit, actor, job, session_date, force, launched)
+        except Exception as exc:
+            log.error("api.job_audit_failed", job=job, error_type=type(exc).__name__)
+
+    def _audit(self, actor: str, job: str, session_date: date | None, force: bool, launched: bool) -> None:
+        after: dict[str, Any] = {
+            "job": job,
+            "date": session_date.isoformat() if session_date else None,
+            "force": force,
+        }
+        if not launched:
+            after["launched"] = False
         with session_scope(self._factory) as s:
             s.add(
                 m.AuditLog(ts=self._clock.now(), actor=actor, action=AUDIT_ACTION, before=None, after=after)
@@ -191,4 +217,21 @@ class SubprocessJobLauncher:
                 EXIT_EVENT_SOURCE,
                 f"Manual {job} run exited with code {code}",
                 {"job": job, "date": session_date.isoformat() if session_date else None, "exit_code": code},
+            )
+
+    def _record_lost(self, job: str, session_date: date | None, error_type: str) -> None:
+        """Waiting for the child failed, so its exit code is unknown: one warning under its own source
+        (`jobs.manual` events always carry an exit code)."""
+        with session_scope(self._factory) as s:
+            log_event(
+                s,
+                self._clock,
+                "warning",
+                LOST_EVENT_SOURCE,
+                f"Lost track of the manual {job} run ({error_type}); its outcome is unknown",
+                {
+                    "job": job,
+                    "date": session_date.isoformat() if session_date else None,
+                    "error_type": error_type,
+                },
             )

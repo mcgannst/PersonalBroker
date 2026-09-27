@@ -47,6 +47,7 @@ LAST_RUNS_DAYS = 7
 MAX_ERRORS = 50
 MAX_NOTIFICATIONS = 20
 MAX_EVENTS = 500
+MAX_ID = 2**63 - 1  # a Postgres bigint: a larger id is a 422, never a database error
 ERROR_LEVELS = ("error", "critical")
 LEVEL_ORDER: tuple[str, ...] = ("debug", "info", "warning", "error", "critical")
 # Not delivered and not in flight (`sending`): the outcomes of a failed send (trader.notify.notifier).
@@ -168,8 +169,8 @@ def get_system(_user: CurrentUser, services: Services) -> SystemOut:
 def list_events(
     _user: CurrentUser,
     services: Services,
-    since: Annotated[int | None, Query(ge=0)] = None,
-    before: Annotated[int | None, Query(ge=1)] = None,
+    since: Annotated[int | None, Query(ge=0, le=MAX_ID)] = None,
+    before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None,
     level: Level | None = None,
     source: Annotated[str | None, Query(max_length=50)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_EVENTS)] = 100,

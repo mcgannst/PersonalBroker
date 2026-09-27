@@ -22,10 +22,14 @@ on_stop() {
     kill -TERM "$sleeper" 2>/dev/null || true
   fi
 }
-trap on_stop TERM INT
+trap on_stop TERM INT # installed before the child starts, so no stop signal is lost
 
 python -m trader.worker &
 child=$!
+# A stop that arrived between the fork and `child=$!` found no child to forward to: forward it now.
+if [ "$stopping" -eq 1 ]; then
+  kill -TERM "$child" 2>/dev/null || true
+fi
 
 # `wait` returns early (above 128) when a trapped signal arrives; keep waiting until the worker has exited.
 while true; do

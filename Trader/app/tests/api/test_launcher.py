@@ -156,3 +156,58 @@ async def test_a_spawn_failure_is_reported_not_raised(db_factory: sessionmaker[S
     out = await launcher.launch("postclose", None, False, "web:stephen")
     assert out.launched is False and "FileNotFoundError" in out.message
     assert launcher.running("postclose") is False
+    # fix round 1: the audit row is written once the spawn was tried, and says it did not start
+    assert [a.after for a in _manual_audits(db_factory)] == [
+        {"job": "postclose", "date": None, "force": False, "launched": False}
+    ]
+
+
+def _manual_audits(factory: sessionmaker[Session]) -> list[m.AuditLog]:
+    with factory() as s:
+        return list(s.scalars(select(m.AuditLog).where(m.AuditLog.action == "job.run_manual")))
+
+
+@pytest.mark.db
+async def test_the_audit_row_follows_a_successful_spawn(db_factory: sessionmaker[Session]) -> None:
+    spawn = FakeSpawn()
+    seen_at_spawn: list[int] = []
+
+    async def spawn_and_count(*argv: str, **kwargs: Any) -> FakeProcess:
+        seen_at_spawn.append(len(_manual_audits(db_factory)))
+        return await spawn(*argv, **kwargs)
+
+    launcher = SubprocessJobLauncher(db_factory, FixedClock(NOW), CAL, spawn=spawn_and_count)
+    await launcher.launch("preopen", None, True, "web:stephen")
+    assert seen_at_spawn == [0]  # nothing audited before the child existed
+    assert [a.after for a in _manual_audits(db_factory)] == [{"job": "preopen", "date": None, "force": True}]
+    spawn.processes[0].finish(0)
+    await _settle()
+
+
+class LostProcess(FakeProcess):
+    async def wait(self) -> int:
+        await super().wait()
+        raise OSError("no such process")
+
+
+@pytest.mark.db
+async def test_a_failed_wait_writes_one_warning_under_its_own_source(
+    db_factory: sessionmaker[Session],
+) -> None:
+    procs: list[LostProcess] = []
+
+    async def spawn(*argv: str, **kwargs: Any) -> LostProcess:
+        procs.append(LostProcess(2000))
+        return procs[-1]
+
+    launcher = SubprocessJobLauncher(db_factory, FixedClock(NOW), CAL, spawn=spawn)
+    await launcher.launch("postclose", date(2026, 10, 5), False, "web:stephen")
+    procs[0].finish(0)
+    await _settle()
+    assert launcher.running("postclose") is False
+    assert _events(db_factory) == []  # no exit code to report under jobs.manual
+    with db_factory() as s:
+        lost = list(s.scalars(select(m.EventLog).where(m.EventLog.source == "jobs.manual.lost")))
+    assert [(e.level, e.data) for e in lost] == [
+        ("warning", {"job": "postclose", "date": "2026-10-05", "error_type": "OSError"})
+    ]

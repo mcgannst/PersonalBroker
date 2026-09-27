@@ -30,7 +30,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 0607f11 |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | f14f4fa |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
-| P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | gauntlet | 1 | V✅ | f9d089f |
+| P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | fixing | 2 | V✅ B❌ S+C❌ | 3f47eb8 |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | todo | 0 | | |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | todo | 0 | | |
 
@@ -595,3 +595,10 @@ None open.
 - Commits: reviewed 348ac1e, 4adc532, f9d089f
 - Findings: must-fix: forced re-run unions universe_snapshots (stale fallback rows survive), upsert_symbols ignores the UNIQUE(ticker, exchange) conflict (a new Questrade id for a known ticker aborts every nightly). should-fix: run_job check-then-insert race, fallback rows get NULL price, fallback is only a warning, 5m fetch holds about 1.4M candles in memory, no guard against a daytime or non-session run, avg_open_vol over fewer than 14 bars is not flagged
 - Notes: the NULL atr14 on ETRA and OIG is correct (new listings with 6 daily bars since 2026-09-18). The declared deviations are all accepted. Clock, Decimal, UTC and secrets are clean.
+
+### 2026-09-27T05:28:56Z · P1-T9 · Breaker · attempt 1 · finished
+- Result: FAIL (4 of 9 test cases fail, 8 test functions)
+- Commits: 3f47eb8
+- Gate: full pytest 286 passed, 4 failed (all in test_p1_t9_breaker.py), ruff clean on the new file
+- Findings: (1) run_job has no lock or unique constraint, so two concurrent runs for one (job, session_date) both run the body (Review Focus 5). (2) upsert_symbols keys ON CONFLICT on questrade_id only, so a ticker taken over by a new questrade_id (FB to META case) raises UniqueViolation on (ticker, exchange) and aborts the whole nightly. (3) two requested names resolving to one QtSymbol raise KeyError in run_nightly (ids keyed by QtSymbol.symbol, looked up by requested name). (4) notify with TELEGRAM_CHAT_ID set but blank crashes with a pydantic ValidationError instead of a clean exit 1
+- Notes: passing cases cover crash-halfway re-run, Friday and Thanksgiving targets and lookback, ATR NULL with 10 bars, SPY from FinViz not duplicated, 31-day-old fallback reported with its real date. SPEC sets no maximum age for the fallback universe

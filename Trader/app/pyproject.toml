@@ -16,6 +16,7 @@ dependencies = [
   "pandas>=2.2",
   "typer>=0.12",
   "structlog>=24.4",
+  "anthropic>=1.0",
 ]
 
 [project.scripts]
@@ -30,6 +31,7 @@ dev = [
   "ruff>=0.6",
   "mypy>=1.11",
   "pandas-stubs>=2.2",
+  "httpx2>=2.0",
 ]
 
 [build-system]

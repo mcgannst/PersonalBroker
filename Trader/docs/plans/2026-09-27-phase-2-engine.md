@@ -6870,12 +6870,12 @@ git push origin HEAD:trunk
   - `CatalystRequest(symbol_id, ticker, company="", gap_pct=None, earnings_date=None)`; `HeadlineSource` protocol (`news(ticker, today_et) -> list[Headline]`).
   - `CatalystService(factory, clock, store, classifier: CatalystClassifier | None, headlines: HeadlineSource | None, *, max_concurrency=4)`: `async get(symbol_ids, session_date) -> dict[int, StoredCatalyst]` (implements `CatalystSource`: stored first, classifying only names without a classified row, which is the 9:35 path); `async classify_many(requests, session_date) -> dict[int, StoredCatalyst]` (headlines fetched one at a time, because FinViz is polite and the scraper isn't thread-safe; Claude calls run up to `max_concurrency` at once; the budget is re-read before each call, so it can be overshot by at most `max_concurrency − 1` calls; a budget stop logs an `error` event `claude.catalyst`); `mark_unclassified(requests, session_date, note) -> dict[int, StoredCatalyst]`. With no classifier or no headline source, names are stored as `unknown` with the note `claude not configured`. A headline failure (`FinvizError`) stores `unknown` with `headlines unavailable: ...` and makes no Claude call.
 
-- [ ] **Step 1: Add the dependencies**
+- [x] **Step 1: Add the dependencies**
 
 Run: `uv --directory Trader/app add "anthropic>=1.0"` then `uv --directory Trader/app add --dev "httpx2>=2.0"`.
 Expected: `pyproject.toml` gains `anthropic` in `dependencies` and `httpx2` in the dev group, and `uv.lock` is updated. `anthropic` 1.x does its HTTP through `httpx2` (the maintained fork of `httpx`, published by Pydantic), not `httpx`, so `respx` can't see its requests: the SDK-shape test below fakes the transport with `httpx2.MockTransport` instead. `httpx2` arrives with `anthropic`; it is declared in the dev group because the test imports it.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 `Trader/app/tests/adapters/test_claude_catalyst.py`:
 ```python
@@ -7149,12 +7149,12 @@ async def test_over_cap_and_unconfigured_names_are_unknown(db_factory: sessionma
     assert got[symbols["CCC"]].reason == "claude not configured"
 ```
 
-- [ ] **Step 3: Run to see it fail**
+- [x] **Step 3: Run to see it fail**
 
 Run: `uv --directory Trader/app run pytest tests/adapters/test_claude_catalyst.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.adapters.claude'`.
 
-- [ ] **Step 4: Implement `trader/adapters/claude/catalyst.py`**
+- [x] **Step 4: Implement `trader/adapters/claude/catalyst.py`**
 
 `Trader/app/trader/adapters/claude/__init__.py`: empty file.
 
@@ -7559,12 +7559,12 @@ class CatalystService:
 
 `CatalystResult.model_validate_json` rejects an extra or a missing field, a quality outside 0–100, an unknown type or direction, and text that isn't JSON; all of those become `status="error"`.
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `uv --directory Trader/app run pytest tests/adapters/test_claude_catalyst.py -q`
 Expected: all pass. If `test_the_real_sdk_accepts_the_request_shape` fails, its message shows `c.error`: a `TypeError` naming a parameter means the installed SDK doesn't accept the documented request shape, so check `uv --directory Trader/app pip show anthropic` is 1.x before changing any code.
 
-- [ ] **Step 6: Run the gate, commit and push**
+- [x] **Step 6: Run the gate, commit and push**
 
 Run: `uv --directory Trader/app run ruff format .` then `bash Trader/app/scripts/check.sh` → all pass.
 ```bash

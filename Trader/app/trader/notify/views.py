@@ -98,6 +98,7 @@ def proposal_view(s: Session, p: m.Proposal) -> ProposalView:
         expires_at=p.expires_at,
         decided_via=p.decided_via,
         error=p.error,
+        decided_at=p.decided_at,
     )
 
 

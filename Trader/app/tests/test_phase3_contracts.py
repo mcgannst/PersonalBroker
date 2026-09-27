@@ -175,6 +175,7 @@ VIEW_FIELDS: dict[type, list[str]] = {
         "expires_at",
         "decided_via",
         "error",
+        "decided_at",  # P4-T1 (contract refinement 2): last, defaulted to None
     ],
     nt.FillView: [
         "fill_id",

@@ -18,6 +18,12 @@ dependencies = [
   "structlog>=24.4",
   "anthropic>=1.0",
   "python-telegram-bot>=21,<22",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "argon2-cffi>=23.1",
+  "pyotp>=2.9",
+  "python-multipart>=0.0.9",
+  "tzdata>=2026.3",
 ]
 
 [project.scripts]
@@ -28,6 +34,9 @@ orb_sip = "trader.strategies.orb_sip:OrbSip"
 spy_overlay = "trader.strategies.spy_overlay:SpyOverlay"
 
 [dependency-groups]
+deploy = [
+    "supervisor>=4.2",
+]
 dev = [
   "pytest>=8.3",
   "pytest-asyncio>=0.24",
@@ -68,5 +77,5 @@ strict = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["exchange_calendars.*", "selectolax.*", "testcontainers.*", "respx.*"]
+module = ["exchange_calendars.*", "selectolax.*", "testcontainers.*", "respx.*", "tzdata"]
 ignore_missing_imports = true

@@ -1,5 +1,5 @@
-"""ORM models (SPEC §10). Phase 1 tables, the Phase 2 trading tables (migration 0002), then the Phase 3
-worker and Telegram tables (migration 0004)."""
+"""ORM models (SPEC §10). Phase 1 tables, the Phase 2 trading tables (migration 0002), the Phase 3
+worker and Telegram tables (migration 0004), then the Phase 4 web tables (migration 0005)."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -484,3 +484,44 @@ class NotifyCursor(Base):
     stream: Mapped[str] = mapped_column(String(30), primary_key=True)  # proposals | fills | events
     last_id: Mapped[int] = mapped_column(BigInteger)
     updated_at: Mapped[datetime] = mapped_column(TS)
+
+
+# --- Phase 4: web app (migration 0005). Operational tables, so no run_id (like job_runs). -------------------
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    username: Mapped[str] = mapped_column(String(50), unique=True)
+    password_hash: Mapped[str] = mapped_column(Text)  # Argon2id; never leaves the server
+    totp_secret_enc: Mapped[str | None] = mapped_column(Text)  # Crypto-encrypted base32 secret
+    totp_pending_enc: Mapped[str | None] = mapped_column(Text)  # set up but not yet confirmed
+    totp_last_step: Mapped[int | None] = mapped_column(BigInteger)  # the last accepted step (no replay)
+    failed_logins: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    locked_until: Mapped[datetime | None] = mapped_column(TS)
+    created_at: Mapped[datetime] = mapped_column(TS)
+    updated_at: Mapped[datetime] = mapped_column(TS)
+    password_changed_at: Mapped[datetime] = mapped_column(TS)
+    last_login_at: Mapped[datetime | None] = mapped_column(TS)
+
+
+class WebSession(Base):
+    __tablename__ = "web_sessions"
+    __table_args__ = (Index("ix_web_sessions_user_id", "user_id"),)
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("trader.users.id", ondelete="CASCADE"))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)  # SHA-256 hex of the cookie token
+    csrf_token: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+    last_seen_at: Mapped[datetime] = mapped_column(TS)
+    expires_at: Mapped[datetime] = mapped_column(TS)
+    revoked_at: Mapped[datetime | None] = mapped_column(TS)
+    ip: Mapped[str | None] = mapped_column(String(45))
+    user_agent: Mapped[str | None] = mapped_column(String(200))
+
+
+class ManualWatchlist(Base):
+    __tablename__ = "manual_watchlists"
+    session_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    tickers: Mapped[Any] = mapped_column(JSONB, nullable=False)  # list of Questrade-style tickers
+    filename: Mapped[str | None] = mapped_column(String(200))
+    uploaded_at: Mapped[datetime] = mapped_column(TS)
+    uploaded_by: Mapped[str] = mapped_column(String(50))

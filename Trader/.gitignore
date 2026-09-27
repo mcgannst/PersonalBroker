@@ -7,3 +7,9 @@ __pycache__/
 
 # Spike scripts cache a live Questrade access token here
 spikes/.qt_session.json
+
+# Web app (Phase 4): dependencies, build output and Playwright artefacts
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/

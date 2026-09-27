@@ -169,6 +169,16 @@ class RuntimeSettings(BaseModel):
     telegram_relay_catchup_max: int = Field(20, ge=0, le=200, alias="telegram.relay_catchup_max")
     preopen_notify_when_ok: bool = Field(True, alias="preopen.notify_when_ok")
     postclose_archive_top_n: int = Field(20, ge=0, le=100, alias="postclose.archive_top_n")
+    # --- Phase 4: web app (SPEC §11, §12, §14): sessions, login limits, live updates, quote cache
+    web_session_idle_hours: int = Field(168, ge=1, le=2160, alias="web.session_idle_hours")
+    web_session_max_days: int = Field(30, ge=1, le=365, alias="web.session_max_days")
+    web_login_max_failures: int = Field(5, ge=3, le=20, alias="web.login_max_failures")
+    web_lockout_minutes: int = Field(15, ge=1, le=1440, alias="web.lockout_minutes")
+    web_login_rate_per_minute: int = Field(10, ge=1, le=60, alias="web.login_rate_per_minute")
+    web_sse_poll_seconds: float = Field(1.0, ge=0.5, le=10, allow_inf_nan=False, alias="web.sse_poll_seconds")
+    web_quote_cache_seconds: float = Field(
+        5.0, ge=1, le=60, allow_inf_nan=False, alias="web.quote_cache_seconds"
+    )
 
     @field_validator("scheduler_always_fire_late")
     @classmethod

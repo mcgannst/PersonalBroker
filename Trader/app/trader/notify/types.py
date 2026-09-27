@@ -76,6 +76,7 @@ class ProposalView:
     expires_at: datetime
     decided_via: str | None  # telegram | web | auto
     error: str | None
+    decided_at: datetime | None = None  # Phase 4: the decision time (last, defaulted: old constructors work)
 
 
 @dataclass(frozen=True, slots=True)

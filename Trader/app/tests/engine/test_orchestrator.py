@@ -1,20 +1,29 @@
+import asyncio
+import threading
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from cryptography.fernet import Fernet
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Engine as SqlEngine
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.factories import add_symbol
 from tests.fakes_questrade import FakeQuestrade
-from tests.strategies.fakes import FakeCatalyst, FakeCatalysts
+from tests.strategies.fakes import FakeCatalyst, FakeCatalysts, FakeData, quote
+from trader.adapters.questrade.client import QuestradeApiError
+from trader.adapters.questrade.models import QtQuote
 from trader.bootstrap import Core
 from trader.broker.fill_model import FillParams, QuoteFillModel
 from trader.broker.ledger import Ledger
 from trader.broker.sim_broker import SimBroker
+from trader.broker.types import FillEvent
 from trader.config import EnvSettings
 from trader.crypto import Crypto
 from trader.db import models as m
@@ -28,6 +37,15 @@ from trader.market.clock import FixedClock
 from trader.market.data_service import MarketDataService
 from trader.market.types import Candle
 from trader.settings_store import SettingsStore
+from trader.strategies.base import (
+    Cancel,
+    EnterLong,
+    Exit,
+    Intent,
+    ScheduledEvent,
+    SessionOffset,
+    StrategyContext,
+)
 from trader.strategies.registry import StrategyRegistry
 
 pytestmark = pytest.mark.db
@@ -242,7 +260,7 @@ async def test_end_of_session_flags_open_position(db_factory: sessionmaker[Sessi
     assert len(still_open) == 1 and w.broker.working_orders() == []
     with db_factory() as s:
         alarm = s.execute(select(m.EventLog).where(m.EventLog.level == "critical")).scalar_one()
-    assert "still open" in alarm.message and alarm.run_id == w.run_id
+    assert alarm.message.startswith("1 position still open") and alarm.run_id == w.run_id
 
 
 async def test_the_overlay_exits_entry_positions_on_a_down_day(db_factory: sessionmaker[Session]) -> None:
@@ -288,3 +306,270 @@ async def test_build_engine_wires_a_live_run(
     with db_factory() as s:
         keys = set(s.execute(select(m.StrategyConfig.strategy_key)).scalars())
     assert keys == {"orb_sip", "spy_overlay"}
+
+
+# --- fix round 1: isolation, duplicates and loud failures (fake plug-ins, no entry points) ------------------
+T_FILL = T_ORB + timedelta(seconds=55)
+Handler = Callable[[StrategyContext], Sequence[Intent]]
+
+
+class FakeParams(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    max_positions: int = 1
+
+
+def fake_plugin(key: str, events: dict[str, Handler]) -> type[Any]:
+    class _Plugin:
+        version = "0.0.1"
+        kind = "entry"
+        params_model = FakeParams
+
+        def __init__(self, params: FakeParams) -> None:
+            self.params = params
+
+        def schedule(self, cal: SessionCalendar) -> list[ScheduledEvent]:
+            return [ScheduledEvent(k, SessionOffset.parse("open+5m5s")) for k in events]
+
+        async def on_event(self, ctx: StrategyContext, event: ScheduledEvent) -> list[Intent]:
+            return list(events[event.key](ctx))
+
+        async def on_fill(self, ctx: StrategyContext, fill: FillEvent) -> list[Intent]:
+            return []
+
+    _Plugin.key = key  # type: ignore[attr-defined]
+    return _Plugin
+
+
+class RaisingData(FakeData):
+    async def quotes(self, symbol_ids: Sequence[int]) -> dict[int, QtQuote]:
+        raise QuestradeApiError(503, "quotes down")
+
+
+@dataclass
+class FakeWorld:
+    engine: Engine
+    clock: FixedClock
+    store: SettingsStore
+    data: FakeData
+    ids: dict[str, int]
+    broker: SimBroker
+    run_id: int
+
+
+def build_fake(
+    factory: sessionmaker[Session],
+    events: dict[str, Handler],
+    *,
+    auto: bool = True,
+    max_positions: int = 1,
+    data: FakeData | None = None,
+) -> FakeWorld:
+    clock = FixedClock(T_ORB)
+    store = SettingsStore(factory, now=clock.now)
+    if auto:
+        store.set("approval_mode", "auto", actor="test")
+    settings = store.load()
+    run = get_live_run(factory, clock, settings)
+    with factory() as s:
+        ids = {t: add_symbol(s, t, questrade_id=101 + i) for i, t in enumerate(("AAA", "BBB"))}
+        s.commit()
+    registry = StrategyRegistry(factory, clock, plugins={"alpha": fake_plugin("alpha", events)})
+    registry.ensure_defaults()
+    registry.update("alpha", params={"max_positions": max_positions}, actor="test")
+    broker = SimBroker(
+        factory,
+        clock,
+        Ledger(CAL),
+        QuoteFillModel(FillParams.from_settings(settings)),
+        run.id,
+        calendar=CAL,
+        settings=store.load,
+    )
+    data = data if data is not None else FakeData()
+    engine = Engine(
+        factory=factory,
+        clock=clock,
+        calendar=CAL,
+        settings=store,
+        registry=registry,
+        data=data,
+        catalysts=FakeCatalysts(),
+        broker=broker,
+        proposals=ProposalService(factory, clock, store, broker, run.id),
+        risk=RiskManager(CAL),
+        killswitches=KillSwitches(factory, clock),
+        run_id=run.id,
+    )
+    return FakeWorld(engine, clock, store, data, ids, broker, run.id)
+
+
+def enter_stop(symbol_id: int) -> EnterLong:
+    return EnterLong(symbol_id, "stop", Decimal("21.51"), None, Decimal("21.41"), "test", {})
+
+
+async def fill_aaa(w: FakeWorld) -> None:
+    w.clock.set(T_FILL)
+    q = quote(w.ids["AAA"], "21.52", "21.55", "21.53", at=T_FILL)
+    w.data.quote_map[q.symbol_id] = q
+    assert len(await w.engine.on_quotes([q], T_FILL)) == 1
+
+
+def events_at(factory: sessionmaker[Session], *levels: str) -> list[m.EventLog]:
+    with factory() as s:
+        return list(s.execute(select(m.EventLog).where(m.EventLog.level.in_(levels))).scalars())
+
+
+async def test_a_failing_intent_does_not_abort_its_siblings(
+    db_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w: FakeWorld
+    w = build_fake(
+        db_factory,
+        {"open_evt": lambda ctx: [enter_stop(w.ids["AAA"]), enter_stop(w.ids["BBB"])]},
+        max_positions=2,
+    )
+    create = w.engine.proposals.create
+    calls = 0
+
+    def flaky(*args: Any, **kwargs: Any) -> m.Proposal:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("database hiccup")
+        return create(*args, **kwargs)
+
+    monkeypatch.setattr(w.engine.proposals, "create", flaky)
+    res = await w.engine.run_event("open_evt", DAY)
+    assert [o.status for o in res.outcomes] == ["error", "submitted"]
+    failed = res.outcomes[0]
+    assert failed.signal_id is not None and failed.error is not None and "database hiccup" in failed.error
+    with db_factory() as s:
+        signal = s.get(m.Signal, failed.signal_id)
+    assert signal is not None and signal.evidence["error"]["message"] == "database hiccup"
+    assert "rejection" not in signal.evidence
+    (err,) = events_at(db_factory, "error")
+    assert err.source == "engine" and "alpha" in err.message and err.data["signal_id"] == failed.signal_id
+
+
+async def test_a_quote_outage_rejects_a_market_entry_instead_of_raising(
+    db_factory: sessionmaker[Session],
+) -> None:
+    w: FakeWorld
+
+    def market(ctx: StrategyContext) -> list[Intent]:
+        return [EnterLong(w.ids["AAA"], "market", None, None, Decimal("21.41"), "test", {})]
+
+    w = build_fake(db_factory, {"open_evt": market}, data=RaisingData())
+    (out,) = (await w.engine.run_event("open_evt", DAY)).outcomes
+    assert out.status == "rejected_by_risk" and out.rejection is not None
+    assert out.rejection.check == "invalid" and "no entry price" in out.rejection.reason
+
+
+async def test_duplicate_symbol_is_run_wide_and_recorded_on_the_signal(
+    db_factory: sessionmaker[Session],
+) -> None:
+    w: FakeWorld
+    w = build_fake(
+        db_factory,
+        {"open_evt": lambda ctx: [enter_stop(w.ids["AAA"]), enter_stop(w.ids["AAA"])]},
+        auto=False,
+        max_positions=3,
+    )
+    first, second = (await w.engine.run_event("open_evt", DAY)).outcomes
+    assert first.status == "pending"
+    assert second.status == "rejected_by_risk" and second.rejection is not None
+    assert second.rejection.check == "duplicate_symbol"
+    assert second.rejection.detail == {"proposal_id": first.proposal_id}
+    with db_factory() as s:
+        assert second.signal_id is not None
+        signal = s.get(m.Signal, second.signal_id)
+    assert signal is not None and signal.evidence["rejection"]["check"] == "duplicate_symbol"
+
+
+def test_two_processes_cannot_both_pass_the_duplicate_check(
+    db_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Worker and cron backup fire the same entry at once. The risk check is slowed so both would pass the
+    duplicate check before either creates its proposal, unless the advisory lock serialises them."""
+    w: FakeWorld
+    w = build_fake(
+        db_factory, {"open_evt": lambda ctx: [enter_stop(w.ids["AAA"])]}, auto=False, max_positions=3
+    )
+    evaluate = w.engine._risk.evaluate
+
+    def slow(*args: Any, **kwargs: Any) -> Any:
+        time.sleep(0.4)
+        return evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(w.engine._risk, "evaluate", slow)
+    statuses: list[str] = []
+
+    def fire() -> None:
+        statuses.extend(o.status for o in asyncio.run(w.engine.run_event("open_evt", DAY)).outcomes)
+
+    threads = [threading.Thread(target=fire) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(statuses) == ["pending", "rejected_by_risk"]
+    with db_factory() as s:
+        assert s.execute(select(func.count()).select_from(m.Proposal)).scalar_one() == 1
+
+
+async def test_a_rejected_exit_is_critical(db_factory: sessionmaker[Session]) -> None:
+    w = build_fake(db_factory, {"flatten": lambda ctx: [Exit(987654, "market", None, "flatten")]})
+    (out,) = (await w.engine.run_event("flatten", DAY)).outcomes
+    assert out.status == "rejected_by_risk"
+    (alarm,) = events_at(db_factory, "critical")
+    assert alarm.source == "risk" and "unprotected" in alarm.message
+
+
+async def test_a_refired_exit_or_cancel_is_skipped_as_a_note(db_factory: sessionmaker[Session]) -> None:
+    w: FakeWorld
+    w = build_fake(
+        db_factory,
+        {
+            "open_evt": lambda ctx: [enter_stop(w.ids["AAA"]), enter_stop(w.ids["BBB"])],
+            "flatten": lambda ctx: [Exit(p.id, "market", None, "flatten") for p in ctx.positions],
+            "tidy": lambda ctx: [Cancel(o.id, "stale") for o in ctx.working_orders if o.purpose == "entry"],
+        },
+        max_positions=2,
+    )
+    await w.engine.run_event("open_evt", DAY)
+    await fill_aaa(w)  # AAA is held, BBB's entry is still working
+    w.store.set("approval_mode", "manual", actor="test")
+    (exit1,) = (await w.engine.run_event("flatten", DAY)).outcomes
+    (exit2,) = (await w.engine.run_event("flatten", DAY)).outcomes
+    (cancel1,) = (await w.engine.run_event("tidy", DAY)).outcomes
+    (cancel2,) = (await w.engine.run_event("tidy", DAY)).outcomes
+    assert (exit1.status, exit2.status) == ("pending", "skipped_duplicate")
+    assert (cancel1.status, cancel2.status) == ("pending", "skipped_duplicate")
+    assert exit2.signal_id is None and cancel2.signal_id is None
+    notes = [e for e in events_at(db_factory, "info") if "re-fired" in e.message]
+    assert [n.data["proposal_id"] for n in notes] == [exit1.proposal_id, cancel1.proposal_id]
+    assert events_at(db_factory, "error", "critical") == []
+
+
+async def test_an_entry_fill_without_an_owner_is_critical(
+    db_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w: FakeWorld
+    w = build_fake(db_factory, {"open_evt": lambda ctx: [enter_stop(w.ids["AAA"])]})
+    await w.engine.run_event("open_evt", DAY)
+    monkeypatch.setattr(w.engine.registry, "config_key", lambda config_id: None)
+    await fill_aaa(w)
+    (alarm,) = events_at(db_factory, "critical")
+    assert alarm.source == "engine" and "no owning strategy" in alarm.message
+    assert alarm.data["position_id"] == w.broker.open_positions()[0].id
+
+
+async def test_a_failing_strategy_is_reported_in_the_result(db_factory: sessionmaker[Session]) -> None:
+    def boom(ctx: StrategyContext) -> list[Intent]:
+        raise RuntimeError("plug-in bug")
+
+    w = build_fake(db_factory, {"open_evt": boom})
+    res = await w.engine.run_event("open_evt", DAY)
+    assert (res.strategies, res.failed, res.outcomes) == ([], ["alpha"], [])
+    (err,) = events_at(db_factory, "error")
+    assert "alpha" in err.message and err.data["event_key"] == "open_evt"

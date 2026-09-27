@@ -116,6 +116,7 @@ def build(
     now: datetime = T_ORB,
     max_positions: dict[str, int] | None = None,
     starting_cash: str | None = None,
+    risk_pct: str | None = None,
 ) -> World:
     clock = FixedClock(now)
     store = SettingsStore(factory, now=clock.now)
@@ -123,6 +124,8 @@ def build(
         store.set("approval_mode", "auto", actor="test")
     if starting_cash is not None:
         store.set("starting_cash", starting_cash, actor="test")
+    if risk_pct is not None:
+        store.set("risk_pct", risk_pct, actor="test")
     settings = store.load()
     run = get_live_run(factory, clock, settings)
     ids: dict[str, int] = {}
@@ -303,7 +306,9 @@ async def test_each_fill_goes_to_the_owning_strategy_on_fill(db_factory: session
     w: World
     a = make_plugin("alpha", calls, {"open_evt": lambda ctx: [enter(w.ids["AAA"])]}, on_fill=protect)
     b = make_plugin("beta", calls, {"open_evt": lambda ctx: [enter(w.ids["BBB"])]}, on_fill=protect)
-    w = build(db_factory, [a, b])
+    # both entries must be affordable together (the broker cancels an entry the cash can't cover): each is
+    # sized by risk, 2000 x 0.002 / 0.10 = 40 shares (about $865), not by all of the cash
+    w = build(db_factory, [a, b], starting_cash="2000", risk_pct="0.002")
     await w.engine.run_event("open_evt", DAY)
     fills = await fill_all(w, "AAA", "BBB")
     assert len(fills) == 2
@@ -331,7 +336,7 @@ async def test_on_fill_raising_does_not_lose_the_other_fills_follow_up(
     w: World
     a = make_plugin("alpha", calls, {"open_evt": lambda ctx: [enter(w.ids["AAA"])]}, on_fill=crash)
     b = make_plugin("beta", calls, {"open_evt": lambda ctx: [enter(w.ids["BBB"])]}, on_fill=protect)
-    w = build(db_factory, [a, b])
+    w = build(db_factory, [a, b], starting_cash="2000", risk_pct="0.002")  # both affordable, as above
     await w.engine.run_event("open_evt", DAY)
     fills = await fill_all(w, "AAA", "BBB")
     assert len(fills) == 2

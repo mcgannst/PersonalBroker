@@ -143,10 +143,10 @@ Trader/
 The docs don't say whether these limits apply per app or per login. ⚠ VERIFY in S1/S4 using the `X-RateLimit-Remaining` header: if they're per login, FinanceTracker's calls count against Trader's budget.
 
 **⚠ VERIFY in Phase 0:**
-1. Whether quotes are real-time or delayed for US and TSX stocks on Stephen's account. This decides whether quote-based fills are valid.
-2. The maximum number of candles per request. The Claude connector capped results at 40, but the direct API may allow more.
-3. How far back intraday history goes (this limits replay).
-4. Whether a quote includes the pre-market last price.
+1. Whether quotes are real-time or delayed for US and TSX stocks on Stephen's account. This decides whether quote-based fills are valid. *S2 (weekend): all quotes report `delay: 0`; confirm timestamps during market hours.*
+2. ~~The maximum number of candles per request~~: **20,000** ✅ (S3).
+3. ~~How far back intraday history goes~~: **about 3 months** (back to 2026-06-26 when tested); daily candles go back 10 years ✅ (S3). Intraday candles include extended hours (04:00–20:00 ET), so strategies must filter to regular hours.
+4. Whether a quote includes the pre-market last price. *Quotes have both `lastTradePrice` and `lastTradePriceTrHrs` (regular hours only); check `lastTradePrice` before 09:30 on a weekday.*
 
 ### 4.2 FinViz scraper
 
@@ -562,14 +562,16 @@ Both environments run on the **same Docker host** (`192.168.68.73`) and the **sa
 
 ## 17. Phase 0 spikes (before building)
 
+Results, findings and scripts: [`../spikes/README.md`](../spikes/README.md).
+
 | # | Spike | Pass criteria |
 |---|---|---|
-| S1 | Questrade personal-app token refresh and rotation | Refresh works 3 times in a row, and the stored token stays valid |
-| S2 | Quote freshness | The quote timestamp during market hours is within 2 s of the current time for US names (records whether quotes are delayed) |
-| S3 | Candle limits and history depth | The maximum candles per request, and the earliest 1-min/5-min history available |
-| S4 | Universe scan timing | Fetching 9:30–9:35 bars for the universe at 9:35 finishes in under 60 s within the rate limits |
-| S5 | FinViz scrape | Universe and news pages parse correctly; note any blocking |
-| S6 | Telegram inline approval round-trip | Button → callback → DB update in under 2 s |
+| S1 | Questrade personal-app token refresh and rotation | Refresh works 3 times in a row, and the stored token stays valid. **Pass** 2026-09-26 |
+| S2 | Quote freshness | The quote timestamp during market hours is within 2 s of the current time for US names (records whether quotes are delayed). **Partial:** `delay: 0`; rerun in market hours |
+| S3 | Candle limits and history depth | The maximum candles per request, and the earliest 1-min/5-min history available. **Pass:** 20,000; ~3 months |
+| S4 | Universe scan timing | Fetching 9:30–9:35 bars for the universe at 9:35 finishes in under 60 s within the rate limits. **Pass:** 694 symbols in 35 s (recheck live) |
+| S5 | FinViz scrape | Universe and news pages parse correctly; note any blocking. **Pass:** 695 tickers; browser User-Agent required |
+| S6 | Telegram inline approval round-trip | Button → callback → DB update in under 2 s. **Pass:** ≈ 1.3 s |
 
 ## 18. Open items for Stephen
 

@@ -3,3 +3,7 @@ docker/.env.*
 !docker/.env.example
 
 .DS_Store
+__pycache__/
+
+# Spike scripts cache a live Questrade access token here
+spikes/.qt_session.json

@@ -29,9 +29,17 @@
 
 ## Phase 0 spikes (SPEC §17)
 
-- [ ] S1: Questrade token refresh and rotation, with an independent token chain per app
-- [ ] S2: Quote freshness (are quotes real-time or delayed?)
-- [ ] S3: Candle limit per request, and how far back history goes
-- [ ] S4: Universe scan at 9:35 finishes in under 60 s
-- [ ] S5: FinViz scrape (parsing works; not blocked)
-- [ ] S6: Telegram approve-button round-trip in under 2 s
+Results and scripts are in [`spikes/`](spikes/README.md). Run 2026-09-26.
+
+- [x] S1: Questrade token refresh and rotation. **Pass:** 3 exchanges in a row, the newest token is saved each time.
+- [ ] S1 follow-up: confirm FinanceTracker's Questrade connection still works after its 03:30 refresh on Sun 27 Sep. That proves the two apps' token chains are independent.
+- [ ] S2: Quote freshness. **Partial:** quotes report `delay: 0`. Rerun Monday 09:35–10:00 ET to check the timestamp is within 2 s, and pre-market (before 09:30) to see whether `lastTradePrice` shows the pre-market price.
+- [x] S3: Candle limit per request, and how far back history goes. **Pass:** 20,000 candles per request; intraday history back to 2026-06-26 (~3 months).
+- [x] S4: Universe scan at 9:35 finishes in under 60 s. **Pass:** 694 symbols in 35 s on Friday's data. Recheck at a live 9:35 on Monday.
+- [x] S5: FinViz scrape. **Pass:** 695 tickers parsed, news tables parse, no blocking with a browser User-Agent.
+- [x] S6: Telegram approve-button round-trip in under 2 s. **Pass:** ≈ 1.3 s tap to acknowledgement; DB update 13 ms.
+
+## Decisions from Phase 0 (Stephen)
+
+- [ ] **Archive intraday candles nightly?** Questrade only keeps ~3 months of intraday history, so replay can't go further back unless Trader stores bars itself.
+- [ ] **Keep or drop ETFs** in the universe (153 of 695 tickers).

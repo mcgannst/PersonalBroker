@@ -55,9 +55,9 @@ from trader.notify.types import (
     Notifier,
     OutboundMessage,
     OverlayView,
-    ProposalView,
     Renderer,
 )
+from trader.notify.views import proposal_view
 from trader.settings_store import RuntimeSettings
 
 STREAMS = ("proposals", "fills", "events")
@@ -319,7 +319,7 @@ class NotificationRelay:
     def _render(self, s: Session, stream: str, row_id: int) -> OutboundMessage | None:
         if stream == "proposals":
             p = s.get_one(m.Proposal, row_id)
-            return dataclasses.replace(self.render.proposal(_proposal_view(s, p), ()), silent=True)
+            return dataclasses.replace(self.render.proposal(proposal_view(s, p), ()), silent=True)
         if stream == "fills":
             return self.render.fill(_fill_view(s, s.get_one(m.Fill, row_id)))
         row = s.get_one(m.EventLog, row_id)
@@ -465,39 +465,6 @@ def _ids(v: Any) -> tuple[int, ...]:
 def _ticker(s: Session, symbol_id: int | None) -> str:
     sym = s.get(m.Symbol, symbol_id) if symbol_id is not None else None
     return sym.ticker if sym is not None else "?"
-
-
-def _proposal_view(s: Session, p: m.Proposal) -> ProposalView:
-    spec: dict[str, Any] = p.order_spec if isinstance(p.order_spec, dict) else {}
-    sig = s.get(m.Signal, p.signal_id)
-    cfg = s.get(m.StrategyConfig, sig.strategy_config_id) if sig is not None else None
-    cancelled = s.get(m.Order, p.cancel_order_id) if p.cancel_order_id is not None else None
-    symbol_id = spec.get("symbol_id")
-    if symbol_id is None and cancelled is not None:
-        symbol_id = cancelled.symbol_id
-    if symbol_id is None and sig is not None:
-        symbol_id = sig.symbol_id
-    intent: dict[str, Any] = sig.intent if sig is not None and isinstance(sig.intent, dict) else {}
-    sizing: dict[str, Any] = p.sizing if isinstance(p.sizing, dict) else {}
-    return ProposalView(
-        proposal_id=p.id,
-        kind=p.kind,
-        status=p.status,
-        ticker=_ticker(s, symbol_id),
-        side=str(spec.get("side") or (cancelled.side if cancelled is not None else "")),
-        order_type=str(spec.get("order_type") or (cancelled.order_type if cancelled is not None else "")),
-        qty=p.qty,
-        stop=_dec(spec.get("stop")),
-        limit=_dec(spec.get("limit")),
-        stop_loss=_dec(spec.get("stop_loss")),
-        risk_usd=_dec(sizing.get("risk_dollars")),
-        reason=str(spec.get("reason") or intent.get("reason") or ""),
-        strategy_key=cfg.strategy_key if cfg is not None else "",
-        created_at=p.created_at,
-        expires_at=p.expires_at,
-        decided_via=p.decided_via,
-        error=p.error,
-    )
 
 
 def _fill_view(s: Session, f: m.Fill) -> FillView:

@@ -38,11 +38,11 @@ from trader.db.models import Notification
 from trader.db.session import session_scope
 from trader.events import log_event
 from trader.market.clock import Clock
+from trader.notify.messages import TELEGRAM_LIMIT  # the one definition (re-exported here)
 from trader.notify.types import Buttons, OutboundMessage
 
 log = structlog.get_logger("notify.notifier")
 
-TELEGRAM_LIMIT = 4096
 MIN_SEND_INTERVAL = 1.0  # seconds between two sends of one notifier (Telegram's per-chat limit)
 MAX_RETRY_AFTER = 30.0  # longest 429 wait honoured before the single retry
 NETWORK_RETRY_WAIT = 2.0  # wait before retrying a connect-phase error or a 5xx
@@ -99,7 +99,7 @@ def _visible(part: str) -> bool:
     return bool(_ANY_TAG.sub("", part).strip())
 
 
-def split_text(text: str, limit: int = 4096) -> list[str]:
+def split_text(text: str, limit: int = TELEGRAM_LIMIT) -> list[str]:
     """Cut `text` into Telegram-sendable parts of at most `limit` characters.
 
     A cut prefers the last line break that fits, then the last space (the separator itself is dropped),

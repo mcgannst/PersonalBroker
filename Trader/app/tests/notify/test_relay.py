@@ -309,7 +309,8 @@ async def test_pending_proposal_goes_to_messenger_and_auto_one_is_relayed_silent
     assert isinstance(view, ProposalView)
     assert (view.ticker, view.kind, view.side, view.qty) == ("AAA", "entry", "buy", 33)
     assert view.stop == Decimal("21.55") and view.stop_loss == Decimal("21.41")
-    assert view.risk_usd == Decimal("5.00") and view.strategy_key == "orb_sip"
+    # P3-T12: the shared view builder shows the actual risk, qty x (entry - stop loss) = 33 x 0.14
+    assert view.risk_usd == Decimal("4.62") and view.strategy_key == "orb_sip"
     assert view.decided_via == "auto" and view.reason == "orb breakout"
     [msg] = world.notifier.sent
     assert msg.silent is True and msg.buttons == () and msg.dedupe_key == f"proposal:{auto}"

@@ -8,8 +8,8 @@ state, through KillSwitches (which writes the audit rows). /resume never resets 
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from datetime import date, timedelta
+from decimal import Decimal
 
 import structlog
 from sqlalchemy import func, select
@@ -23,14 +23,14 @@ from trader.engine.killswitch import KillSwitches
 from trader.engine.scheduler import DayPlan
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock, et_date
-from trader.market.sessions import current_session, session_phase
+from trader.market.sessions import current_session
+from trader.notify import views
 from trader.notify.types import Button, OutboundMessage, PnlView, PositionLine, Renderer, StatusView
 from trader.settings_store import RuntimeSettings
 
 log = structlog.get_logger("telegram.commands")
 
-Q4 = Decimal("0.0001")
-TOKEN_MAX_AGE_HOURS = 26.0
+TOKEN_MAX_AGE_HOURS = views.TOKEN_MAX_AGE_HOURS
 ACTOR = "telegram"
 UNKNOWN = "Unknown command. Try /help."
 MANUAL_PAUSE = "manual_pause"
@@ -57,57 +57,6 @@ class CommandDeps:
 # --- view builders ----------------------------------------------------------------------------------------
 
 
-def _next_event(deps: CommandDeps, now: datetime, session_date: date) -> tuple[str | None, datetime | None]:
-    """The first unfired planned event of today's session, or (None, None) outside it."""
-    if session_phase(deps.calendar, now) not in ("pre_market", "open"):
-        return None, None
-    plan = deps.plan(session_date)
-    if not plan.is_session:
-        return None, None
-    fired = deps.fired(session_date)
-    for ev in plan.events:  # sorted by time, then key
-        if ev.key not in fired:
-            return ev.key, ev.at
-    return None, None
-
-
-def _token(deps: CommandDeps, now: datetime) -> tuple[bool, float | None, str | None]:
-    """(ok, hours since the last refresh, the reason it is not OK)."""
-    try:
-        health = deps.token_health()
-    except Exception as exc:  # a health check failure is shown, never fails /status
-        log.warning("telegram.commands.token_health_failed", error_type=type(exc).__name__)
-        return False, None, f"token health unavailable ({type(exc).__name__})"
-    age = (now - health.last_refresh_at).total_seconds() / 3600 if health.last_refresh_at else None
-    if not health.seeded:
-        return False, age, "not seeded"
-    if health.last_error:
-        return False, age, health.last_error
-    if age is None:
-        return False, None, "never refreshed"
-    if age > TOKEN_MAX_AGE_HOURS:
-        return False, age, f"last refresh {age:.1f} h ago (over {TOKEN_MAX_AGE_HOURS:.0f} h)"
-    return True, age, None
-
-
-def _heartbeat_age(deps: CommandDeps, now: datetime) -> float | None:
-    """Seconds since the worker's last beat; None when there is no row or the worker said it stopped
-    (phase `stopped`: a clean shutdown, so it is not running however recent the beat)."""
-    with deps.factory() as s:
-        row = s.execute(
-            select(m.WorkerHeartbeat.beat_at, m.WorkerHeartbeat.phase).where(
-                m.WorkerHeartbeat.process == "worker"
-            )
-        ).one_or_none()
-    if row is None:
-        return None
-    beat_at: datetime = row[0]
-    phase: str = row[1]
-    if phase == "stopped":
-        return None
-    return (now - beat_at).total_seconds()
-
-
 def _pending_ids(deps: CommandDeps) -> list[int]:
     with deps.factory() as s:
         return list(
@@ -119,87 +68,25 @@ def _pending_ids(deps: CommandDeps) -> list[int]:
         )
 
 
-async def _last_prices(deps: CommandDeps, symbol_ids: list[int]) -> Mapping[int, QtQuote]:
-    if deps.quotes is None or not symbol_ids:
-        return {}
-    try:
-        return await deps.quotes(symbol_ids)
-    except Exception as exc:  # a quote failure never fails the command: prices show as n/a
-        log.warning("telegram.commands.quotes_failed", error_type=type(exc).__name__)
-        return {}
-
-
 async def position_lines(deps: CommandDeps) -> tuple[PositionLine, ...]:
-    """Open positions of the live run, oldest first, with the last price, stop and unprotected time."""
-    now = deps.clock.now()
-    with deps.factory() as s:
-        rows = s.execute(
-            select(m.Position, m.Symbol.ticker)
-            .join(m.Symbol, m.Symbol.id == m.Position.symbol_id)
-            .where(m.Position.run_id == deps.run_id, m.Position.closed_at.is_(None))
-            .order_by(m.Position.opened_at, m.Position.id)
-        ).all()
-        positions = [(p, ticker) for p, ticker in rows]
-        stops: dict[int, Decimal | None] = {}
-        if positions:
-            for pos_id, price in s.execute(
-                select(m.Order.position_id, m.Order.stop_price)
-                .where(
-                    m.Order.run_id == deps.run_id,
-                    m.Order.position_id.in_([p.id for p, _ in positions]),
-                    m.Order.purpose == "stop",
-                    m.Order.status == "working",
-                )
-                .order_by(m.Order.id)
-            ).all():
-                if pos_id is not None:
-                    stops[pos_id] = price  # the newest working stop wins
-    quotes = await _last_prices(deps, sorted({p.symbol_id for p, _ in positions}))
-    lines: list[PositionLine] = []
-    for p, ticker in positions:
-        q = quotes.get(p.symbol_id)
-        last = q.last if q is not None else None
-        unrealized = ((last - p.avg_price) * p.qty).quantize(Q4, ROUND_HALF_UP) if last is not None else None
-        unprotected = p.unprotected_seconds
-        if p.unprotected_since is not None:
-            unprotected += max(0, int((now - p.unprotected_since).total_seconds()))
-        working = p.id in stops
-        lines.append(
-            PositionLine(
-                position_id=p.id,
-                ticker=ticker,
-                qty=p.qty,
-                entry=p.avg_price,
-                last=last,
-                stop=stops[p.id] if working else p.stop_loss,
-                unrealized_pnl=unrealized,
-                unprotected_seconds=unprotected,
-                stop_working=working,
-            )
-        )
-    return tuple(lines)
+    """Open positions of the live run, oldest first, with the last price, stop and unprotected time
+    (the shared builder in trader.notify.views, also used by the check-ins)."""
+    return await views.position_lines(deps.factory, deps.clock, deps.run_id, deps.quotes)
 
 
 async def status_view(deps: CommandDeps) -> StatusView:
-    now = deps.clock.now()
-    session_date = current_session(deps.calendar, now)
-    next_key, next_at = _next_event(deps, now, session_date)
-    token_ok, token_age, token_error = _token(deps, now)
-    switches = deps.killswitches.active(deps.run_id, session_date)
-    return StatusView(
-        now=now,
-        phase=session_phase(deps.calendar, now),
-        session_date=session_date,
-        next_event_key=next_key,
-        next_event_at=next_at,
-        approval_mode=deps.settings().approval_mode,
-        blocking_switches=tuple(a.switch for a in switches),
-        token_ok=token_ok,
-        token_age_hours=token_age,
-        token_error=token_error,
-        heartbeat_age_seconds=_heartbeat_age(deps, now),
-        positions=await position_lines(deps),
-        pending_count=len(_pending_ids(deps)),
+    """The shared status view (trader.notify.views), so /status and the check-ins can't disagree."""
+    return await views.status_view(
+        factory=deps.factory,
+        clock=deps.clock,
+        calendar=deps.calendar,
+        settings=deps.settings(),
+        killswitches=deps.killswitches,
+        run_id=deps.run_id,
+        plan=deps.plan,
+        fired=deps.fired,
+        token_health=deps.token_health,
+        quotes=deps.quotes,
     )
 
 

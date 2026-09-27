@@ -38,6 +38,7 @@ from sqlalchemy import Connection, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
+from trader import logging_setup
 from trader.db.models import WorkerHeartbeat
 from trader.db.session import session_scope
 from trader.engine.scheduler import DayPlan, FireResult, due_events
@@ -597,6 +598,7 @@ class Worker:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """`python -m trader.worker [--once]`: calls trader.runtime.run_worker(once=...) and returns its code."""
+    logging_setup.configure_logging("worker")  # first, before anything can log (P3-T12)
     parser = argparse.ArgumentParser(prog="python -m trader.worker", description="The Trader worker.")
     parser.add_argument("--once", action="store_true", help="run one step and exit (smoke check)")
     args = parser.parse_args(argv)

@@ -22,6 +22,17 @@ def alembic_config(url: str) -> Config:
     return cfg
 
 
+@pytest.fixture(autouse=True)
+def _process_logging_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI commands and `python -m trader.worker` call `logging_setup.configure_logging` first (P3-T12).
+    It configures the whole process once (a root handler on the stdout of that moment), so in tests it would
+    leak into every later test and into CliRunner output. Tests that need it call the function they imported
+    by name (tests/test_logging_setup.py), or patch this attribute with a recorder."""
+    import trader.logging_setup
+
+    monkeypatch.setattr(trader.logging_setup, "configure_logging", lambda *args, **kwargs: None)
+
+
 @pytest.fixture(scope="session")
 def pg_url() -> Iterator[str]:
     with PostgresContainer("postgres:14-alpine", driver="psycopg") as pg:

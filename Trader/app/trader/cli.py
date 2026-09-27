@@ -1,10 +1,27 @@
-"""`trader <command>` entry points."""
+"""`trader <command>` entry points (the crontab's commands: docker/crontab)."""
+
+import re
+from collections.abc import Callable, Coroutine, Mapping
+from datetime import date
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import typer
 
 from trader import __version__
 
+if TYPE_CHECKING:
+    from trader.bootstrap import Core
+    from trader.jobs.runner import JobOutcome
+
 app = typer.Typer(no_args_is_help=True, add_completion=False)
+
+
+def _setup_logging() -> None:
+    """Every command calls this first (P3-T2/T12): structlog JSON lines, stdlib routed through it,
+    token-bearing loggers quiet. Called through the module attribute, so tests can swap it."""
+    from trader import logging_setup
+
+    logging_setup.configure_logging("cron")
 
 
 @app.callback()
@@ -15,6 +32,7 @@ def main() -> None:
 @app.command()
 def version() -> None:
     """Print the Trader version."""
+    _setup_logging()
     typer.echo(__version__)
 
 
@@ -23,6 +41,7 @@ def questrade_seed(
     force: bool = typer.Option(False, "--force", help="Replace an existing healthy chain."),
 ) -> None:
     """Store QUESTRADE_REFRESH_TOKEN (from the environment) as the start of the token chain."""
+    _setup_logging()
     from trader.adapters.questrade.auth import QuestradeAuth, QuestradeAuthError
     from trader.bootstrap import build_core
 
@@ -49,6 +68,7 @@ def questrade_seed(
 @app.command("token-refresh")
 def token_refresh() -> None:
     """Keep the Questrade refresh-token chain alive (daily job, SPEC §9)."""
+    _setup_logging()
     from trader.adapters.questrade.auth import QuestradeAuth, QuestradeAuthError
     from trader.bootstrap import build_core
 
@@ -57,6 +77,9 @@ def token_refresh() -> None:
     try:
         auth.keep_alive()
     except QuestradeAuthError as exc:
+        from trader import runtime
+
+        runtime.record_token_failure(core, exc)  # the relay alerts; the 09:20 pre-open check alerts again
         typer.echo(f"token refresh failed: {exc}", err=True)
         raise typer.Exit(1) from None
     # keep_alive's access token may already be expired; the chain extension time is what matters.
@@ -67,6 +90,7 @@ def token_refresh() -> None:
 @app.command("questrade-check")
 def questrade_check(symbol: str = "SPY") -> None:
     """Show Questrade server time, one quote's freshness, and remaining rate limits (spike S2)."""
+    _setup_logging()
     import asyncio
 
     from trader.adapters.questrade.auth import QuestradeAuth, QuestradeAuthError
@@ -116,6 +140,7 @@ def nightly(
     ),
 ) -> None:
     """Build the universe and caches for the next session (SPEC §9, 20:00 ET)."""
+    _setup_logging()
     import asyncio
     from datetime import date as date_cls
     from pathlib import Path
@@ -190,6 +215,7 @@ def premarket(
 
     It runs only in the pre-market window: on the session's own ET date, before the open. Anything else
     needs --force, and a forced run's brief says which window it used."""
+    _setup_logging()
     import asyncio
     from datetime import date as date_cls
     from pathlib import Path
@@ -288,7 +314,11 @@ def premarket(
 
         out = run_job(core.factory, core.clock, "premarket", session_date, job, force=force)
     if out.status == "succeeded":
+        from trader import runtime
+
         typer.echo(out.detail["brief"])
+        # Once per session (dedupe premarket:<date>); a Telegram failure never fails the job.
+        asyncio.run(runtime.send_premarket_brief(core, session_date, out.detail["brief"]))
     elif out.status == "skipped":
         typer.echo(f"premarket {session_date}: skipped ({out.detail.get('reason', 'no reason given')})")
     else:
@@ -299,6 +329,7 @@ def premarket(
 @app.command()
 def notify(text: str) -> None:
     """Send a Telegram message to Stephen through the configured bot."""
+    _setup_logging()
     import httpx
     from pydantic import ValidationError
 
@@ -328,3 +359,226 @@ def notify(text: str) -> None:
         typer.echo(f"failed: HTTP {r.status_code}", err=True)
         raise typer.Exit(1)
     typer.echo("sent")
+
+
+# --- P3-T12: the cron commands of docker/crontab ------------------------------------------------------------
+# Each prints one result line; a failure is one line on stderr and exit 1, never a traceback. On a day that
+# is not a trading session they print "not a trading session" and exit 0 without building anything.
+
+MAX_LINE = 1000
+FIRE_FAILURES = ("failed", "missed")
+
+
+def _fail(message: str, code: int = 1) -> NoReturn:
+    typer.echo(message, err=True)
+    raise typer.Exit(code)
+
+
+def _one_line(exc: BaseException) -> str:
+    """An exception as one masked line: its type and message, no traceback, no secrets."""
+    from trader.logging_setup import redact_text
+
+    text = " ".join(redact_text(f"{type(exc).__name__}: {exc}").split())
+    return text if len(text) <= MAX_LINE else text[: MAX_LINE - 1] + "…"
+
+
+def _detail(detail: Mapping[str, Any]) -> str:
+    import json
+
+    from trader.logging_setup import redact_text
+
+    text = redact_text(json.dumps(dict(detail), default=str))
+    return text if len(text) <= MAX_LINE else text[: MAX_LINE - 1] + "…"
+
+
+def _core(name: str) -> "Core":
+    from trader.bootstrap import build_core
+
+    try:
+        return build_core()
+    except Exception as exc:
+        _fail(f"{name}: failed: {_one_line(exc)}")
+
+
+def _session(core: "Core", date_: str | None, name: str) -> date | None:
+    """The session to run for (--date, else today's ET date); None (after printing why) when it is not a
+    trading session. A bad or out-of-calendar date exits 1."""
+    from trader.market.clock import et_date
+
+    if date_:
+        try:
+            day = date.fromisoformat(date_)
+        except ValueError:
+            _fail(f"{name}: --date {date_} is not a valid date (use YYYY-MM-DD)")
+    else:
+        day = et_date(core.clock.now())
+    try:
+        is_session = core.calendar.is_session(day)
+    except ValueError:
+        _fail(f"{name}: --date {day} is outside the trading calendar")
+    if not is_session:
+        typer.echo(f"{name} {day}: not a trading session, nothing to do")
+        return None
+    return day
+
+
+def _run[T](name: str, day: date, work: Callable[[], Coroutine[Any, Any, T]]) -> T:
+    import asyncio
+
+    try:
+        return asyncio.run(work())
+    except Exception as exc:
+        _fail(f"{name} {day}: failed: {_one_line(exc)}")
+
+
+def _report(name: str, day: date, out: "JobOutcome") -> None:
+    if out.status == "succeeded":
+        typer.echo(f"{name} {day}: succeeded {_detail(out.detail)}")
+    elif out.status == "skipped":
+        typer.echo(f"{name} {day}: skipped ({out.detail.get('reason', 'no reason given')})")
+    else:
+        _fail(f"{name} {day}: failed: {out.error or 'unknown error'}")
+
+
+DATE_OPTION = typer.Option(None, "--date", help="Session YYYY-MM-DD (default: today in ET)")
+
+
+@app.command()
+def preopen(
+    date_: str | None = DATE_OPTION,
+    force: bool = typer.Option(False, "--force", help="Re-run a session that already succeeded."),
+) -> None:
+    """Pre-open check: token, data, kill switches, worker heartbeat; sends the result (SPEC §9, 09:20 ET)."""
+    _setup_logging()
+    from trader import runtime
+
+    core = _core("preopen")
+    day = _session(core, date_, "preopen")
+    if day is None:
+        return
+    _report("preopen", day, _run("preopen", day, lambda: runtime.preopen_job(core, day, force=force)))
+
+
+_AT = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+@app.command()
+def checkin(
+    at: str = typer.Option(..., "--at", help="The check-in label, HH:MM (11:30 or 13:30)"),
+    date_: str | None = DATE_OPTION,
+    force: bool = typer.Option(
+        False, "--force", help="Re-run a check-in that already succeeded (its event backup is never forced)."
+    ),
+) -> None:
+    """Check-in: a status message plus a backup firing of every due session event (SPEC §9)."""
+    _setup_logging()
+    from trader import runtime
+
+    if not _AT.match(at):
+        _fail(f"checkin: --at {at!r} is not a time HH:MM", code=2)
+    name = runtime.checkin_job_name(at)
+    core = _core(name)
+    day = _session(core, date_, name)
+    if day is None:
+        return
+    _report(name, day, _run(name, day, lambda: runtime.checkin_job(core, day, at, force=force)))
+
+
+@app.command()
+def event(
+    key: str | None = typer.Argument(None, help="The event key, e.g. orb_open or flatten"),
+    due: bool = typer.Option(False, "--due", help="Fire every due event that has not run yet."),
+    date_: str | None = DATE_OPTION,
+    force: bool = typer.Option(
+        False, "--force", help="With a KEY: run it even if it already ran or is early or late."
+    ),
+) -> None:
+    """Cron backup of the worker's session events: fire KEY (or every due event) once (SPEC §9).
+
+    Exit 0 for fired, skipped (the worker was first), too_early, not_scheduled and not_session; 1 for
+    failed and missed."""
+    _setup_logging()
+    from trader import runtime
+
+    if due and force:
+        _fail(
+            "event --due --force is refused: it would re-run every event that already ran today. "
+            "Use `event KEY --force` for one event.",
+            code=2,
+        )
+    if (key is None) == (not due):
+        _fail("event: give an event KEY or --due (not both)", code=2)
+    name = f"event {key}" if key is not None else "event --due"
+    core = _core(name)
+    day = _session(core, date_, name)
+    if day is None:
+        return
+    results = _run(name, day, lambda: runtime.event_backup(core, key, day, due=due, force=force))
+    if len(results) == 1 and results[0].status == "not_session":
+        typer.echo(f"{name} {day}: not a trading session, nothing to do")
+        return
+    if not results:
+        typer.echo(f"{name} {day}: nothing due")
+    failed = False
+    for r in results:
+        line = f"event {r.key} {day}: {r.status} {_detail(r.detail)}"
+        if r.status in FIRE_FAILURES:
+            failed = True
+            typer.echo(line, err=True)
+        else:
+            typer.echo(line)
+    if failed:
+        raise typer.Exit(1)
+
+
+@app.command()
+def postclose(
+    date_: str | None = DATE_OPTION,
+    force: bool = typer.Option(False, "--force", help="Re-run a session that already succeeded."),
+) -> None:
+    """Post-close: end-of-day cancels, journal row, candle archive, daily summary (SPEC §9, 16:15 ET)."""
+    _setup_logging()
+    from trader import runtime
+
+    core = _core("postclose")
+    day = _session(core, date_, "postclose")
+    if day is None:
+        return
+    _report("postclose", day, _run("postclose", day, lambda: runtime.postclose_job(core, day, force=force)))
+
+
+@app.command("telegram-test")
+def telegram_test(
+    buttons: bool = typer.Option(
+        False, "--buttons", help="Add two test buttons (unsigned: a running bot answers Invalid button)."
+    ),
+) -> None:
+    """Send one clearly labelled test message through the configured bot (it never polls for updates)."""
+    _setup_logging()
+    import asyncio
+    from zoneinfo import ZoneInfo
+
+    from pydantic import ValidationError
+
+    from trader import runtime
+    from trader.adapters.telegram.types import TelegramApiError
+    from trader.config import get_env
+    from trader.logging_setup import redact_text
+    from trader.market.clock import RealClock
+    from trader.notify.messages import fmt_time
+
+    try:
+        env = get_env()
+    except ValidationError as exc:
+        fields = sorted({".".join(str(p) for p in e["loc"]) for e in exc.errors()})
+        _fail(f"invalid configuration: {', '.join(fields)}")
+    if not runtime.telegram_configured(env):
+        _fail("Telegram isn't configured (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)")
+    now_label = fmt_time(RealClock().now(), ZoneInfo(env.tz_display))
+    try:
+        message_id = asyncio.run(runtime.telegram_test(env, now_label, buttons=buttons))
+    except TelegramApiError as exc:  # its description is Telegram's text with the token masked
+        _fail(f"telegram-test failed: {exc.status or 'network'} {redact_text(exc.description)}")
+    except Exception as exc:  # the type only: a client error's text can carry the token in a URL
+        _fail(f"telegram-test failed: {type(exc).__name__}")
+    typer.echo(f"sent message {message_id}")

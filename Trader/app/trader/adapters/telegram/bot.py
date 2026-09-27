@@ -11,7 +11,6 @@ callback data, a URL or an exception's repr (the token travels in PTB's URLs).
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime, timedelta
-from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import structlog
@@ -33,6 +32,7 @@ from trader.engine.proposals import Decision, DecisionResult, Via
 from trader.events import log_event
 from trader.market.clock import Clock
 from trader.notify.types import Button, Buttons, OutboundMessage, ProposalView, Renderer
+from trader.notify.views import proposal_view
 from trader.settings_store import RuntimeSettings
 
 SOURCE = "telegram"
@@ -64,30 +64,6 @@ log = structlog.get_logger("telegram.bot")
 
 def _toast(text: str) -> str:
     return text if len(text) <= ANSWER_LIMIT else text[: ANSWER_LIMIT - 3] + "..."
-
-
-def _dec(value: Any) -> Decimal | None:
-    if value is None:
-        return None
-    try:
-        return Decimal(str(value))
-    except InvalidOperation:
-        return None
-
-
-def _risk_usd(p: m.Proposal, spec: dict[str, Any]) -> Decimal | None:
-    """Dollar risk of an entry: qty x per-share risk (from the sizing, else entry price - stop loss)."""
-    if p.kind != "entry":
-        return None
-    sizing = p.sizing if isinstance(p.sizing, dict) else {}
-    per_share = _dec(sizing.get("per_share_risk"))
-    if per_share is None:
-        entry = _dec(spec.get("stop")) or _dec(spec.get("limit"))
-        stop_loss = _dec(spec.get("stop_loss"))
-        if entry is None or stop_loss is None:
-            return None
-        per_share = entry - stop_loss
-    return per_share * p.qty
 
 
 def _error_text(exc: BaseException) -> dict[str, Any]:
@@ -415,35 +391,7 @@ class TelegramBot:
             ).scalar_one_or_none()
             if p is None:
                 return None
-            spec: dict[str, Any] = p.order_spec if isinstance(p.order_spec, dict) else {}
-            signal = s.get(m.Signal, p.signal_id)
-            cancelled = s.get(m.Order, p.cancel_order_id) if p.cancel_order_id is not None else None
-            symbol_id = spec.get("symbol_id")
-            if symbol_id is None:
-                symbol_id = (
-                    cancelled.symbol_id if cancelled is not None else signal.symbol_id if signal else None
-                )
-            symbol = s.get(m.Symbol, symbol_id) if symbol_id is not None else None
-            config = s.get(m.StrategyConfig, signal.strategy_config_id) if signal is not None else None
-            return ProposalView(
-                proposal_id=p.id,
-                kind=p.kind,
-                status=p.status,
-                ticker=symbol.ticker if symbol is not None else "?",
-                side=spec.get("side") or (cancelled.side if cancelled is not None else ""),
-                order_type=spec.get("order_type") or (cancelled.order_type if cancelled is not None else ""),
-                qty=p.qty,
-                stop=_dec(spec.get("stop")),
-                limit=_dec(spec.get("limit")),
-                stop_loss=_dec(spec.get("stop_loss")),
-                risk_usd=_risk_usd(p, spec),
-                reason=str(spec.get("reason") or ""),
-                strategy_key=config.strategy_key if config is not None else "",
-                created_at=p.created_at,
-                expires_at=p.expires_at,
-                decided_via=p.decided_via,
-                error=p.error,
-            )
+            return proposal_view(s, p)  # shared with the relay (trader.notify.views)
 
     # --- helpers ----------
     async def _answer(self, cb: CallbackQuery, text: str) -> None:

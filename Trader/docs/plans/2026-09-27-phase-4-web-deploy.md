@@ -692,14 +692,14 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - **Watchlist upload:** a file input (CSV), a date (default: next session hint "leave empty for the next nightly"), a "Run nightly now" checkbox, Upload; shows the stored tickers count, the rejected rows table and the launch message; the current watchlist for the date (if any) with Delete.
 
 **Acceptance tests:**
-- [ ] 1. With fixtures: token OK, worker OK and Telegram configured render green; `telegram_configured: false` renders the red Telegram notice; a worker with `ok: false` renders the "worker not running" text.
-- [ ] 2. Fixed time-zone mode renders the amber time-zone warning; zone mode renders green.
-- [ ] 3. The job-runs table shows MT start times and durations; filtering by `nightly` calls `jobs({job: "nightly"})`.
-- [ ] 4. Run a job: choosing `nightly`, Force and confirming calls `runJob("nightly", {force: true})`; a 409 shows "already running".
-- [ ] 5. Event log: the level filter calls `events({level: "error"})`; "Load older" calls `events({before: <oldest id>})`.
-- [ ] 6. Watchlist upload sends the file with `runNightly` when checked, then shows the count and the rejected rows; Delete calls `deleteWatchlist(date)`.
-- [ ] 7. `rate_limit` null shows "not reported yet".
-- [ ] 8. Gate and commit `P4-T16: ...`.
+- [x] 1. With fixtures: token OK, worker OK and Telegram configured render green; `telegram_configured: false` renders the red Telegram notice; a worker with `ok: false` renders the "worker not running" text.
+- [x] 2. Fixed time-zone mode renders the amber time-zone warning; zone mode renders green.
+- [x] 3. The job-runs table shows MT start times and durations; filtering by `nightly` calls `jobs({job: "nightly"})`.
+- [x] 4. Run a job: choosing `nightly`, Force and confirming calls `runJob("nightly", {force: true})`; a 409 shows "already running".
+- [x] 5. Event log: the level filter calls `events({level: "error"})`; "Load older" calls `events({before: <oldest id>})`.
+- [x] 6. Watchlist upload sends the file with `runNightly` when checked, then shows the count and the rejected rows; Delete calls `deleteWatchlist(date)`.
+- [x] 7. `rate_limit` null shows "not reported yet".
+- [x] 8. Gate and commit `P4-T16: ...`.
 
 ---
 

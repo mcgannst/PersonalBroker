@@ -27,7 +27,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T3 | Crypto and runtime settings store | T2 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 7b5eca2 |
 | P1-T4 | Market types, clock and session calendar | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 4af1355 |
 | P1-T5 | FinViz parser and scraper | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | b1d45e5 |
-| P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | gauntlet | 1 | V✅ | d922a9c |
+| P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | fixing | 2 | V✅ B❌ S+C✅(3 should-fix) | 0e2cf5e |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | building | 1 |  |  |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | todo | 0 | | |
@@ -480,3 +480,20 @@ None open.
 - Gate: check.sh green (ruff, format, mypy, 207 passed), git status clean, all P1-T3 plan boxes ticked
 - Findings: all six attempt-1 findings fixed. No must-fix or should-fix. Nits only: the concurrency test covers only the new-key path, not the FOR UPDATE path. set() returns other keys from a snapshot taken before the lock. The plan Step code sample for RuntimeSettings is still the old version (the Interfaces text is correct). _key_is_valid checks one key against defaults, which will break if cross-field validators are added later.
 - Notes: the SPY requirement is compatible with P1-T9 (it uses RuntimeSettings() defaults and dedupes extra symbols)
+
+### 2026-09-27T04:45:56Z · P1-T6 · Breaker · attempt 1 · finished
+- Result: FAIL (4 of 12 test cases fail, 3 test functions)
+- Commits: 0e2cf5e
+- Gate: tests/gauntlet/test_p1_t6_breaker.py 8 passed, 4 failed. Full suite: 180 passed, 6 failed (the other 2 are the known test_p1_t3_breaker failures)
+- Findings: (1) a 200 without refresh_token raises but records no last_error and has no cooldown, so health() looks fine and it retries every call. (2) a non-JSON 200 raises a raw JSONDecodeError, not QuestradeAuthError. (3) httpx.ConnectError has no 60 s failed-refresh cooldown: 6 exchanges in 25 s. (4) seed("") or a whitespace-only token overwrites and destroys the live chain.
+- Notes: passes: 5-thread race, forced vs normal race, commit-failure critical log, api_server normalisation, keep_alive never refreshed, unseeded health, rotated key
+
+### 2026-09-27T04:46:34Z · P1-T7 · Builder · attempt 1 · finished
+- Result: done, Steps 1-8 complete and ticked
+- Commits: 1dd3f8e (client, models, CLI, tests), a51e0fb (Step 8 tick)
+- Gate: ruff, format and mypy clean. pytest 181 passed, 2 failed, both in tests/gauntlet/test_p1_t3_breaker.py (known, P1-T3 fix round). New test_questrade_client.py has 9 passed
+- LIVE questrade-check, Sunday with the market closed, run once. Output:
+  - server time 2026-09-27T04:45:55.471000+00:00 (local clock differs by 0.2s)
+  - SPY: last=771.35 bid=None ask=None delay=0 lastTradeTime=2026-09-25 04:00:00+00:00 age_s=175555.665569
+  - rate limit remaining: account 29999, market 14999
+- Notes: code as in the plan. One deviation: the server-time echo line was 114 chars after ruff format (E501), so the skew moved into a local variable, same output. No tenacity. The weekend lastTradeTime is 00:00 ET Friday, not a real trade time, so S2 still needs the Monday rerun.

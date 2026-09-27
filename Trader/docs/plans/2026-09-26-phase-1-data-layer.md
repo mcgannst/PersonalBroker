@@ -1507,9 +1507,17 @@ git pull --rebase && git push
   - `UniverseRow` (frozen dataclass): `ticker: str` (Questrade form), `company: str`, `sector: str`, `industry: str`, `price: Decimal | None`, `volume: int | None`.
   - `Headline` (frozen dataclass): `ts: datetime` (UTC-aware; FinViz times are ET), `title: str`, `source: str`, `url: str`.
   - `parse_screener(html: str) -> ScreenerPage`; `parse_universe_row(rec: dict[str, str]) -> UniverseRow`; `parse_news(html: str, today_et: date) -> list[Headline]`; `blocked_reason(status: int, body: str) -> str | None`; `to_questrade_ticker(ticker: str) -> str`.
+  - Added in the attempt-2 fix round: `ScreenerPage.bad_rows: int = 0` (rows whose cell count differs from the header; they are not in `rows`); `NewsPage` (frozen dataclass: `headlines: list[Headline]`, `problem: str | None`) and `parse_news_page(html: str, today_et: date) -> NewsPage` (`problem` is set when a page of ≥ 1000 bytes has no `#news-table`, or its table has headline rows but none parse); `to_finviz_ticker(ticker: str) -> str` (Questrade form back to FinViz form: `BF.B` → `BF-B`); `UNIVERSE_COLUMNS = ("Ticker", "Company", "Sector", "Industry", "Price", "Volume")`. Prices and volumes that are NaN or Infinity parse as `None`.
 - Produces (`trader.adapters.finviz.scraper`):
-  - Exceptions `FinvizError`, `FinvizBlocked(FinvizError)`, `FinvizFilterIgnored(FinvizError)`.
+  - Exceptions `FinvizError`, `FinvizBlocked(FinvizError)`, `FinvizFilterIgnored(FinvizError)`, and (fix round) `FinvizHttpError(FinvizError)` (any other non-2xx status, or a wrapped `httpx.HTTPError` such as a timeout) and `FinvizParseError(FinvizError)` (layout change, short or empty result). **Every failure raises a `FinvizError`; a short, empty or mis-keyed result is never returned.**
   - `FinvizScraper(http: httpx.Client | None = None, *, min_interval_s: float = 2.0, cache_dir: Path | None = None, cache_ttl_s: float = 43200, sleep: Callable[[float], None] = time.sleep, monotonic: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time)` with `screen(filters: str, view: int = 111, signal: str | None = None) -> ScreenerPage` (all pages merged), `universe(filters: str) -> list[UniverseRow]`, `news(ticker: str, today_et: date) -> list[Headline]`, `close() -> None`.
+  - Fix-round behaviour:
+    - **Context manager:** `with FinvizScraper(...) as finviz:`. `close()` closes only a client the scraper created. A caller's client is never mutated: the browser headers are sent per request.
+    - **Validation:** `screen()` raises `FinvizParseError` when the count text is missing (total 0 while rows exist), the header is empty or lacks `Ticker`, any row's cell count differs from the header, a later page's header differs, the total exceeds `MAX_PAGES × PAGE_SIZE` or paging hits `MAX_PAGES`, or the rows de-duplicated by ticker don't equal the total. `universe()` also requires `UNIVERSE_COLUMNS` and a non-empty result.
+    - **Ignored-filter guard:** with filters, the baseline is the same request with the same `signal` and no filters; with only a signal, the baseline has neither. Equal totals raise `FinvizFilterIgnored`. An unreadable baseline total (0) raises `FinvizParseError`.
+    - **HTTP:** 403, 429 and 503 raise `FinvizBlocked`; other non-2xx raise `FinvizHttpError`. `BLOCK_BACKOFF_S = (30.0, 90.0)`: a **screener** request that gets 429 or 503 is retried after 30 s, then 90 s (via the injected `sleep`), then raises `FinvizBlocked`. 403 is never retried. `news()` doesn't retry: pre-market news is per ticker, so it raises at once and the caller skips the ticker. The 2 s spacing is measured from the end of the last request, failed or not.
+    - **Cache:** the directory is created with mode 0o700 and is not used (with a warning) if it isn't owned by the current user. Writes are atomic (temp file, then `os.replace`) and UTF-8. Cached pages that look blocked are ignored. Pages are cached only after the whole result validates, so nothing that raises is cached. **News cache key includes `today_et`**: "Today" resolves to the ET date the page was fetched, so a page fetched on an earlier ET day is never reused.
+    - **Tickers:** `news()` accepts the Questrade form (`BRK.B`) and requests FinViz's (`BRK-B`).
 
 - [x] **Step 1: Copy the fixtures**
 
@@ -3701,6 +3709,8 @@ def target_session(calendar: SessionCalendar, clock: Clock) -> date:
 
 
 async def _universe(deps: NightlyDeps, session_date: date) -> tuple[list[UniverseRow], str, str | None]:
+    # FinvizError covers every scraper failure: FinvizBlocked, FinvizHttpError, FinvizParseError and
+    # FinvizFilterIgnored (P1-T5). The scraper never returns an empty or partial universe.
     try:
         rows = await asyncio.to_thread(deps.finviz.universe, deps.settings.universe_finviz_filters)
         return rows, "finviz", None
@@ -3796,20 +3806,22 @@ def nightly(date_: str = typer.Option(None, "--date", help="Target session YYYY-
     core = build_core()
     settings = core.settings.load()
     session_date = date_cls.fromisoformat(date_) if date_ else target_session(core.calendar, core.clock)
-    finviz = FinvizScraper(min_interval_s=settings.finviz_min_interval_seconds,
-                           cache_dir=Path("/tmp/trader-finviz-cache"),  # noqa: S108
-                           cache_ttl_s=settings.finviz_cache_hours * 3600)
     auth = QuestradeAuth(core.factory, core.crypto, core.clock)
+    # A private per-user cache (the scraper creates it 0o700 and refuses one it doesn't own), never a
+    # shared /tmp path.
+    cache_dir = Path.home() / ".cache" / "trader" / "finviz"
 
-    def job() -> dict[str, object]:
-        async def go() -> dict[str, object]:
-            async with QuestradeClient(auth, core.clock) as qt:
-                return await run_nightly(NightlyDeps(core.factory, core.clock, core.calendar, finviz, qt, settings),
-                                         session_date)
-        return asyncio.run(go())
+    with FinvizScraper(min_interval_s=settings.finviz_min_interval_seconds, cache_dir=cache_dir,
+                       cache_ttl_s=settings.finviz_cache_hours * 3600) as finviz:
 
-    out = run_job(core.factory, core.clock, "nightly", session_date, job, force=force)
-    finviz.close()
+        def job() -> dict[str, object]:
+            async def go() -> dict[str, object]:
+                async with QuestradeClient(auth, core.clock) as qt:
+                    return await run_nightly(
+                        NightlyDeps(core.factory, core.clock, core.calendar, finviz, qt, settings), session_date)
+            return asyncio.run(go())
+
+        out = run_job(core.factory, core.clock, "nightly", session_date, job, force=force)
     typer.echo(f"nightly {session_date}: {out.status} {out.detail or out.error or ''}")
     if out.status == "failed":
         raise typer.Exit(1)

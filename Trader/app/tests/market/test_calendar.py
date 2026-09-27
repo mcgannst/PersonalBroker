@@ -38,3 +38,18 @@ def test_next_and_previous_session_skip_weekends_and_holidays() -> None:
 def test_sessions_before() -> None:
     got = CAL.sessions_before(date(2026, 9, 28), 3)
     assert got == [date(2026, 9, 23), date(2026, 9, 24), date(2026, 9, 25)]
+
+
+def test_sessions_before_zero_and_negative() -> None:
+    assert CAL.sessions_before(date(2026, 9, 28), 0) == []
+    with pytest.raises(ValueError, match="n must be >= 0"):
+        CAL.sessions_before(date(2026, 9, 28), -1)
+
+
+def test_calendar_range_is_fixed_2020_to_2030() -> None:
+    assert CAL.is_session(date(2020, 1, 2))
+    assert CAL.is_session(date(2030, 12, 31))
+    with pytest.raises(ValueError):
+        CAL.is_session(date(2031, 1, 2))
+    with pytest.raises(ValueError):
+        CAL.is_session(date(2019, 12, 31))

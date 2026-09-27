@@ -1,3 +1,5 @@
+"""Market data types. Candle start and end times are UTC-aware datetimes."""
+
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal

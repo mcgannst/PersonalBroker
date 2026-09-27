@@ -7,9 +7,9 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 1 |
-| Current task | P1-T1 (gauntlet), P1-T2, P1-T4, P1-T5 (building) |
+| Current task | P1-T1 (fixing), P1-T2, P1-T5 (building), P1-T4 (Verifier) |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-27T04:45:00Z |
+| Last updated (UTC) | 2026-09-27T05:10:00Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | `docker/.env.dev` (moves to `trader_dev.trader.api_credentials` in P1-T6) |
 | Token last refreshed (UTC) | 2026-09-27T03:36:53Z (spike S1) |
@@ -22,10 +22,10 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 
 | ID | Title | Depends on | Status | Attempt | Stage results | Last commit |
 |---|---|---|---|---|---|---|
-| P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | gauntlet | 1 | V✅ | cf0ad8e |
+| P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | fixing | 2 | V✅ B❌ S✅ C✅(3 should-fix) | f5b6daa |
 | P1-T2 | Database models, migration 0001, test database fixture | T1 | building | 1 | | |
 | P1-T3 | Crypto and runtime settings store | T2 | todo | 0 | | |
-| P1-T4 | Market types, clock and session calendar | T1 | building | 1 | | |
+| P1-T4 | Market types, clock and session calendar | T1 | gauntlet | 1 |  | 59be3e7 |
 | P1-T5 | FinViz parser and scraper | T1 | building | 1 | | |
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | todo | 0 | | |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | todo | 0 | | |
@@ -70,3 +70,50 @@ None open.
 ### 2026-09-27T04:55:00Z · P1-T2/T4/T5 · Orchestrator · attempt 1 · started
 - Result: Stephen asked for more parallel agents. Builders now run in their own worktrees and push to trunk. Tasks start once their dependencies pass the Verifier. Up to 5 builders.
 - Notes: P1-T1 passed the Verifier. Its Breaker and both reviewers run now, in parallel with the builders of T2, T4, T5.
+
+### 2026-09-27T04:21:22Z · P1-T1 · Code reviewer · attempt 1 · started
+- Notes: reviewing P1-T1 diffs on origin/trunk
+
+### 2026-09-27T04:21:22Z · P1-T1 · Spec reviewer · attempt 1 · started
+- Notes: reviewing P1-T1 commits against phase-1 plan, SPEC §2/§3/§13 and Global Constraints
+
+### 2026-09-27T04:21:25Z · P1-T2 · Builder · attempt 1 · started
+- Notes: worktree agent-a7793302a6386fef2
+
+### 2026-09-27T04:21:25Z · P1-T5 · Builder · attempt 1 · started
+- Notes: building FinViz parser and scraper in worktree agent-ae1d19bc201fbed09
+
+### 2026-09-27T04:21:28Z · P1-T1 · Breaker · attempt 1 · started
+- Notes: writing tests/gauntlet/test_p1_t1_breaker.py
+
+### 2026-09-27T04:21:28Z · P1-T4 · Builder · attempt 1 · started
+- Result: in progress
+- Notes: worktree agent-aab8816de0bf0bf93
+
+### 2026-09-27T04:22:01Z · P1-T1 · Code reviewer · attempt 1 · finished
+- Result: PASS (0 must-fix, 3 should-fix, 5 nits)
+- Commits: reviewed 8cae90d, cf0ad8e
+- Findings: should-fix config.py:16-17 DB URLs (with passwords) are plain str so repr leaks them. should-fix env_setup.py:24 SESSION_SECRET appended without leading newline, can merge into an unterminated last line. should-fix notify.py:25-26 Telegram failure prints failed but exits 0, HTTP errors give a raw traceback. Nits: temp file not removed on write failure (env_setup.py:27-31), import-time env read (notify.py:11), CRLF/quoted values in notify regex (notify.py:15), build/ scripts outside ruff/mypy, docstring cites non-existent trader.settings_store
+- Notes: temp file pattern docker/.env.* is git-ignored, mkstemp gives 0600, urlopen has a timeout
+
+### 2026-09-27T04:22:09Z · P1-T1 · Spec reviewer · attempt 1 · finished
+- Result: PASS (0 must-fix, 0 should-fix, 4 nits)
+- Commits: reviewed 8cae90d, cf0ad8e
+- Findings: code matches plan verbatim apart from the two declared deviations, both correct. Nits - tenacity (SPEC §2) not yet a dependency, ADMIN_USERNAME/ADMIN_PASSWORD_INITIAL (SPEC §13) not in EnvSettings, EnvSettings.questrade_refresh_token outlives P1-T6 token-ownership rule, test-side type-ignore[call-arg] now stale (tests are not mypy-checked)
+- Notes: .env.dev confirmed git-ignored (Trader/.gitignore:2), not read
+
+### 2026-09-27T04:23:11Z · P1-T1 · Breaker · attempt 1 · finished
+- Result: FAIL (2 of 8 new tests fail)
+- Commits: f5b6daa
+- Gate: ruff, format, mypy pass. pytest 10 passed, 2 failed (the breaker tests below)
+- Findings: (1) test_database_password_never_leaks_via_repr_str_or_json - database_url and migration_database_url are plain str, so repr/str/model_dump_json of EnvSettings expose the DB passwords. (2) test_env_setup_handles_file_without_trailing_newline - env_setup.py appends SESSION_SECRET onto the last line when .env.dev has no trailing newline, corrupting APP_ENCRYPTION_KEY.
+- Notes: tests use fake values and a tmp copy of .env only
+
+### 2026-09-27T04:23:34Z · P1-T4 · Builder · attempt 1 · finished
+- Result: done, all 5 plan steps complete and ticked
+- Commits: 59be3e7
+- Gate: ruff, format and mypy pass. The P1-T4 tests pass (11). Before commit: 15/15 passed. On trunk after rebase: 28 passed, 2 failed. Both failures are P1-T1 Breaker tests in tests/gauntlet/test_p1_t1_breaker.py (DB password in the EnvSettings repr, env_setup without a trailing newline), not P1-T4 code.
+- Notes: exchange_calendars 4.13.2 with pandas 3.0.6 works with the plan's code as written, with no API changes. The early-close (11-27 18:00 UTC) and DST values match the calendar. There are no deviations.
+
+### 2026-09-27T04:24:05Z · P1-T1 · Builder · attempt 2 · started
+- Result: fixing gauntlet findings (SecretStr DB URLs, env_setup trailing newline, notify.py errors, test_config nits)

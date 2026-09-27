@@ -9,7 +9,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Current phase | 4 (Phase 3 COMPLETE ~13:45 MT Sep 27, tag phase-3-complete) |
 | Current task | P4 gauntlets (auth, group A, group B); P5-T0 planning |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-27T20:21:25Z |
+| Last updated (UTC) | 2026-09-27T21:01:50Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
 | Token last refreshed (UTC) | 2026-09-27T17:21:56Z (re-seeded from Stephen's new token after .env.dev rebuild; token removed from .env.dev) |
@@ -23,7 +23,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Backlog | P2: cash sizing ignores slippage/ECN on gapped stop entries (SPEC 6.1 change); confirm FinViz 'yesterday' on Monday 2026-09-28 premarket; cash_ledger sign CHECK + ensure_sim_account via Ledger.record; event_log indexes for kill-switch/Claude-budget lookups |
 | Phase 4 planning | P4-T0 plan written (836a484: 19 tasks, width 15, crit path 4); verify+fix running |
 | Phase 4 started | 12:48 MT Sep 27; estimate ~5-5.5 h (contracts, 2 waves of builders, gauntlets, wiring, deploy + LIVE): finish ~18:00-18:30 MT |
-| Phase 5 planning | P5-T0 planner started (overlaps P4 gauntlets/wiring) |
+| Phase 5 planning | plan accepted (8ce148e); build starts after P4-T18 is accepted |
 
 ## Task board
 
@@ -79,15 +79,15 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P3-REVIEW | Phase 3 review | P3-T13 | accepted | 1 | PASS; 409 alert relayed, safety-event alert cap, masked stored errors; + second flatten cron backup (12:58/15:58) | b3b9c38 |
 | P4-T1 | Backend contracts, migration 0005 (LIVE), fakes | P3 | accepted | 1 | contracts + migration 0005 on trunk | b461e62 |
 | P4-T2 | Web contracts (Vite, types, ApiClient, UI) | P3 | accepted | 2 | web gauntlet 40/40 after fix round; 354 web tests green | ebe2497 |
-| P4-T3 | API core, health, SPA serving | T1 | gauntlet | 1 | built (65 tests) | 26e2b78 |
-| P4-T4 | Auth (Argon2, sessions, CSRF, lockout, TOTP) | T1 | gauntlet | 1 | built (34 tests, 403 ruling applied); own gauntlet running | 030aa00 |
-| P4-T5 | Dashboard and trading reads | T1 | gauntlet | 1 | built (35 tests); shares views with Telegram | 6a8e042 |
+| P4-T3 | API core, health, SPA serving | T1 | accepted | 2 | group A fix round: breaker 16/16, +10 regression | 4be9e7f |
+| P4-T4 | Auth (Argon2, sessions, CSRF, lockout, TOTP) | T1 | accepted | 2 | fix round: breaker 16/16; trusted-proxy XFF (TRADER_FORWARDED_ALLOW_IPS, default 172.19.0.0/16), NUL-safe, per-session guess limit, Argon2 cap 4 | 4265e45 |
+| P4-T5 | Dashboard and trading reads | T1 | accepted | 2 | group A fix round: breaker 16/16, +10 regression | 4be9e7f |
 | P4-T6 | Decisions (approve/reject, kill switches) | T1 | gauntlet | 1 | built (48 tests); web approvals only via build_decider, race web vs Telegram = one decision | eb748b5 |
-| P4-T7 | Performance, journal, CSV export | T1 | gauntlet | 1 | built (32 tests); T18 note: HistogramBinOut lo/hi need allow_inf_nan | eb6b57b |
-| P4-T8 | Settings and strategies | T1 | gauntlet | 1 | built (29 tests); audited settings/strategy writes | 1eadb5f |
-| P4-T9 | System, jobs, token paste, Telegram test | T1 | gauntlet | 1 | built (39 tests); group B gauntlet running | d3e9b01 |
+| P4-T7 | Performance, journal, CSV export | T1 | accepted | 2 | group A fix round: breaker 16/16, +10 regression | 4be9e7f |
+| P4-T8 | Settings and strategies | T1 | accepted | 2 | group A fix round: breaker 16/16, +10 regression | 4be9e7f |
+| P4-T9 | System, jobs, token paste, Telegram test | T1 | fixing | 2 | group B gauntlet: V✅ B 33/34 (events id bound) review 0 must-fix -> fix round a2 (upload size cap while parsing) | 56b1241 |
 | P4-T10 | Watchlist CSV upload | T1 | gauntlet | 1 | built; manual list replaces FinViz in nightly; T18 note: cap username so 'web:'+name fits varchar(50) | 7334cee |
-| P4-T11 | Change feed and SSE | T1 | gauntlet | 1 | built (18 tests, real-server SSE <2s); review: global uvicorn handle_exit monkeypatch for clean shutdown | e456eb7 |
+| P4-T11 | Change feed and SSE | T1 | accepted | 2 | group A fix round: breaker 16/16, +10 regression | 4be9e7f |
 | P4-T12 | Web shell | T2 | accepted | 2 | web gauntlet 40/40 after fix round; 354 web tests green | ebe2497 |
 | P4-T13 | Web Dashboard and Candidates | T2 | accepted | 2 | web gauntlet 40/40 after fix round; 354 web tests green | ebe2497 |
 | P4-T14 | Web Trades, Performance, Journal, Reports | T2 | accepted | 2 | web gauntlet 40/40 after fix round; 354 web tests green | ebe2497 |
@@ -1557,3 +1557,51 @@ None open.
 - Commits: f0d9b8e (P4-B4: auth gauntlet tests)
 - Gate: 2075 passed, 2 failed (test_x_forwarded_for_cannot_dodge_the_per_ip_limit, test_username_case_whitespace_and_hostile_names)
 - Findings: forwarded_allow_ips=* in api/__main__.py lets a client choose its X-Forwarded-For IP, bypassing the per-IP limit and forging audit IPs. A NUL byte in the username gives a 500. No rate limit on wrong current passwords from a signed-in session. T18 user-password must revoke sessions
+
+### 2026-09-27 14:23 MT · P4-T4 · Builder · attempt 2 · started
+- Result: fix round (verify+fix) for gauntlet findings: forwarded_allow_ips, NUL username, per-session guess limit, nits
+
+### 2026-09-27 14:52 MT · P4-BA · Gauntlet (Verifier+Breaker+Spec/Code) · attempt 1 · finished
+- Result: Verifier PASS (Python gate green on d1e79f3, 1969 passed, web failures only in the P4-BW breaker file). Breaker FAIL (5 of 16). Review: 0 must-fix, 6 should-fix
+- Commits: c0ed7d7 (tests/gauntlet/test_p4_backend_a_breaker.py)
+- Findings: offset over 2^63 gives 500 (trading.py:578). run=² gives 500 (deps.py:179 isdigit). Journal dates before 1677 give 500 (journal.py:80,100 catch only ValueError). MAX_STREAMS check-then-await race (stream.py:202-210). position_lines DB queries run on the event loop (trading.py:202)
+
+### 2026-09-27 14:37 MT · P4-BA · Builder · attempt 2 · started
+- Result: fix round for group A (P4-T3, T5, T7, T8, T11) gauntlet findings
+
+### 2026-09-27 14:40 MT · P4-T4 · Builder · attempt 2 · finished
+- Result: all findings fixed. TRADER_FORWARDED_ALLOW_IPS (default 172.19.0.0/16, the live proxy subnet), Argon2 cap of 4, NUL/invalid username treated as unknown, per-session guess limit (5 distinct in 15 min, then 429), and the nits
+- Commits: 4265e45
+- Gate: gate.sh 2144 passed, 5 failed. All 5 are in the newly pulled tests/gauntlet/test_p4_backend_a_breaker.py (another task: trades offset, journal dates, stream limit), none in auth. P4-T4 breaker 16/16 pass
+- Notes: T17/T19 must set or verify TRADER_FORWARDED_ALLOW_IPS (the Docker proxy subnet is not pinned). T18 user-password must revoke sessions (unchanged)
+
+### 2026-09-27 14:42 MT · P5-T0 · Planner · attempt 1 · finished
+- Result: done, Phase 5 spec plan written (18 tasks P5-T1..T18)
+- Commits: f378a6a
+- Gate: not run (plan only, machine loaded by Phase 4 tests)
+- Notes: critical path T1 -> T6 -> T17 -> T18 (4), max width 15 (T2..T16 after T1). T1 depends on every P4 task except P4-T19 past its Verifier, T18 on P4-T19 accepted. 10 open questions with defaults.
+
+### 2026-09-27 14:43 MT · P5-T0 · Verifier+Spec reviewer · attempt 1 · started
+- Result: verify+fix of the Phase 5 plan (f378a6a) against SPEC, BRD and trunk code
+
+### 2026-09-27 14:52 MT · P4-BB · Gauntlet (Verifier, Breaker, Spec+Code review) · attempt 1 · finished
+- Result: Verify PASS for T6/T9/T10/T17 code (clean tree, all boxes ticked, ruff/format/mypy clean). Breaker FAIL 1 of 34 cases: GET /api/events?since=2**63 is a 500 (system.py:171-172 lack an upper bound). No must-fix
+- Commits: 56b1241 (Trader/app/tests/gauntlet/test_p4_backend_b_breaker.py, 16 tests)
+- Gate: pytest 3 failed, 2147 passed. Failures: my events-bounds test, plus 2 P4-T4 breaker tests (test_x_forwarded_for_cannot_dodge_the_per_ip_limit, test_username_case_whitespace_and_hostile_names), which are not group B
+- Notes: for T18, JobLaunchOut.session_date is nullable in Python (null for token-refresh) but IsoDate non-null in web/src/api/types.ts:601
+
+### 2026-09-27 14:45 MT · P4-BB · Builder · attempt 2 · started
+- Result: fix round for group B gauntlet findings (events le bound, streamed upload cap, nits)
+
+### 2026-09-27 15:05 MT · P4-BA · Builder · attempt 2 · finished
+- Result: all 4 MUST, 2 SHOULD-FIX and 4 nits fixed, with regression tests. 16/16 group A breaker tests pass.
+- Commits: 4be9e7f
+- Gate: gate.sh 2192 passed, 1 failed: test_p4_backend_b_breaker.py::test_events_bounds_and_telegram_not_configured (system.py events since=2**63 gives 500). That is group B's pending fix round, not group A code.
+- Notes: split notify/views.position_lines into open_position_rows/last_prices/lines_from. Added a shared views.pnl_view, which telegram commands.pnl_view now calls.
+
+### 2026-09-27 15:00 MT · P5-T0 · Verifier+Spec reviewer · attempt 1 · finished
+- Result: FAIL as written (3 must-fix, about 12 should-fix), all fixed in the plan, so PASS after fix
+- Commits: 8ce148e (P5-T0: plan verify+fix)
+- Gate: not run (plan only, machine loaded)
+- Findings: must-fix were the gate (check.sh instead of Trader/build/gate.sh), whole-range Questrade FiveMinutes requests the client refuses (over 20,000 intervals), and unbounded replay memory inside the live container (soak risk). Should-fix covered the P4-T18 reconciliation rule, isolation of replay log-mirror rows and SSE watermarks, determinism rules, limit fill price, weekend week mapping, weekly retry cost cap, T17 file gaps (test_launcher.py, mirror for nightly/premarket), LIVE timing clear of cron lines and 11:30/13:30, and retry-aware soak counting
+- Notes: log in the worktree copy of docs/build/agents/P5-T0-verifier-a1.md (the harness blocks writes to the main checkout's agents folder)

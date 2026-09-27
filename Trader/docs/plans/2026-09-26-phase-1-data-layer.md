@@ -407,7 +407,7 @@ git pull --rebase && git push
 
 Notes: `api_credentials` has two columns the SPEC table omits, `last_error` and `updated_at`, because the ported refresh logic needs them (SPEC §4.1 cooldowns). `intraday_candles` is partitioned by month (SPEC §10); the app role can't create tables, so the migration creates monthly partitions from 2026-06 to 2028-12 plus a default partition.
 
-- [ ] **Step 1: Write the failing migration test**
+- [x] **Step 1: Write the failing migration test**
 
 `Trader/app/tests/db/__init__.py`: empty file.
 
@@ -477,7 +477,7 @@ def test_downgrade_and_upgrade_again(pg_url: str) -> None:
     command.upgrade(cfg, "head")
 ```
 
-- [ ] **Step 2: Write the fixtures in `Trader/app/tests/conftest.py`**
+- [x] **Step 2: Write the fixtures in `Trader/app/tests/conftest.py`**
 
 ```python
 """Shared fixtures. Database tests use a throwaway PostgreSQL 14 container, never trader_dev."""
@@ -528,12 +528,12 @@ def db_factory(migrated_engine: Engine) -> Iterator[sessionmaker[Session]]:
         conn.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
 ```
 
-- [ ] **Step 3: Run the test to see it fail**
+- [x] **Step 3: Run the test to see it fail**
 
 Run: `uv run pytest tests/db -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.db'`.
 
-- [ ] **Step 4: Implement the session helpers**
+- [x] **Step 4: Implement the session helpers**
 
 `Trader/app/trader/db/__init__.py`: empty file.
 
@@ -567,7 +567,7 @@ def session_scope(factory: sessionmaker[Session]) -> Iterator[Session]:
         session.close()
 ```
 
-- [ ] **Step 5: Implement the models**
+- [x] **Step 5: Implement the models**
 
 `Trader/app/trader/db/models.py`:
 ```python
@@ -723,7 +723,7 @@ class AuditLog(Base):
     after: Mapped[Any] = mapped_column(JSONB, nullable=True)
 ```
 
-- [ ] **Step 6: Implement Alembic**
+- [x] **Step 6: Implement Alembic**
 
 `Trader/app/alembic.ini`:
 ```ini
@@ -808,7 +808,7 @@ def downgrade() -> None:
     ${downgrades if downgrades else "pass"}
 ```
 
-- [ ] **Step 7: Write migration 0001**
+- [x] **Step 7: Write migration 0001**
 
 `Trader/app/trader/db/migrations/versions/0001_phase1_core.py`:
 ```python
@@ -985,12 +985,12 @@ def downgrade() -> None:
         op.drop_table(table, schema=S)
 ```
 
-- [ ] **Step 8: Run the tests to see them pass**
+- [x] **Step 8: Run the tests to see them pass**
 
 Docker Desktop must be running. Run: `uv run pytest tests/db -q`
 Expected: `4 passed`.
 
-- [ ] **Step 9: Run the gate, commit and push**
+- [x] **Step 9: Run the gate, commit and push**
 
 Run: `uv run ruff format . && bash scripts/check.sh` → all pass.
 ```bash

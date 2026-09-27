@@ -25,11 +25,11 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | accepted | 2 | V✅ B✅ S✅ C✅ (fix review ✅) | 3a3a50f |
 | P1-T2 | Database models, migration 0001, test database fixture | T1 | fixing | 2 | V✅ B❌ S✅(should-fix) C✅(should-fix) | 50fe0e6 |
 | P1-T3 | Crypto and runtime settings store | T2 | gauntlet | 1 | V✅ | 58b15df |
-| P1-T4 | Market types, clock and session calendar | T1 | gauntlet | 2 | V✅ B❌ S✅ C✅ → fix 4af1355 (verify+review running) | 4af1355 |
+| P1-T4 | Market types, clock and session calendar | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 4af1355 |
 | P1-T5 | FinViz parser and scraper | T1 | fixing | 2 | V✅ B❌ S❌ C❌ | b058cdd |
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | building | 1 |  |  |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | todo | 0 | | |
-| P1-T8 | Indicators | T4 | fixing | 2 | V✅ B❌ S✅ C✅ | be57e1b |
+| P1-T8 | Indicators | T4 | gauntlet | 2 | V✅ B❌ S✅ C✅ → fix 358296f (verify+review running) | 358296f |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | todo | 0 | | |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | todo | 0 | | |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | todo | 0 | | |
@@ -369,3 +369,9 @@ None open.
 
 ### 2026-09-27T04:35:26Z · P1-T3 · Spec+Code reviewer · attempt 1 · started
 - Notes: reviewing commit 58b15df against plan P1-T3, SPEC §13/§14, Global Constraints
+
+### 2026-09-27T04:35:29Z · P1-T3 · Breaker · attempt 1 · started
+- Notes: writing tests/gauntlet/test_p1_t3_breaker.py
+
+### 2026-09-27T04:35:32Z · P1-T6 · Builder · attempt 1 · started
+- Result: starting Steps 1-7 (Step 7 LIVE, once)

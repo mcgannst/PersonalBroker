@@ -24,9 +24,9 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 |---|---|---|---|---|---|---|
 | P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | accepted | 2 | V✅ B✅ S✅ C✅ (fix review ✅) | 3a3a50f |
 | P1-T2 | Database models, migration 0001, test database fixture | T1 | fixing | 2 | V✅ B❌ S✅(should-fix) C✅(should-fix) | 50fe0e6 |
-| P1-T3 | Crypto and runtime settings store | T2 | gauntlet | 1 | V✅ | 58b15df |
+| P1-T3 | Crypto and runtime settings store | T2 | fixing | 2 | V✅ B❌ S✅ C✅(should-fix) | f5ad3a4 |
 | P1-T4 | Market types, clock and session calendar | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 4af1355 |
-| P1-T5 | FinViz parser and scraper | T1 | fixing | 2 | V✅ B❌ S❌ C❌ | b058cdd |
+| P1-T5 | FinViz parser and scraper | T1 | gauntlet | 2 | V✅ B❌ S❌ C❌ → fix b1d45e5 (verify+review running) | b1d45e5 |
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | building | 1 |  |  |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | todo | 0 | | |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
@@ -397,3 +397,20 @@ None open.
 - Gate: pytest tests/gauntlet/test_p1_t3_breaker.py = 6 passed, 2 failed, ruff clean
 - Findings: (1) test_corrupt_stored_value_fails_closed_and_is_repairable - one invalid row in settings makes set() raise for every key, including the corrupt key itself, because set() validates all rows (before) first. The settings can only be repaired by hand in SQL. (2) test_list_values_round_trip_order_and_duplicates - markets_enabled accepts and stores duplicates like US,US, which risks per-market jobs running twice.
 - Notes: field-name keys are rejected with KeyError. Concurrent set on different keys, no audit on failed validation, invalid Fernet key, unicode or 1 MB secrets, and rotated or tampered tokens all pass.
+
+### 2026-09-27T04:38:44Z · P1-T3 · Builder · attempt 2 · started
+- Notes: fix round for breaker (corrupt row lockout, duplicate markets) and review should-fix findings (inf, content validation, concurrent writers, nits)
+
+### 2026-09-27T04:39:46Z · P1-T5 · Builder · attempt 2 · finished
+- Result: done. All 13 P1-T5 breaker tests pass unedited. 42 regression tests added (13 parser + 29 scraper).
+- Commits: d510910, addd66e, b1d45e5
+- Gate: ruff, format and mypy pass. pytest 164 passed, 4 failed. The failures are other tasks' new breaker tests (p1_t2 x2, p1_t3 x2), not P1-T5. The p1_t4 failure is now fixed on trunk.
+- Notes: DEVIATION: the 429/503 backoff (30 s, 90 s) applies to screener requests only. news() raises FinvizBlocked at once, because the breaker's test_blocked_or_error_responses_raise_and_are_not_cached[429/503] expects that and a retry would consume its second (good) response. Also universe() raises on an empty result. Screener pages are cached only after the whole screen validates.
+
+### 2026-09-27T04:40:02Z · P1-T6 · Builder · attempt 1 · finished
+- Result: done, Steps 1-7 complete (Step 7 LIVE ran once and succeeded)
+- Commits: 0f4e1f7, d922a9c
+- Gate: check.sh 107 passed, 9 failed, all 9 in known other-task breaker files (test_p1_t2_breaker 2, test_p1_t5_breaker 7). test_questrade_auth 8/8 passed.
+- LIVE: questrade-seed printed "seeded". token-refresh printed "ok, access token valid until 2026-09-27T05:09:34Z". QUESTRADE_REFRESH_TOKEN and its "rotated" comment were removed from the main checkout docker/.env.dev (mode 0600 kept) and the ownership comment was appended.
+- TOKEN OWNERSHIP: the Questrade token chain is now owned by trader_dev.trader.api_credentials. NEVER run spikes/qt.py or spikes/s1_tokens.py again. Keep-alive is now `bash Trader/app/scripts/trader-dev.sh token-refresh` (at least every 24 h).
+- Notes: deviation from the plan code. keep_alive's min_age shortcut required a fresh access token (fresh for 28 min), so the plan's own keep_alive test failed at +30 min. It now requires a stored access token plus api_server instead. A note was added to the plan. Also added `# noqa: S105` on TOKEN_URL (ruff flagged it as a password).

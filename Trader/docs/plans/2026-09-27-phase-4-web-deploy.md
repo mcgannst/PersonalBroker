@@ -272,16 +272,16 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - **Meta:** `tz_offset_minutes` is the current UTC offset of `TZ_DISPLAY` from the process's zoneinfo; `tz_iana_version` from `tzdata.IANA_VERSION` when zoneinfo reads the pip package, else None.
 
 **Acceptance tests:**
-- [ ] 1. `create_app(services_factory=fake)` with a tmp `dist` (an `index.html` and `assets/app.123.js`): `GET /api/health` → 200 `ok` with DB up (fake token OK, fresh heartbeat), without a session.
-- [ ] 2. Health with a factory whose DB check raises → 503 `down`; with a stale heartbeat → 200 `degraded`, `worker_ok` false; the body contains no exception text.
-- [ ] 3. `GET /dashboard?proposal=5`, `/trades?position=3`, `/journal?date=2026-10-06`, `/system`, `/reports?week=2026-10-09`, `/candidates`, `/settings`, `/login?next=%2Fsystem` each → 200 with the `index.html` body; `/assets/app.123.js` → 200 with the immutable cache header; `/api/nope` → 404 JSON `not_found`; `/../etc/passwd` and `/assets/../../x` never return a file outside `dist`.
-- [ ] 4. Every response carries the CSP and the other security headers; `/api/...` responses carry `Cache-Control: no-store`.
-- [ ] 5. After `configure_logging("api")`, a request produces one JSON `http.request` line with method, path, status and `request_id`, and no query string; a `logging.getLogger("uvicorn.error").info("x")` record comes out as one JSON line (uvicorn logs go through `configure_logging`).
-- [ ] 6. An unhandled exception in a test route → 500 `internal` with the `request_id` that is also in the `X-Request-ID` header.
-- [ ] 7. `GET /api/meta` without a session → `tz_display == "America/Edmonton"` and `tz_offset_minutes == -360` under a `FixedClock` on 2026-12-01 (pinned pip tzdata).
-- [ ] 8. The lifespan starts the feed task and stops it on shutdown (`TestClient` as a context manager; the fake feed records `run` start and stop).
-- [ ] 9. With no `index.html`, `/dashboard` → 503 "web app not built", while `/api/health` still works.
-- [ ] 10. Gate and commit `P4-T3: ...`.
+- [x] 1. `create_app(services_factory=fake)` with a tmp `dist` (an `index.html` and `assets/app.123.js`): `GET /api/health` → 200 `ok` with DB up (fake token OK, fresh heartbeat), without a session.
+- [x] 2. Health with a factory whose DB check raises → 503 `down`; with a stale heartbeat → 200 `degraded`, `worker_ok` false; the body contains no exception text.
+- [x] 3. `GET /dashboard?proposal=5`, `/trades?position=3`, `/journal?date=2026-10-06`, `/system`, `/reports?week=2026-10-09`, `/candidates`, `/settings`, `/login?next=%2Fsystem` each → 200 with the `index.html` body; `/assets/app.123.js` → 200 with the immutable cache header; `/api/nope` → 404 JSON `not_found`; `/../etc/passwd` and `/assets/../../x` never return a file outside `dist`.
+- [x] 4. Every response carries the CSP and the other security headers; `/api/...` responses carry `Cache-Control: no-store`.
+- [x] 5. After `configure_logging("api")`, a request produces one JSON `http.request` line with method, path, status and `request_id`, and no query string; a `logging.getLogger("uvicorn.error").info("x")` record comes out as one JSON line (uvicorn logs go through `configure_logging`).
+- [x] 6. An unhandled exception in a test route → 500 `internal` with the `request_id` that is also in the `X-Request-ID` header.
+- [x] 7. `GET /api/meta` without a session → `tz_display == "America/Edmonton"` and `tz_offset_minutes == -360` under a `FixedClock` on 2026-12-01 (pinned pip tzdata).
+- [x] 8. The lifespan starts the feed task and stops it on shutdown (`TestClient` as a context manager; the fake feed records `run` start and stop).
+- [x] 9. With no `index.html`, `/dashboard` → 503 "web app not built", while `/api/health` still works.
+- [x] 10. Gate and commit `P4-T3: ...`.
 
 ---
 

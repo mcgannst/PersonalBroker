@@ -335,6 +335,7 @@ def test_main_runs_uvicorn_with_logging_through_configure_logging(monkeypatch: p
     monkeypatch.setattr(trader.logging_setup, "configure_logging", configure)
     monkeypatch.setattr(api_main, "create_app", make_app)
     monkeypatch.setattr(uvicorn, "run", run)
+    monkeypatch.delenv(api_main.FORWARDED_ALLOW_IPS_ENV, raising=False)
     api_main.main()
     assert [c[0] for c in calls] == ["logging", "app", "run"]
     assert calls[0][1] == "api"
@@ -346,6 +347,31 @@ def test_main_runs_uvicorn_with_logging_through_configure_logging(monkeypatch: p
         "log_config": None,
         "access_log": False,
         "proxy_headers": True,
-        "forwarded_allow_ips": "*",
+        "forwarded_allow_ips": "172.19.0.0/16",  # the Docker `proxy` network, never "*" (P4-T4 fix round 1)
         "timeout_graceful_shutdown": 10,
     }
+
+
+def _uvicorn_kwargs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(trader.logging_setup, "configure_logging", lambda process: None)
+    monkeypatch.setattr(api_main, "create_app", lambda: object())
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(kw))
+    api_main.main()
+    return captured
+
+
+def test_main_reads_the_trusted_proxies_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(api_main.FORWARDED_ALLOW_IPS_ENV, " 172.20.0.0/16, 10.9.8.7 ,fd00::/8 ")
+    assert _uvicorn_kwargs(monkeypatch)["forwarded_allow_ips"] == "172.20.0.0/16,10.9.8.7,fd00::/8"
+    monkeypatch.setenv(api_main.FORWARDED_ALLOW_IPS_ENV, "  ")
+    assert _uvicorn_kwargs(monkeypatch)["forwarded_allow_ips"] == api_main.DEFAULT_FORWARDED_ALLOW_IPS
+
+
+@pytest.mark.parametrize(
+    "bad", ["*", "172.19.0.0/16,*", "npm", "172.19.0.0/33", "0.0.0.0/0", "::/0", "8.8.8.8"]
+)
+def test_main_refuses_a_wildcard_or_malformed_proxy_list(monkeypatch: pytest.MonkeyPatch, bad: str) -> None:
+    monkeypatch.setenv(api_main.FORWARDED_ALLOW_IPS_ENV, bad)
+    with pytest.raises(ValueError, match=api_main.FORWARDED_ALLOW_IPS_ENV):
+        _uvicorn_kwargs(monkeypatch)

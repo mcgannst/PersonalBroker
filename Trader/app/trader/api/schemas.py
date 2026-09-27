@@ -107,7 +107,7 @@ class SessionOut(ApiModel):
 class PasswordChangeIn(ApiModel):
     current_password: Password
     new_password: Annotated[str, StringConstraints(min_length=8, max_length=200)]  # auth.MIN_PASSWORD_CHARS
-    totp: str | None = None
+    totp: TotpCode | None = None
 
 
 class TotpSetupIn(ApiModel):

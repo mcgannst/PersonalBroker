@@ -4,6 +4,8 @@ the login rate limiter and the first-start admin (acceptance test 11). The HTTP 
 
 import hashlib
 import logging
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -43,6 +45,85 @@ def test_verify_password_rehashes_outdated_parameters() -> None:
 
 def test_verify_password_refuses_a_malformed_hash() -> None:
     assert auth.verify_password("not-a-hash", "anything") == (False, None)
+
+
+def test_argon2_runs_at_most_four_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fix round 1: a login flood queues for Argon2 slots instead of using ~64 MiB per concurrent call."""
+    running, peak = [0], [0]
+    lock = threading.Lock()
+
+    class SlowHasher:
+        def _enter(self) -> None:
+            with lock:
+                running[0] += 1
+                peak[0] = max(peak[0], running[0])
+            time.sleep(0.05)
+            with lock:
+                running[0] -= 1
+
+        def verify(self, stored: str, pw: str) -> bool:
+            self._enter()
+            return True
+
+        def check_needs_rehash(self, stored: str) -> bool:
+            return True
+
+        def hash(self, pw: str) -> str:
+            self._enter()
+            return "rehashed"
+
+    monkeypatch.setattr(auth, "_hasher", SlowHasher())
+    calls = [lambda: auth.verify_password("stored", "pw"), lambda: auth.hash_password("pw")] * 6
+    threads = [threading.Thread(target=call) for call in calls]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert peak[0] == auth.ARGON2_CONCURRENCY == 4
+    # The verify-and-rehash of one call holds a single slot (no nested acquire, so no deadlock).
+    assert auth.verify_password("stored", "pw") == (True, "rehashed")
+
+
+def test_dummy_hash_is_made_once_at_import() -> None:
+    assert auth._dummy_hash() is auth._dummy_hash()
+    assert auth._dummy_hash().startswith("$argon2id$")
+
+
+# --- the per-session guess limiter --------------------------------------------------------------------------
+
+
+def test_guess_limiter_counts_distinct_wrong_guesses_per_session() -> None:
+    clock = FixedClock(NOW)
+    guesses = auth.GuessLimiter(clock)
+    for i in range(auth.GuessLimiter.MAX - 1):
+        guesses.record(1, "password", f"wrong-{i}")
+    guesses.record(1, "password", "wrong-0")  # a repeat teaches nothing: not counted
+    assert guesses.wait(1) is None
+    guesses.record(1, "code", "123456")
+    wait = guesses.wait(1)
+    assert wait is not None and wait == 15 * 60
+    assert guesses.wait(2) is None  # another session is unaffected
+    clock.advance(timedelta(minutes=10))
+    wait = guesses.wait(1)
+    assert wait is not None and wait == 5 * 60
+    clock.advance(timedelta(minutes=5))
+    assert guesses.wait(1) is None  # the oldest guess aged out
+
+
+def test_guess_limiter_counts_a_code_once_per_totp_step() -> None:
+    clock = FixedClock(NOW)
+    guesses = auth.GuessLimiter(clock)
+    for _ in range(auth.GuessLimiter.MAX):
+        guesses.record(7, "code", "000000")
+        guesses.record(7, "code", "000000")
+        clock.advance(timedelta(seconds=30))
+    assert guesses.wait(7) is not None
+    # The same text as a password and as a code are different guesses; nothing is kept in the clear.
+    other = auth.GuessLimiter(clock)
+    other.record(8, "password", "000000")
+    other.record(8, "code", "000000")
+    assert len(other._guesses[8]) == 2
+    assert "000000" not in repr(other._guesses)
 
 
 # --- the session cookie signer ------------------------------------------------------------------------------

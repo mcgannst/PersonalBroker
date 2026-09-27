@@ -66,24 +66,35 @@ def get_me(user: CurrentUser, services: Services) -> SessionOut:
     return auth.session_info(services, user)
 
 
+# The four signed-in checks below share a per-session limit on wrong passwords and codes (`GuessLimiter`):
+# past it, 429 with `Retry-After`. It never counts toward the login lockout.
+
+
 @router.put("/auth/password")
-def put_password(body: PasswordChangeIn, user: CsrfUser, services: Services) -> OkOut:
-    auth.change_password(services, user, body.current_password, body.new_password, body.totp)
+def put_password(body: PasswordChangeIn, request: Request, user: CsrfUser, services: Services) -> OkOut:
+    auth.change_password(
+        services,
+        user,
+        body.current_password,
+        body.new_password,
+        body.totp,
+        guesses=auth.guess_limiter(request, services),
+    )
     return OkOut(message="Password changed. Other sessions were signed out.")
 
 
 @router.post("/auth/totp/setup")
-def post_totp_setup(body: TotpSetupIn, user: CsrfUser, services: Services) -> TotpSetupOut:
-    return auth.totp_setup(services, user, body.password)
+def post_totp_setup(body: TotpSetupIn, request: Request, user: CsrfUser, services: Services) -> TotpSetupOut:
+    return auth.totp_setup(services, user, body.password, guesses=auth.guess_limiter(request, services))
 
 
 @router.post("/auth/totp/confirm")
-def post_totp_confirm(body: TotpConfirmIn, user: CsrfUser, services: Services) -> OkOut:
-    auth.totp_confirm(services, user, body.code)
+def post_totp_confirm(body: TotpConfirmIn, request: Request, user: CsrfUser, services: Services) -> OkOut:
+    auth.totp_confirm(services, user, body.code, guesses=auth.guess_limiter(request, services))
     return OkOut(message="Two-step codes are on")
 
 
 @router.post("/auth/totp/disable")
-def post_totp_disable(body: TotpDisableIn, user: CsrfUser, services: Services) -> OkOut:
-    auth.totp_disable(services, user, body.password, body.code)
+def post_totp_disable(body: TotpDisableIn, request: Request, user: CsrfUser, services: Services) -> OkOut:
+    auth.totp_disable(services, user, body.password, body.code, guesses=auth.guess_limiter(request, services))
     return OkOut(message="Two-step codes are off")

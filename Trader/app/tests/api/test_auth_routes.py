@@ -500,6 +500,133 @@ def test_wrong_password_or_code_while_signed_in_is_403_and_keeps_the_session(env
     )
 
 
+def test_signed_in_guesses_are_limited_per_session(env: Env) -> None:
+    """Fix round 1: at most 5 distinct wrong passwords or codes per session per 15 minutes across the four
+    signed-in checks; then 429 with Retry-After, even with the right password. It never touches the login
+    lockout, and another session keeps its own budget."""
+    c = env.client()
+    h = {auth.CSRF_HEADER: _login(c, env).json()["csrf_token"]}
+    other = env.client("10.0.0.2")
+    h_other = {auth.CSRF_HEADER: _login(other, env).json()["csrf_token"]}
+    wrongs = [f"Wrong-Guess-{i:04d}" for i in range(6)]
+    env.guard.add(*wrongs)
+
+    attempts = [
+        lambda pw: c.put(
+            "/api/auth/password", json={"current_password": pw, "new_password": "Brand-New-77"}, headers=h
+        ),
+        lambda pw: c.post("/api/auth/totp/setup", json={"password": pw}, headers=h),
+        lambda pw: c.post("/api/auth/totp/disable", json={"password": pw, "code": "123456"}, headers=h),
+    ]
+    for i, pw in enumerate(wrongs[:5]):
+        r = attempts[i % 3](pw)
+        assert _bad_credentials(r), r.text
+        if i < 4:  # repeating a guess already counted costs nothing
+            assert _bad_credentials(attempts[0](wrongs[0]))
+
+    for attempt in attempts:
+        r = attempt(PASSWORD)  # even the right password
+        assert r.status_code == 429 and r.json()["error"]["code"] == "too_many_requests"
+        assert r.headers["retry-after"] == str(15 * 60)
+        assert "set-cookie" not in r.headers
+    assert c.post("/api/auth/totp/confirm", json={"code": "123456"}, headers=h).status_code == 429
+    assert c.get("/api/test/protected").status_code == 200  # the session survives
+    assert _user(env).failed_logins == 0  # and the login is not locked
+    assert _login(env.client("10.0.0.3"), env).status_code == 200
+
+    # The other session has its own budget.
+    assert _bad_credentials(other.post("/api/auth/totp/setup", json={"password": wrongs[5]}, headers=h_other))
+
+    # 15 minutes after the wrong guesses, the session may try again.
+    env.clock.advance(timedelta(minutes=14, seconds=59))
+    assert attempts[1](PASSWORD).status_code == 429
+    env.clock.advance(timedelta(seconds=1))
+    r = attempts[1](PASSWORD)
+    assert r.status_code == 200
+    env.guard.add(r.json()["secret"])
+    env.guard.allowed[r.json()["secret"]] = "/api/auth/totp/setup"
+
+
+def test_signed_in_code_guesses_count_once_per_step(env: Env) -> None:
+    c = env.client()
+    h = {auth.CSRF_HEADER: _login(c, env).json()["csrf_token"]}
+    setup = c.post("/api/auth/totp/setup", json={"password": PASSWORD}, headers=h)
+    secret = setup.json()["secret"]
+    env.guard.add(secret)
+    env.guard.allowed[secret] = "/api/auth/totp/setup"
+    totp = pyotp.TOTP(secret)
+    wrong = totp.at(env.clock.now() + timedelta(minutes=10))
+    env.guard.add(wrong)
+    for i in range(5):
+        assert _bad_credentials(c.post("/api/auth/totp/confirm", json={"code": wrong}, headers=h))
+        if i < 4:  # the same code in the same step is not a new guess
+            assert _bad_credentials(c.post("/api/auth/totp/confirm", json={"code": wrong}, headers=h))
+        env.clock.advance(timedelta(seconds=30))
+    code = totp.at(env.clock.now())
+    env.guard.add(code)
+    assert c.post("/api/auth/totp/confirm", json={"code": code}, headers=h).status_code == 429
+
+
+def test_password_change_totp_must_be_six_digits(env: Env) -> None:
+    c = env.client()
+    h = {auth.CSRF_HEADER: _login(c, env).json()["csrf_token"]}
+    for bad in ("12345", "1234567", "12345a", ""):
+        body = {"current_password": PASSWORD, "new_password": "Brand-New-77", "totp": bad}
+        assert c.put("/api/auth/password", json=body, headers=h).status_code == 422, bad
+
+
+def test_login_with_the_code_just_used_says_wait_for_the_next_one(env: Env) -> None:
+    """Nit (fix round 1): the confirm step's code, used again at login, is a replay (401, counted), but only
+    someone with the right password is told to wait for the next code; a wrong password stays generic."""
+    c = env.client()
+    h = {auth.CSRF_HEADER: _login(c, env).json()["csrf_token"]}
+    setup = c.post("/api/auth/totp/setup", json={"password": PASSWORD}, headers=h)
+    secret = setup.json()["secret"]
+    env.guard.add(secret)
+    env.guard.allowed[secret] = "/api/auth/totp/setup"
+    code = pyotp.TOTP(secret).at(env.clock.now())
+    env.guard.add(code)
+    assert c.post("/api/auth/totp/confirm", json={"code": code}, headers=h).status_code == 200
+
+    replay = _login(env.client("10.0.0.2"), env, totp=code)
+    assert replay.status_code == 401
+    assert replay.json()["error"]["message"] == auth.USED_CODE
+    wrong_pw = _login(env.client("10.0.0.3"), env, password=WRONG, totp=code)
+    assert wrong_pw.json()["error"]["message"] == "Invalid username or password"
+    assert _user(env).failed_logins == 2
+    with env.core.factory() as s:
+        reasons = [
+            (r.after or {}).get("reason")
+            for r in s.execute(
+                select(m.AuditLog).where(m.AuditLog.action == "auth.login_failed").order_by(m.AuditLog.id)
+            ).scalars()
+        ]
+    assert reasons == ["totp_used", "password"]
+
+
+def test_a_username_outside_the_pattern_is_unknown(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fix round 1: a NUL byte (PostgreSQL text refuses it) or any name outside USERNAME_PATTERN is an unknown
+    user: the dummy hash is checked, the failure is audited, and the reply is the generic 401, never a 500."""
+    calls: list[str] = []
+    real = auth.verify_password
+
+    def spy(stored: str, pw: str) -> tuple[bool, str | None]:
+        calls.append(stored)
+        return real(stored, pw)
+
+    monkeypatch.setattr(auth, "verify_password", spy)
+    names = ("stephen\x00", "\x00", "ste\x00phen", "stéphen", "stephen'--")
+    for i, name in enumerate(names):
+        r = _login(env.client(f"10.0.1.{i}"), env, username=name)
+        assert r.status_code == 401 and r.json()["error"]["message"] == "Invalid username or password"
+    assert calls == [auth._dummy_hash()] * len(names)
+    with env.core.factory() as s:
+        rows = list(s.execute(select(m.AuditLog).where(m.AuditLog.action == "auth.login_failed")).scalars())
+    assert [(r.actor, (r.after or {}).get("reason")) for r in rows] == [("web:?", "unknown_user")] * len(
+        names
+    )
+
+
 # --- 7. password change -------------------------------------------------------------------------------------
 
 

@@ -7,7 +7,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 2 (P2-T0 planning finishing) |
-| Current task | P2-T0 |
+| Current task | P2-T0 (plan review), P2-T1 (building) |
 | Gauntlet stage | Breaker + reviewers |
 | Last updated (UTC) | 2026-09-27T04:44:00Z |
 | Last pushed commit | d64518b |
@@ -34,7 +34,24 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 42bd500 |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | accepted | 2 | review ✅ + should-fix round ✅ (orchestrator ran check.sh: 333 passed) | ad82bfa |
-| P2-T0 | Write the Phase 2 plan | P1-REVIEW | building | 1 |  |  |
+| P2-T0 | Write the Phase 2 plan | P1-REVIEW | gauntlet | 1 | plan code test-run by planner: 564 passed; review running | 89356c6 |
+| P2-T1 | Migration 0002: trading tables, views, ledger trigger, factories | P1 | building | 1 | | |
+| P2-T2 | Runs, sim account, full runtime settings | T1 | todo | 0 | | |
+| P2-T3 | Ledger with T+1 settlement | T1, T2 | todo | 0 | | |
+| P2-T4 | Broker value types + quote fill model | T2 | todo | 0 | | |
+| P2-T5 | Simulated broker | T3, T4 | todo | 0 | | |
+| P2-T6 | Strategy framework, registry, fakes | T1, T2, T4 | todo | 0 | | |
+| P2-T7 | Market data service | T6 | todo | 0 | | |
+| P2-T8 | orb_sip 1.0.0 | T6, T7 | todo | 0 | | |
+| P2-T9 | spy_overlay 1.0.0 | T6, T7 | todo | 0 | | |
+| P2-T10 | Risk manager + kill switches | T5 | todo | 0 | | |
+| P2-T11 | Proposal service | T5, T10 | todo | 0 | | |
+| P2-T12 | Claude catalyst classifier, store, service | T2 | todo | 0 | | |
+| P2-T13 | Engine orchestrator | T8–T12 | todo | 0 | | |
+| P2-T14 | Pre-market job + premarket CLI | T7, T12 | todo | 0 | | |
+| P2-T15 | Integration: one full simulated day | T13, T14 | todo | 0 | | |
+| P2-REVIEW | Phase 2 whole-phase review | all P2 | todo | 0 | | |
+| P3-T0 | Write the Phase 3 plan | P2-REVIEW | todo | 0 | | |
 
 ## Escalations
 
@@ -646,3 +663,12 @@ None open.
 - Result: ACCEPTED. PHASE 1 COMPLETE. All 9 tasks plus the phase review accepted, 333 tests green (checked on trunk by the orchestrator)
 - Commits: ad82bfa (should-fix round), 47aade8 (review fixes). Tagged phase-1-complete
 - Notes: live trader_dev holds the Questrade chain and Monday 2026-09-28 universe (543 symbols)
+
+### 2026-09-27T06:05:57Z · P2-T0 · Planner · attempt 1 · finished
+- Result: done. Plan Trader/docs/plans/2026-09-27-phase-2-engine.md, tasks P2-T1..P2-T15 (outline kept, no merges)
+- Commits: 89356c6
+- Gate: every plan code block laid over trunk 4f65a89 in a scratch copy: ruff, format, mypy clean, 564 tests passed (all Phase 2 tests, integration day, P1 gauntlet T2-T9)
+- Notes: contracts refined (async on_event/on_fill, plug-ins take params, Exit is market|stop, Broker submit/cancel take optional session, quotes re-keyed to DB ids, claude.model limited to sonnet-5/haiku-4-5). anthropic 1.x uses httpx2 so respx can't mock it. orb_sip stale_universe=skip per the P1-T9 ruling. T1 edits one line of the P1-T2 breaker test (head pinned to 0001)
+
+### 2026-09-27 00:07 MT · P2-T0 · Verifier + Spec reviewer · attempt 1 · started
+- Notes: reviewing docs/plans/2026-09-27-phase-2-engine.md at 89356c6 (structure, coverage, contract refinements, Review Focus)

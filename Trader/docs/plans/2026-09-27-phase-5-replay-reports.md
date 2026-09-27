@@ -276,17 +276,29 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - A computed price that is not positive → `NoFill("no_bid")` (as the quote model).
 
 **Acceptance tests (pure):**
-- [ ] 1. `ReplayClock` moves forward with `set` and `advance`, refuses a naive datetime, an earlier time and a negative delta; it satisfies `Clock` (mypy).
-- [ ] 2. Two models built with the same params give identical decisions for the same inputs, and a decision never depends on `now` except for `evaluated_at`.
-- [ ] 3. Buy stop 10.20, bar O 10.00 H 10.35 L 9.95 → fills at 10.20 + slip(10.20) + hs(10.20) = 10.20 + 0.01 + 0.0051 = 10.2151 (defaults), trigger `stop`, slippage 0.01, half spread 0.0051 in the snapshot.
-- [ ] 4. Buy stop 10.20, bar opening at 10.40 (gap up) → reference 10.40, fills at 10.40 + 0.01 + 0.0052 = 10.4152, trigger `stop_gap`.
-- [ ] 5. Sell stop 9.80, bar O 9.90 L 9.70 → 9.80 − 0.01 − 0.0049 = 9.7851; bar opening at 9.60 (gap through) → 9.60 − 0.01 − 0.0048 = 9.5852 (worse than the stop).
-- [ ] 6. A bar whose high stays below the buy stop, and one whose low stays above the sell stop → `NoFill("not_triggered")`.
-- [ ] 7. Market buy and sell use the open plus/minus slip and half spread; slippage uses `max(slippage_min, bps × price)` (a 250.00 price gives 0.125 → 0.1250).
-- [ ] 8. Buy stop-limit: triggered with a price above the limit → `NoFill("above_limit")`; within the limit → fills. Limit buy 10.00 with low 9.99 and `hs` 0.005 → fills at exactly 10.00 with zero slippage, also when the bar opens at 9.90 (never better than the limit, as the quote model); with low 9.999 → `not_triggered`. The sell limit mirrors it.
-- [ ] 9. Zero volume → `no_volume`; `low > high` or a non-positive price → `bad_bar`; a `QtQuote` → `TypeError`.
-- [ ] 10. Fees: the SEC fee on sells only, rounded to 4 dp, identical to `QuoteFillModel.fees` for the same params.
-- [ ] 11. Gate and commit `P5-T3: ...`.
+- [x] 1. `ReplayClock` moves forward with `set` and `advance`, refuses a naive datetime, an earlier time and a negative delta; it satisfies `Clock` (mypy).
+- [x] 2. Two models built with the same params give identical decisions for the same inputs, and a decision never depends on `now` except for `evaluated_at`.
+- [x] 3. Buy stop 10.20, bar O 10.00 H 10.35 L 9.95 → fills at 10.20 + slip(10.20) + hs(10.20) = 10.20 + 0.01 + 0.0051 = 10.2151 (defaults), trigger `stop`, slippage 0.01, half spread 0.0051 in the snapshot.
+- [x] 4. Buy stop 10.20, bar opening at 10.40 (gap up) → reference 10.40, fills at 10.40 + 0.01 + 0.0052 = 10.4152, trigger `stop_gap`.
+- [x] 5. Sell stop 9.80, bar O 9.90 L 9.70 → 9.80 − 0.01 − 0.0049 = 9.7851; bar opening at 9.60 (gap through) → 9.60 − 0.01 − 0.0048 = 9.5852 (worse than the stop).
+- [x] 6. A bar whose high stays below the buy stop, and one whose low stays above the sell stop → `NoFill("not_triggered")`.
+- [x] 7. Market buy and sell use the open plus/minus slip and half spread; slippage uses `max(slippage_min, bps × price)` (a 250.00 price gives 0.125 → 0.1250).
+- [x] 8. Buy stop-limit: triggered with a price above the limit → `NoFill("above_limit")`; within the limit → fills. Limit buy 10.00 with low 9.99 and `hs` 0.005 → fills at exactly 10.00 with zero slippage, also when the bar opens at 9.90 (never better than the limit, as the quote model); with low 9.999 → `not_triggered`. The sell limit mirrors it.
+- [x] 9. Zero volume → `no_volume`; `low > high` or a non-positive price → `bad_bar`; a `QtQuote` → `TypeError`.
+- [x] 10. Fees: the SEC fee on sells only, rounded to 4 dp, identical to `QuoteFillModel.fees` for the same params.
+- [x] 11. Gate and commit `P5-T3: ...`.
+
+**Build notes (P5-T3 builder, 2026-09-27; trunk 8ddff8e):**
+- `ReplayClock` accepts any timezone-aware datetime and stores it in UTC (as `FixedClock`); setting the same time
+  again is allowed (bars then events at `t`).
+- `CandleFillModel` delegates `slip` and `fees` to a `QuoteFillModel` built from the same `FillParams`, so both
+  are identical to the quote model by construction.
+- The bar's open is **not** checked against its high/low range (only non-positive prices, `low > high` and a
+  negative volume are `bad_bar`): T4's same-bar pass reopens the bar at the entry fill price, which can lie
+  above the high after slippage and half spread; a test pins that this still stops out at `stop − slip − hs`.
+- `stop_gap` means the open was strictly through the stop (an open equal to the stop is `stop`, same price).
+  A stop-limit keeps the trigger `stop_limit` also on a gap. The sell stop-limit mirrors the buy one
+  (`NoFill("below_limit")` when `ref − slip − hs` is under the limit).
 
 ---
 

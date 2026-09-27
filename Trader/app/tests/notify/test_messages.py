@@ -8,9 +8,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from trader.market.clock import FixedClock
 from trader.notify.messages import (
     TELEGRAM_LIMIT,
     MessageRenderer,
+    _fit,
     fmt_duration,
     fmt_money,
     fmt_pct,
@@ -674,3 +676,78 @@ def test_message_renderer_satisfies_renderer_and_never_returns_empty(r: MessageR
         assert m.text.strip()
         assert len(m.text) <= TELEGRAM_LIMIT
     assert rr.proposal_closed(pv, "expired", None).strip()
+
+
+# --- P3-T4 fix round 1 ------------------------------------------------------------------------------------
+
+BOT_TOKEN = "7123456789:AAH4sEcReTvAlUe-abcdefghijklmnopqrstu"
+REFRESH = "QtR3fr35hT0k3nValue123"
+
+
+def test_alert_and_closed_proposal_text_is_masked(r: MessageRenderer) -> None:
+    tg_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    views = [
+        alert(kind="job_failure", source="job.nightly", data={"error": f"POST {tg_url} timed out"}),
+        alert(kind="token_failure", data={"error": f"HTTP 400 for ...?refresh_token={REFRESH}"}),
+        alert(kind="escalation", message=f"token {BOT_TOKEN}", data={"refresh_token": REFRESH, "n": 1}),
+        alert(kind="alert", data={"body": f'{{"refresh_token": "{REFRESH}"}}'}),
+        alert(kind="kill_switch", message=f"via {tg_url}", data={"switch": "manual_pause"}),
+    ]
+    for v in views:
+        text = r.alert(v).text
+        assert "AAH4sEcReTvAlUe" not in text and REFRESH not in text, text
+    assert "refresh_token: [REDACTED]" in r.alert(views[2]).text
+    closed = r.proposal_closed(proposal(error=f"send failed: {tg_url}"), "failed", None)
+    assert "AAH4sEcReTvAlUe" not in closed
+    # a token cut in half by the 300-character error limit is masked before the cut
+    job = r.alert(alert(kind="job_failure", data={"error": "x" * 280 + f" {tg_url}"})).text
+    assert "AAH4sEcReTv" not in job
+
+
+def test_closed_proposal_tail_is_capped_and_every_cut_closes_its_tags(r: MessageRenderer) -> None:
+    text = r.proposal_closed(proposal(error="refused & <why> " * 2000), "failed", None)
+    assert len(text) <= TELEGRAM_LIMIT
+    final = text.splitlines()[-1]
+    assert final.startswith("<b>Failed: ") and final.endswith("…</b>")
+    assert len(r.proposal_closed(proposal(), "approved", "v" * 9000)) <= TELEGRAM_LIMIT
+    assert len(r.proposal_closed(proposal(), "x" * 9000, None)) <= TELEGRAM_LIMIT
+    # a raw over-long tail and a one-line bold body are both cut without leaving a tag open
+    huge = _fit("<b>" + "&amp;" * 3000 + "</b>", "<b>" + "y" * 9000 + "</b>")
+    assert len(huge) <= TELEGRAM_LIMIT
+    assert huge.count("<b>") == huge.count("</b>") == 2
+    assert "&am\n" not in huge and not huge.split("\n")[0].endswith("&")
+
+
+def test_non_percentage_and_float_values_render_as_decimals(r: MessageRenderer) -> None:
+    ks = r.alert(
+        alert(
+            kind="kill_switch",
+            message="expectancy below threshold",
+            data={"switch": "expectancy", "value": 0.1 + 0.2, "threshold": -0.05},
+        )
+    ).text
+    assert "Value 0.30 vs threshold -0.05" in ks
+    data = {"spy_return": -0.0000001, "big": Decimal("1E+3"), "id": 12, "gone": None}
+    esc = r.alert(alert(kind="escalation", data=data)).text
+    assert "spy_return: 0.00" in esc and "big: 1000.00" in esc and "id: 12" in esc
+    assert "gone" not in esc and "None" not in esc and "E+" not in esc
+
+
+def test_auto_approval_reads_approved_auto(r: MessageRenderer) -> None:
+    assert r.proposal_closed(proposal(status="auto_approved"), "auto_approved", None).endswith(
+        "<b>Approved (auto)</b>"
+    )
+    assert r.proposal_closed(proposal(), "submitted", "auto").endswith("<b>Approved (auto)</b>")
+
+
+def test_alert_from_another_day_shows_its_date() -> None:
+    same_day = MessageRenderer(BASE, MT, clock=FixedClock(T0 + timedelta(hours=2)))
+    next_day = MessageRenderer(BASE, MT, clock=FixedClock(T0 + timedelta(days=1)))
+    assert "at 07:35 MT" in same_day.alert(alert()).text
+    assert "at 2026-10-06 07:35 MT" in next_day.alert(alert()).text
+    assert "2026-10-06" not in next_day.fill(fill()).text  # other messages show the time only
+
+
+def test_fmt_time_rejects_a_naive_datetime() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        fmt_time(datetime(2026, 10, 6, 13, 35), MT)

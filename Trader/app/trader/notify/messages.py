@@ -1,17 +1,22 @@
 """Every Telegram message format (SPEC §4.4): pure functions of the notify views.
 
-Messages are Telegram HTML: every dynamic string is escaped here, so callers pass raw values. Each message is
-self-contained (ticker, quantity, prices, stop, P&L, reason), because the web app is reachable only at home;
-a link to the web app is added for use there. Times are shown in Mountain Time, money and prices as Decimal.
+Messages are Telegram HTML: every dynamic string is masked (trader.logging_setup.redact_text: an error text
+can quote a token URL) and then escaped here, so callers pass raw values. Each message is self-contained
+(ticker, quantity, prices, stop, P&L, reason), because the web app is reachable only at home; a link to the
+web app is added for use there. Times are shown in Mountain Time, money, prices and other numbers through
+Decimal.
 """
 
 import html
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
+from trader.logging_setup import REDACTED, is_secret_key, redact_text
+from trader.market.clock import Clock, RealClock
 from trader.notify.types import (
     AlertView,
     Buttons,
@@ -32,6 +37,9 @@ TELEGRAM_LIMIT = 4096
 TRUNCATED_LINE = "… (truncated, see the web app)"
 EMPTY_TEXT = "(empty)"
 ERROR_CHARS = 300  # a job failure shows the first 300 characters of its error
+TAIL_ERROR_CHARS = 500  # a closed proposal's or token failure's error text (then "…")
+VIA_CHARS = 100
+TAIL_LIMIT = 2048  # a final line kept whole by _fit is itself cut (tag-safe) beyond this
 
 _CENT = Decimal("0.01")
 _PRICE_Q = Decimal("0.0001")
@@ -97,7 +105,10 @@ def fmt_pct(value: Decimal) -> str:
 
 
 def fmt_time(dt: datetime, tz: ZoneInfo) -> str:
-    """`09:35 MT`: the wall-clock time in `tz` (labelled MT for Mountain Time zones)."""
+    """`09:35 MT`: the wall-clock time in `tz` (labelled MT for Mountain Time zones). `dt` must be aware: a
+    naive datetime would be read as the host's local time."""
+    if dt.tzinfo is None or dt.utcoffset() is None:
+        raise ValueError(f"fmt_time needs a timezone-aware datetime, got {dt!r}")
     local = dt.astimezone(tz)
     label = "MT" if tz.key in _MOUNTAIN_ZONES else (local.tzname() or tz.key)
     return f"{local:%H:%M} {label}"
@@ -116,7 +127,36 @@ def fmt_duration(seconds: float) -> str:
 
 
 def _e(value: object) -> str:
-    return html.escape(str(value), quote=False)
+    """A dynamic string for the message: secrets masked first, then HTML-escaped."""
+    return html.escape(redact_text(str(value)), quote=False)
+
+
+def _clip(value: object, limit: int) -> str:
+    """The masked text cut to `limit` characters plus `…` (masked before cutting, so a cut can never leave
+    a partial token that the patterns no longer recognise)."""
+    text = redact_text(str(value))
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _fmt_number(value: Decimal) -> str:
+    """A number that is not money or a percentage (a kill-switch expectancy, a float from jsonb): 4 decimal
+    places trimmed to at least 2, never a float tail, an exponent or `-0.00`."""
+    if not value.is_finite():
+        return str(value)
+    try:
+        q = value.quantize(_PRICE_Q, ROUND_HALF_UP)
+    except InvalidOperation:  # beyond the context precision
+        return f"{value:f}"
+    return fmt_price(abs(q) if q == 0 else q)
+
+
+def _value_text(value: object) -> str:
+    """An alert data value: floats and Decimals as numbers, anything else masked and escaped."""
+    if isinstance(value, float | Decimal):
+        d = _as_decimal(value)
+        if d is not None:
+            return _fmt_number(d)
+    return _e(value)
 
 
 def _pct_plain(value: Decimal) -> str:
@@ -154,17 +194,46 @@ def _safe_cut(text: str) -> str:
     return text
 
 
+_TAG = re.compile(r"<(/?)([A-Za-z]+)[^<>]*>")
+
+
+def _close_tags(text: str) -> str:
+    """`text` with every tag it leaves open (<b>, <a>) closed, innermost first."""
+    stack: list[str] = []
+    for m in _TAG.finditer(text):
+        name = m.group(2).lower()
+        if not m.group(1):
+            stack.append(name)
+        elif stack and stack[-1] == name:
+            stack.pop()
+    return text + "".join(f"</{name}>" for name in reversed(stack))
+
+
+def _hard_cut(text: str, room: int, mark: str = "") -> str:
+    """At most `room` characters of the HTML `text`: no partial entity or tag, `mark` added where it was
+    cut, and every tag left open closed again."""
+    if len(text) <= room:
+        return text
+    cut = room
+    while True:
+        head = _close_tags(_safe_cut(text[: max(0, cut)]) + mark)
+        if len(head) <= room or cut <= 0:
+            return head
+        cut -= len(head) - room
+
+
 def _fit(text: str, tail: str = "") -> str:
     """Never empty, at most TELEGRAM_LIMIT characters: an over-long text is cut at the last line break that
-    fits and ends with the truncation line. `tail` (a final line) is always kept."""
+    fits and ends with the truncation line. `tail` (a final line) is kept, itself cut at TAIL_LIMIT."""
     if not text.strip():
         text = EMPTY_TEXT
+    tail = _hard_cut(tail, TAIL_LIMIT, "…")
     suffix = f"\n{tail}" if tail else ""
     if len(text) + len(suffix) <= TELEGRAM_LIMIT:
         return text + suffix
     room = TELEGRAM_LIMIT - len(suffix) - len(TRUNCATED_LINE) - 1
     cut = text.rfind("\n", 0, room + 1)
-    head = text[:cut] if cut > 0 else _safe_cut(text[:room])
+    head = _hard_cut(text[:cut] if cut > 0 else text, room)
     return f"{head.rstrip()}\n{TRUNCATED_LINE}{suffix}"
 
 
@@ -188,16 +257,24 @@ def _as_decimal(value: object) -> Decimal | None:
 
 
 class MessageRenderer:
-    """The Renderer (trader.notify.types.Renderer): links under `base_url`, times in `tz`."""
+    """The Renderer (trader.notify.types.Renderer): links under `base_url`, times in `tz`. `clock` (default:
+    the real clock) only decides whether an alert's time also needs its date."""
 
-    def __init__(self, base_url: str, tz: ZoneInfo) -> None:
+    def __init__(self, base_url: str, tz: ZoneInfo, *, clock: Clock | None = None) -> None:
         self.base_url = base_url
         self.tz = tz
+        self.clock: Clock = clock or RealClock()
 
     # --- building blocks ---------------------------------------------------------------------------------
 
     def _time(self, dt: datetime) -> str:
         return fmt_time(dt, self.tz)
+
+    def _alert_time(self, dt: datetime) -> str:
+        """`07:35 MT` today; `2026-10-05 07:35 MT` for an alert from another day (a relay catching up)."""
+        text = fmt_time(dt, self.tz)
+        day = dt.astimezone(self.tz).date()
+        return text if day == self.clock.now().astimezone(self.tz).date() else f"{day.isoformat()} {text}"
 
     def _link(self, path: str, label: str) -> str:
         url = html.escape(link(self.base_url, path), quote=True)
@@ -252,18 +329,23 @@ class MessageRenderer:
         )
 
     def proposal_closed(self, v: ProposalView, final_status: str, via: str | None) -> str:
+        # Every part of the final line is masked and capped, so the edited message always fits TELEGRAM_LIMIT.
+        error = _clip(v.error, TAIL_ERROR_CHARS) if v.error else ""
         if final_status in _APPROVED:
-            final = f"Approved via {via}" if via else "Approved"
+            if final_status == "auto_approved" or via == "auto" or self._is_auto(v):
+                final = "Approved (auto)"
+            else:
+                final = f"Approved via {_clip(via, VIA_CHARS)}" if via else "Approved"
         elif final_status == "rejected":
             # An approved entry that the kill switches or a pause blocked is recorded as rejected with the
             # reason in `error`, so the tapper sees why instead of a plain "Rejected".
-            final = f"Rejected: {v.error}" if v.error else "Rejected"
+            final = f"Rejected: {error}" if error else "Rejected"
         elif final_status == "expired":
             final = "Expired"
         elif final_status == "failed":
-            final = f"Failed: {v.error or 'the order was refused'}"
+            final = f"Failed: {error or 'the order was refused'}"
         else:
-            final = f"Already decided ({final_status})"
+            final = f"Already decided ({_clip(final_status, VIA_CHARS)})"
         return _fit("\n".join(self._proposal_lines(v, closed=True)), f"<b>{_e(final)}</b>")
 
     # --- fills and the overlay ---------------------------------------------------------------------------
@@ -317,19 +399,20 @@ class MessageRenderer:
     # --- alerts ------------------------------------------------------------------------------------------
 
     def alert(self, v: AlertView) -> OutboundMessage:
-        at = self._time(v.ts)
+        # Every dynamic string goes through _e / _clip (masked, then escaped): the message and data come from
+        # event_log rows, where an exception text can quote a token URL.
+        at = self._alert_time(v.ts)
         message = [_e(v.message)] if v.message.strip() else []
         if v.kind == "kill_switch":
             lines = self._kill_switch_lines(v, at)
         elif v.kind == "job_failure":
             job = v.source.removeprefix("job.")
             lines = [f"<b>JOB FAILED: {_e(job)}</b> at {at}", *message]
-            error = str(v.data.get("error") or "")
+            error = v.data.get("error")
             if error:
-                cut = error[:ERROR_CHARS] + ("…" if len(error) > ERROR_CHARS else "")
-                lines.append(f"Error: {_e(cut)}")
+                lines.append(f"Error: {_e(_clip(error, ERROR_CHARS))}")
         elif v.kind == "token_failure":
-            error = str(v.data.get("error") or v.message or "unknown error").rstrip(". ")
+            error = _clip(v.data.get("error") or v.message or "unknown error", TAIL_ERROR_CHARS).rstrip(". ")
             lines = [
                 f"<b>TOKEN FAILURE</b> at {at}",
                 f"Questrade token refresh failed: {_e(error)}. Paste a new token in Settings.",
@@ -347,7 +430,12 @@ class MessageRenderer:
 
     @staticmethod
     def _data_lines(data: Mapping[str, Any]) -> list[str]:
-        return [f"{_e(k)}: {_e(val)}" for k, val in data.items()]
+        """`key: value` per data item; None values are left out, secret-named keys masked entirely."""
+        return [
+            f"{_e(k)}: {REDACTED if is_secret_key(k) else _value_text(val)}"
+            for k, val in data.items()
+            if val is not None
+        ]
 
     @staticmethod
     def _switch_name(v: AlertView) -> str:
@@ -369,7 +457,10 @@ class MessageRenderer:
             if switch in _PCT_SWITCHES and dv is not None and dt is not None:
                 lines.append(f"Value {_pct_plain(dv)} vs threshold {_pct_plain(dt)}")
             else:
-                lines.append(f"Value {_e(value)} vs threshold {_e(threshold)}")
+                # Not a percentage (expectancy), or a float decoded from jsonb: through Decimal(str(v)).
+                shown_value = _fmt_number(dv) if dv is not None else _e(value)
+                shown_threshold = _fmt_number(dt) if dt is not None else _e(threshold)
+                lines.append(f"Value {shown_value} vs threshold {shown_threshold}")
         if switch == "manual_pause":
             lines.append("New entries blocked until /resume. Exits and stops keep working.")
         elif switch == "daily_loss_pct":

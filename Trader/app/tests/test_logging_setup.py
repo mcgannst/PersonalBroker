@@ -1,9 +1,12 @@
 import json
 import logging
+import sys
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
+import httpx
 import pytest
 import structlog
 from cryptography.fernet import Fernet
@@ -11,7 +14,13 @@ from pydantic import SecretStr
 
 from trader.bootstrap import build_core
 from trader.config import EnvSettings
-from trader.logging_setup import HTTP_LOGGERS, configure_logging, quiet_http_loggers
+from trader.logging_setup import (
+    HTTP_LOGGERS,
+    configure_logging,
+    console_renderer,
+    quiet_http_loggers,
+    redact_text,
+)
 
 # Loggers whose levels configure_logging changes: restored after every test so no test leaks them.
 TOUCHED_LOGGERS = ("", "httpx", "httpcore", "telegram", "sqlalchemy")
@@ -207,3 +216,108 @@ def test_console_renderer_when_not_json(capsys: pytest.CaptureFixture[str]) -> N
     assert "a=1" in out
     with pytest.raises(json.JSONDecodeError):
         json.loads(out.splitlines()[0])
+
+
+# --- P3-T2 fix round 1: the redaction net ------------------------------------------------------------------
+
+FAKE_BOT_TOKEN = "7123456789:AAH4sEcReTvAlUe-abcdefghijklmnopqrstu"
+FAKE_REFRESH = "QtR3fr35hT0k3nValue123"
+
+
+def test_redact_text_masks_json_dict_and_url_credentials() -> None:
+    body = json.dumps({"access_token": "A1b2C3d4", "refresh_token": FAKE_REFRESH, "api_server": "https://x/"})
+    masked = redact_text(body)
+    assert "A1b2C3d4" not in masked and FAKE_REFRESH not in masked
+    assert json.loads(masked)["api_server"] == "https://x/"
+    pydantic_text = f"input_value={{'refresh_token': '{FAKE_REFRESH}', 'password': 'hunter2'}}"
+    assert FAKE_REFRESH not in redact_text(pydantic_text) and "hunter2" not in redact_text(pydantic_text)
+    db = redact_text("could not connect to postgresql+psycopg://trader:S3cr3tPw@10.0.0.86:5432/trader")
+    assert "S3cr3tPw" not in db and "trader:[REDACTED]@10.0.0.86:5432/trader" in db
+    assert redact_text("http://trader.home:8080/journal?date=2026-10-06") == (
+        "http://trader.home:8080/journal?date=2026-10-06"
+    )
+
+
+def test_redact_text_leaves_ordinary_words_and_callback_ids() -> None:
+    for text in (
+        "Bearer market today",
+        "session 20261006:abcdefghijklmnopqrstuvwxyzabcdefgh",
+        "token_age_hours=3.2 token_ok=True",
+        '{"token_ok": true, "token_age_hours": 3.2}',
+    ):
+        assert redact_text(text) == text
+
+
+@pytest.mark.usefixtures("clean_logging")
+def test_secret_named_fields_and_non_json_values_are_masked(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging("worker")
+    log = structlog.get_logger("t")
+    log.info(
+        "seeded",
+        refresh_token=FAKE_REFRESH,
+        Password="hunter2",
+        nested={"bot_token": FAKE_BOT_TOKEN, "token_ok": True},
+        url=httpx.URL(f"https://api.telegram.org/bot{FAKE_BOT_TOKEN}/getMe"),
+        tokens={FAKE_BOT_TOKEN},
+        price=Decimal("21.5608"),
+        process="impostor",
+    )
+    logging.getLogger("trader.stdlib").warning("send failed", extra={"token": FAKE_REFRESH, "chat": 42})
+    out = capsys.readouterr().out
+    assert FAKE_REFRESH not in out and "hunter2" not in out and "AAH4sEcReTvAlUe" not in out
+    first, second = json_lines(out)
+    assert first["refresh_token"] == "[REDACTED]" and first["Password"] == "[REDACTED]"
+    assert first["nested"] == {"bot_token": "[REDACTED]", "token_ok": True}
+    assert first["price"] == "21.5608"  # Decimal as its string, not a float
+    assert first["process"] == "worker"  # a bound field cannot pose as another process
+    assert second["chat"] == 42 and second["token"] == "[REDACTED]"  # stdlib extra= comes through
+
+
+@pytest.mark.usefixtures("clean_logging")
+def test_configure_replaces_a_basic_config_handler(capsys: pytest.CaptureFixture[str]) -> None:
+    root = logging.getLogger()
+    basic = logging.StreamHandler(sys.stdout)
+    root.addHandler(basic)
+    try:
+        configure_logging("cron")
+        assert basic not in root.handlers
+        logging.getLogger("trader.x").warning("token %s", FAKE_BOT_TOKEN)
+        out = capsys.readouterr().out
+        assert len(out.splitlines()) == 1
+        assert "AAH4sEcReTvAlUe" not in out
+    finally:
+        root.removeHandler(basic)
+
+
+@pytest.mark.usefixtures("clean_logging")
+def test_anthropic_logger_is_quiet() -> None:
+    configure_logging("cron", level="DEBUG")
+    assert not logging.getLogger("anthropic._base_client").isEnabledFor(logging.INFO)
+
+
+def _fails_with_a_secret_local() -> None:
+    api_key_local = "sk-LOCALS-" + "Z9" * 10  # noqa: F841 (a local a rich traceback would show)
+    raise RuntimeError("boom")
+
+
+@pytest.mark.usefixtures("clean_logging")
+def test_console_renderer_never_shows_traceback_locals(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging("cli", json=False)
+    try:
+        _fails_with_a_secret_local()
+    except RuntimeError:
+        structlog.get_logger("t").exception("failed")
+        logging.getLogger("t.stdlib").exception("failed")
+    out = capsys.readouterr().out
+    assert "RuntimeError: boom" in out
+    assert "Z9Z9Z9" not in out
+    assert "api_key_local" not in out
+    # The renderer itself, handed a live exc_info (where rich's show_locals would print the frame's
+    # locals), shows only the plain traceback.
+    try:
+        _fails_with_a_secret_local()
+    except RuntimeError:
+        event = {"event": "failed", "exc_info": sys.exc_info()}
+        rendered = console_renderer(colors=False)(None, "error", event)
+    assert "RuntimeError: boom" in rendered
+    assert "Z9Z9Z9" not in rendered and "api_key_local" not in rendered

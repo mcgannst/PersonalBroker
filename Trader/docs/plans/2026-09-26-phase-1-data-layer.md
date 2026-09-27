@@ -2047,7 +2047,7 @@ git pull --rebase && git push
 - Produces (`trader.bootstrap`): `Core` dataclass (`env`, `engine`, `factory`, `crypto`, `clock`, `calendar`, `settings: SettingsStore`) and `build_core(env: EnvSettings | None = None) -> Core`.
 - CLI: `trader questrade-seed` (reads `QUESTRADE_REFRESH_TOKEN`), `trader token-refresh`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `Trader/app/tests/adapters/test_questrade_auth.py`:
 ```python
@@ -2201,12 +2201,12 @@ def test_concurrent_refresh_exchanges_once(db_factory: sessionmaker[Session]) ->
     assert route.call_count == 1
 ```
 
-- [ ] **Step 2: Run to see them fail**
+- [x] **Step 2: Run to see them fail**
 
 Run: `uv run pytest tests/adapters/test_questrade_auth.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.adapters.questrade'`.
 
-- [ ] **Step 3: Implement `trader/adapters/questrade/auth.py`**
+- [x] **Step 3: Implement `trader/adapters/questrade/auth.py`**
 
 `Trader/app/trader/adapters/questrade/__init__.py`: empty file.
 
@@ -2394,12 +2394,14 @@ class QuestradeAuth:
             return self._token(row)
 ```
 
-- [ ] **Step 4: Run the auth tests**
+- [x] **Step 4: Run the auth tests**
 
 Run: `uv run pytest tests/adapters/test_questrade_auth.py -q`
 Expected: `8 passed`.
 
-- [ ] **Step 5: Implement `trader/bootstrap.py` and the CLI commands**
+Builder note (P1-T6 attempt 1): as written, `keep_alive`'s early return also required `_is_fresh(row)`. An access token lives 30 min (fresh for 28 with the skew), so at +30 min it always exchanged and `test_keep_alive_exchanges_only_when_older_than_min_age` failed. The early return now requires a *stored* access token and `api_server` instead of a fresh one, so the chain is extended only when `last_refresh_at` is older than `min_age`.
+
+- [x] **Step 5: Implement `trader/bootstrap.py` and the CLI commands**
 
 `Trader/app/trader/bootstrap.py`:
 ```python
@@ -2476,7 +2478,7 @@ def token_refresh() -> None:
     typer.echo(f"ok; access token valid until {token.expires_at.isoformat()}")
 ```
 
-- [ ] **Step 6: Run the gate, commit and push**
+- [x] **Step 6: Run the gate, commit and push**
 
 Run: `uv run ruff format . && bash scripts/check.sh` → all pass.
 ```bash

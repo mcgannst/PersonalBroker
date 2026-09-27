@@ -1,9 +1,11 @@
 """All FinViz HTML parsing lives here (SPEC §4.2 isolation). Tested against saved pages.
 
 Page markers relied on (spike S5): table.screener_table with a <th> header row; the ticker in
-td[data-boxover-ticker]; ".count-text" containing "#1 / N Total"; table#news-table rows whose
-first cell is "Sep-25-26 04:18PM", "Today 06:07AM" or just "04:02PM"; a.tab-link-news headlines;
-the source in a span inside div.news-link-right.
+td[data-boxover-ticker]; the result count, #screener-total (or a ".count-text" element) whose whole
+text is "#1 / N Total", or just "0 Total" on a page that matched nothing (that page has no
+table.screener_table at all; saved in tests/fixtures/finviz/raw_screener_zero.html);
+table#news-table rows whose first cell is "Sep-25-26 04:18PM", "Today 06:07AM" or just "04:02PM";
+a.tab-link-news headlines; the source in a span inside div.news-link-right.
 
 The parser never raises on odd HTML. Instead it reports what it could not read (ScreenerPage.bad_rows,
 NewsPage.problem) so the scraper can turn a layout change into an error instead of a silently
@@ -20,7 +22,8 @@ from selectolax.parser import HTMLParser, Node
 from trader.market.clock import ET
 
 BASE = "https://finviz.com"
-_TOTAL_RE = re.compile(r"/\s*([\d,]+)\s*Total")
+# The whole count text: "#1 / 695 Total", "#21 / 695 Total", or "0 Total" (no matches).
+_TOTAL_RE = re.compile(r"^(?:#[\d,]+\s*/\s*)?([\d,]+)\s+Total$")
 _DATE_RE = re.compile(r"^(?:(Today)|([A-Z][a-z]{2}-\d{2}-\d{2}))?\s*(\d{1,2}:\d{2}[AP]M)$")
 _BLOCK_MARKERS = ("just a moment", "cf-challenge", "captcha", "attention required")
 MIN_PAGE_BYTES = 1000  # anything shorter is an empty body, not a real FinViz page
@@ -30,10 +33,22 @@ BLOCK_STATUSES = frozenset({403, 429, 503})
 
 @dataclass(frozen=True, slots=True)
 class ScreenerPage:
-    total: int
+    total: int | None  # None: no result count on the page (a layout change, never "0")
     header: list[str]
     rows: list[dict[str, str]]
     bad_rows: int = 0  # data rows whose cell count differed from the header (not in `rows`)
+    has_table: bool = True  # False: the page had no table.screener_table
+
+    @property
+    def verified_empty(self) -> bool:
+        """FinViz's "matched nothing" page: a count of exactly 0, no rows (good or bad), and either no
+        results table or one whose header has a Ticker column. Anything else short is a problem."""
+        return (
+            self.total == 0
+            and not self.rows
+            and not self.bad_rows
+            and (not self.has_table or "Ticker" in self.header)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,17 +101,21 @@ def _cell_text(node: Node) -> str:
     return " ".join(node.text(separator=" ").split())
 
 
+def _screener_total(tree: HTMLParser) -> int | None:
+    """The result count, or None when no count element's whole text reads as one."""
+    for node in [*tree.css("#screener-total"), *tree.css(".count-text")]:
+        m = _TOTAL_RE.match(_cell_text(node))
+        if m:
+            return int(m.group(1).replace(",", ""))
+    return None
+
+
 def parse_screener(html: str) -> ScreenerPage:
     tree = HTMLParser(html)
-    total = 0
-    for node in tree.css(".count-text"):
-        m = _TOTAL_RE.search(node.text())
-        if m:
-            total = int(m.group(1).replace(",", ""))
-            break
+    total = _screener_total(tree)
     table = tree.css_first("table.screener_table")
     if table is None:
-        return ScreenerPage(total, [], [])
+        return ScreenerPage(total, [], [], has_table=False)
     trs = table.css("tr")
     header = [_cell_text(th) for th in trs[0].css("th")] if trs else []
     rows: list[dict[str, str]] = []

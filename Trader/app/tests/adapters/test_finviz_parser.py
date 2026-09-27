@@ -174,3 +174,44 @@ def test_news_page_with_some_unparseable_rows_keeps_the_good_ones() -> None:
     assert [h.title for h in page.headlines] == ["good"]
     assert page.problem is None
     assert page.headlines[0].url == "https://finviz.com/news/0"
+
+
+# --- P2-T14 fix round: FinViz's "matched nothing" page ---
+
+
+def test_live_zero_match_page_is_a_verified_empty_result() -> None:
+    """Saved LIVE on 2026-09-27 (v=111, f=cap_mega,sh_price_u1): '0 Total' and no results table."""
+    html = (FIX / "raw_screener_zero.html").read_text(encoding="utf-8")
+    assert blocked_reason(200, html) is None
+    page = parse_screener(html)
+    assert page.total == 0 and page.rows == [] and page.header == []
+    assert page.has_table is False and page.verified_empty
+
+
+def _count_page(text: str, table: bool = False) -> str:
+    t = '<table class="screener_table"><tr><th>No.</th><th>Ticker</th></tr></table>' if table else ""
+    return f'<html><body><div class="count-text">{text}</div>{t}</body></html>'
+
+
+def test_count_text_must_match_whole_forms() -> None:
+    assert parse_screener(_count_page("0 Total")).total == 0
+    assert parse_screener(_count_page("#1 / 0 Total")).total == 0
+    assert parse_screener(_count_page("#21 / 1,234 Total")).total == 1234
+    assert parse_screener(_count_page("  #1 /\n 7   Total ")).total == 7
+    for bad in ("Filters: 5 Total", "0 Totally", "Total", "#1 / Total", "about 5 Total results", ""):
+        assert parse_screener(_count_page(bad)).total is None, bad
+
+
+def test_screener_total_id_wins_over_other_count_text() -> None:
+    html = '<div class="count-text"><b>Refresh:</b></div><div id="screener-total">#1 / 12 Total</div>'
+    assert parse_screener(html).total == 12
+
+
+def test_verified_empty_needs_a_zero_count_no_rows_and_a_ticker_header_if_a_table() -> None:
+    assert parse_screener(_count_page("0 Total", table=True)).verified_empty
+    assert not parse_screener(_count_page("#1 / 5 Total")).verified_empty
+    assert not parse_screener("<html><body>No results</body></html>").verified_empty
+    no_ticker = (
+        '<div class="count-text">0 Total</div><table class="screener_table"><tr><th>Symbol</th></tr></table>'
+    )
+    assert not parse_screener(no_ticker).verified_empty

@@ -257,10 +257,14 @@ def test_empty_screen_is_allowed_but_an_empty_universe_is_not() -> None:
 
 @respx.mock
 def test_unreadable_totals_are_a_parse_error_not_filter_ignored() -> None:
-    """Both pages parse (header present, no rows) but neither shows a count: we can't tell whether
-    the filter was ignored, so it's a layout problem, not FinvizFilterIgnored."""
+    """The unfiltered page shows no count: we can't tell whether the filter was ignored, so it's a
+    layout problem, not FinvizFilterIgnored. (Fix round P2-T14: a page without a count is itself a
+    parse error, so a filtered page without one fails the same way.)"""
+    serve({("geo_usa", "1"): page_html(3, ["A", "B", "C"]), ("", "1"): page_html(None, [])})
+    with pytest.raises(FinvizParseError, match="count"):
+        scraper(Timer()).screen("geo_usa")
     serve({("geo_usa", "1"): page_html(None, []), ("", "1"): page_html(None, [])})
-    with pytest.raises(FinvizParseError, match="unfiltered"):
+    with pytest.raises(FinvizParseError, match="count"):
         scraper(Timer()).screen("geo_usa")
 
 
@@ -486,3 +490,85 @@ def test_caller_client_is_not_mutated_or_closed_but_gets_browser_headers() -> No
     sent = route.calls.last.request.headers
     assert "Mozilla/5.0" in sent["User-Agent"] and sent["X-Mine"] == "1"
     client.close()
+
+
+# --- P2-T14 fix round: the "matched nothing" page, fresh screens, count() ---
+
+ZERO_HTML = (Path(__file__).parents[1] / "fixtures/finviz/raw_screener_zero.html").read_text(encoding="utf-8")
+
+
+@respx.mock
+def test_live_zero_match_page_is_an_empty_screen() -> None:
+    route = serve({("cap_mega,sh_price_u1", "1"): ZERO_HTML})
+    page = scraper(Timer()).screen("cap_mega,sh_price_u1")
+    assert page.total == 0 and page.rows == [] and page.verified_empty
+    assert route.call_count == 1  # 0 can never equal the whole market: no baseline request
+
+
+@respx.mock
+def test_live_zero_match_page_is_still_an_error_for_the_universe() -> None:
+    serve({("cap_mega,sh_price_u1", "1"): ZERO_HTML})
+    with pytest.raises(FinvizParseError, match="empty"):
+        scraper(Timer()).universe("cap_mega,sh_price_u1")
+
+
+@respx.mock
+def test_positive_count_without_a_table_raises() -> None:
+    serve({("geo_usa", "1"): f'<html><body>{PAD}<div class="count-text">#1 / 5 Total</div></body></html>'})
+    with pytest.raises(FinvizParseError, match="Ticker"):
+        scraper(Timer()).screen("geo_usa")
+
+
+@respx.mock
+def test_no_count_and_no_table_raises() -> None:
+    serve({("geo_usa", "1"): f"<html><body>{PAD}<p>No results found.</p></body></html>"})
+    with pytest.raises(FinvizParseError, match="count"):
+        scraper(Timer()).screen("geo_usa")
+
+
+@respx.mock
+def test_zero_count_with_a_table_needs_a_ticker_column() -> None:
+    serve({("geo_usa", "1"): page_html(0, [], header=["No.", "Symbol"])})
+    with pytest.raises(FinvizParseError, match="Ticker"):
+        scraper(Timer()).screen("geo_usa")
+    serve({("geo_usa", "1"): page_html(0, [])})
+    assert scraper(Timer()).screen("geo_usa").rows == []
+
+
+@respx.mock
+def test_zero_count_with_rows_raises() -> None:
+    serve({("geo_usa", "1"): page_html(0, ["A"])})
+    with pytest.raises(FinvizParseError):
+        scraper(Timer()).screen("geo_usa")
+
+
+@respx.mock
+def test_uncached_screens_fetch_fresh_but_news_stays_cached(tmp_path: Path) -> None:
+    route = serve({("geo_usa", "1"): page_html(2, ["A", "B"])})
+    quote = respx.get(QUOTE).mock(return_value=httpx.Response(200, text=news_html([("Today 09:00AM", "x")])))
+    timer = Timer()
+    s = FinvizScraper(
+        min_interval_s=2.0,
+        cache_dir=tmp_path,
+        sleep=timer.sleep,
+        monotonic=timer.monotonic,
+        wall=lambda: 1_000_000.0,
+        cache_screens=False,
+    )
+    s.screen("geo_usa")
+    s.screen("geo_usa")
+    assert route.call_count == 3  # page 1 twice, the unfiltered baseline once (memoised per scraper)
+    s.news("AMD", today_et=date(2026, 9, 25))
+    s.news("AMD", today_et=date(2026, 9, 25))
+    assert quote.call_count == 1
+    assert len(list(tmp_path.iterdir())) == 1  # only the quote page was cached
+
+
+@respx.mock
+def test_count_reads_the_first_page_only() -> None:
+    route = serve({("geo_usa", "1"): page_html(45, [f"T{i}" for i in range(20)])})
+    assert scraper(Timer()).count("geo_usa") == 45
+    assert route.call_count == 1
+    serve({("x", "1"): page_html(None, ["A"])})
+    with pytest.raises(FinvizParseError, match="count"):
+        scraper(Timer()).count("x")

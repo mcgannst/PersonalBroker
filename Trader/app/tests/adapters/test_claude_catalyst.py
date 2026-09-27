@@ -471,3 +471,76 @@ async def test_a_failed_task_is_unknown_and_its_siblings_still_finish(
         )
     assert [(e.level, e.data["ticker"]) for e in events] == [("error", "BBB")]
     assert svc._inflight == {}
+
+
+# --- P2-T14 fix round: in-flight calls count against the budget ---
+
+
+class _OverlappingMessages:
+    """Every call waits until all started calls are in flight together (or 50 ms pass), so without a
+    reservation all of them would pass the budget check against the same "spent" figure."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.max_in_flight = 0
+        self._in_flight = 0
+
+    async def create(self, **kwargs: Any) -> Any:
+        self.calls.append(kwargs)
+        self._in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self._in_flight)
+        await asyncio.sleep(0.05)
+        self._in_flight -= 1
+        return reply(GOOD, tin=500, tout=50)  # US$0.0015 on claude-sonnet-5
+
+
+def _names(db_factory: sessionmaker[Session], n: int) -> list[CatalystRequest]:
+    with db_factory() as s:
+        ids = [(add_symbol(s, f"N{i}"), f"N{i}") for i in range(n)]
+        s.commit()
+    return [CatalystRequest(sid, t) for sid, t in ids]
+
+
+@pytest.mark.db
+async def test_concurrent_calls_cannot_overspend_the_budget(db_factory: sessionmaker[Session]) -> None:
+    """Concurrency 4, a budget for exactly two US$0.0015 calls: at most two calls are ever made."""
+    store = CatalystStore(db_factory, CLOCK)
+    msgs = _OverlappingMessages()
+    client = SimpleNamespace(messages=msgs)
+    svc = CatalystService(
+        db_factory,
+        CLOCK,
+        store,
+        classifier(client, claude_daily_budget_usd=Decimal("0.003")),
+        FakeHeadlines(),
+        max_concurrency=4,
+    )
+    got = await svc.classify_many(_names(db_factory, 6), DAY)
+    assert 1 <= len(msgs.calls) <= 2
+    assert store.spent(DAY) <= Decimal("0.003")
+    assert sum(1 for c in got.values() if c.classified) == len(msgs.calls)
+    assert svc._reserved == {}
+
+
+@pytest.mark.db
+async def test_reservations_use_the_running_average_cost(db_factory: sessionmaker[Session]) -> None:
+    """Once a call has cost US$0.0015, each in-flight call holds that much: a US$0.0045 budget allows
+    exactly three calls in all, two of them concurrently."""
+    store = CatalystStore(db_factory, CLOCK)
+    msgs = _OverlappingMessages()
+    client = SimpleNamespace(messages=msgs)
+    svc = CatalystService(
+        db_factory,
+        CLOCK,
+        store,
+        classifier(client, claude_daily_budget_usd=Decimal("0.0045")),
+        FakeHeadlines(),
+        max_concurrency=4,
+    )
+    names = _names(db_factory, 6)
+    await svc.classify_many(names[:1], DAY)
+    assert len(msgs.calls) == 1 and msgs.max_in_flight == 1
+    await svc.classify_many(names[1:], DAY)
+    assert len(msgs.calls) == 3 and msgs.max_in_flight == 2
+    assert store.spent(DAY) == Decimal("0.004500")
+    assert svc._reserved == {}

@@ -4,6 +4,14 @@ backoff when blocked.
 Every failure raises a FinvizError. The nightly job falls back to the previous universe only on
 FinvizError, so an empty, short or mis-keyed result must never be returned silently. Nothing that
 raises is ever cached.
+
+The one empty result `screen()` returns is FinViz's verified "matched nothing" page: not blocked, a
+result count of exactly 0, no rows, and no results table (or one with a Ticker column). A missing
+count, a count above 0 without rows, or a table without Ticker still raise. `universe()` never
+accepts an empty result.
+
+`cache_screens=False` bypasses the cache for screener pages (both reading and writing) while quote
+pages stay cached per ET day: the pre-market job's news and earnings screens must be fresh each run.
 """
 
 import hashlib
@@ -103,15 +111,24 @@ def _checked_body(where: str, response: httpx.Response) -> str:
 
 def _checked_screener(html: str) -> ScreenerPage:
     page = parse_screener(html)
+    if page.total is None:
+        raise FinvizParseError("screener result count ('#1 / N Total') is missing")
+    if page.verified_empty:
+        return page
     if "Ticker" not in page.header:
         raise FinvizParseError(f"screener table missing or its header has no 'Ticker' column: {page.header}")
     if page.bad_rows:
         raise FinvizParseError(
             f"{page.bad_rows} screener rows do not match the {len(page.header)}-column header"
         )
-    if page.total == 0 and page.rows:
-        raise FinvizParseError("screener result count ('#1 / N Total') is missing")
     return page
+
+
+def _total(page: ScreenerPage) -> int:
+    """The count of a page that passed _checked_screener (which never lets a missing count through)."""
+    if page.total is None:
+        raise FinvizParseError("screener result count ('#1 / N Total') is missing")
+    return page.total
 
 
 class FinvizScraper:
@@ -125,12 +142,14 @@ class FinvizScraper:
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
         wall: Callable[[], float] = time.time,
+        cache_screens: bool = True,
     ) -> None:
         self._owns_http = http is None
         self._http = http if http is not None else httpx.Client(timeout=20, follow_redirects=True)
         self._min_interval = min_interval_s
         self._cache_dir = _usable_cache_dir(cache_dir)
         self._cache_ttl = cache_ttl_s
+        self._cache_screens = cache_screens
         self._sleep, self._monotonic, self._wall = sleep, monotonic, wall
         self._last: float | None = None
         self._unfiltered_totals: dict[tuple[int, str | None], int] = {}
@@ -216,10 +235,12 @@ class FinvizScraper:
         *,
         cache_tag: str = "",
         retry_blocked: bool = False,
+        use_cache: bool = True,
     ) -> tuple[T, SaveToCache]:
         """Return the parsed page and a callback that caches it. The caller calls the callback only
         once the whole result has passed validation, so nothing that raises is ever cached."""
-        cache = self._cache_path(str(httpx.URL(BASE + path, params=params)) + cache_tag)
+        key = str(httpx.URL(BASE + path, params=params)) + cache_tag
+        cache = self._cache_path(key) if use_cache else None
         cached = self._cache_read(cache)
         if cached is not None:
             try:
@@ -243,7 +264,9 @@ class FinvizScraper:
         params = {"v": str(view), "f": filters, "r": str(start)}
         if signal:
             params["s"] = signal
-        page, save = self._fetch("/screener.ashx", params, _checked_screener, retry_blocked=True)
+        page, save = self._fetch(
+            "/screener.ashx", params, _checked_screener, retry_blocked=True, use_cache=self._cache_screens
+        )
         saves.append(save)
         return page
 
@@ -255,7 +278,7 @@ class FinvizScraper:
         base_signal = signal if filters else None
         key = (view, base_signal)
         if key not in self._unfiltered_totals:
-            baseline = self._page("", view, 1, base_signal, saves).total
+            baseline = _total(self._page("", view, 1, base_signal, saves))
             if baseline == 0:
                 raise FinvizParseError("could not read the unfiltered result count")
             self._unfiltered_totals[key] = baseline
@@ -273,18 +296,26 @@ class FinvizScraper:
     ) -> ScreenerPage:
         saves: list[SaveToCache] = []
         first = self._page(filters, view, 1, signal, saves)
+        total = _total(first)
+        if first.verified_empty:
+            # FinViz matched nothing ("0 Total", no rows). No column check: the page may have no table.
+            if not allow_empty:
+                raise FinvizParseError(f"FinViz returned an empty result for {filters!r}")
+            for save in saves:
+                save()
+            return ScreenerPage(0, first.header, [], has_table=first.has_table)
         missing = [c for c in required if c not in first.header]
         if missing:
             raise FinvizParseError(f"screener header lacks {missing}: {first.header}")
         if filters or signal:
-            self._check_filters_applied(first.total, filters, view, signal, saves)
-        if first.total > PAGE_SIZE * MAX_PAGES:
-            raise FinvizParseError(f"{first.total} results exceed the page cap ({MAX_PAGES} x {PAGE_SIZE})")
+            self._check_filters_applied(total, filters, view, signal, saves)
+        if total > PAGE_SIZE * MAX_PAGES:
+            raise FinvizParseError(f"{total} results exceed the page cap ({MAX_PAGES} x {PAGE_SIZE})")
         rows = list(first.rows)
         pages, start = 1, 1 + PAGE_SIZE
-        while len(rows) < first.total:
+        while len(rows) < total:
             if pages >= MAX_PAGES:
-                raise FinvizParseError(f"hit the MAX_PAGES cap ({MAX_PAGES}) with {len(rows)}/{first.total}")
+                raise FinvizParseError(f"hit the MAX_PAGES cap ({MAX_PAGES}) with {len(rows)}/{total}")
             page = self._page(filters, view, start, signal, saves)
             if page.header != first.header:
                 raise FinvizParseError(f"screener header changed on row {start}: {page.header}")
@@ -295,20 +326,25 @@ class FinvizScraper:
         unique: dict[str, dict[str, str]] = {}
         for rec in rows:
             unique.setdefault(rec["Ticker"], rec)
-        if len(unique) != first.total:
+        if len(unique) != total:
             raise FinvizParseError(
-                f"got {len(unique)} unique tickers ({len(rows)} rows) but FinViz reported {first.total}"
+                f"got {len(unique)} unique tickers ({len(rows)} rows) but FinViz reported {total}"
             )
         if not unique and not allow_empty:
             raise FinvizParseError(f"FinViz returned an empty result for {filters!r}")
         for save in saves:
             save()
-        return ScreenerPage(first.total, first.header, list(unique.values()))
+        return ScreenerPage(total, first.header, list(unique.values()))
 
     def screen(self, filters: str, view: int = 111, signal: str | None = None) -> ScreenerPage:
         """All pages merged and de-duplicated by ticker. Raises FinvizError unless the rows are
-        exactly the count FinViz reports."""
+        exactly the count FinViz reports; FinViz's verified "0 Total" page is an empty result."""
         return self._screen(filters, view, signal)
+
+    def count(self, filters: str, view: int = 111) -> int:
+        """The result count FinViz reports for `filters`, from the first page only (one request).
+        Callers use it as a baseline to spot an extra filter that FinViz silently ignored."""
+        return _total(self._page(filters, view, 1, None, []))
 
     def universe(self, filters: str) -> list[UniverseRow]:
         """The nightly universe. An empty universe is an error, never a valid answer."""

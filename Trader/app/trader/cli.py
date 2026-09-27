@@ -179,9 +179,17 @@ def nightly(
 @app.command()
 def premarket(
     date_: str | None = typer.Option(None, "--date", help="Session YYYY-MM-DD (default: today in ET)"),
-    force: bool = typer.Option(False, "--force"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Re-run a succeeded session, and allow a run outside the pre-market window "
+        "(another day's session, or after the open).",
+    ),
 ) -> None:
-    """Pre-market scan: gappers and news, headlines, Claude catalysts, brief (SPEC §9, 08:00 ET)."""
+    """Pre-market scan: gappers and news, headlines, Claude catalysts, brief (SPEC §9, 08:00 ET).
+
+    It runs only in the pre-market window: on the session's own ET date, before the open. Anything else
+    needs --force, and a forced run's brief says which window it used."""
     import asyncio
     from datetime import date as date_cls
     from pathlib import Path
@@ -196,23 +204,58 @@ def premarket(
     from trader.bootstrap import build_core
     from trader.jobs.premarket import PremarketDeps, run_premarket
     from trader.jobs.runner import run_job
-    from trader.market.clock import et_date
+    from trader.market.clock import ET, et_date
     from trader.market.data_service import MarketDataService
 
     core = build_core()
     settings = core.settings.load()
-    session_date = date_cls.fromisoformat(date_) if date_ else et_date(core.clock.now())
-    if not core.calendar.is_session(session_date):
+    now = core.clock.now()
+    today = et_date(now)
+    if date_:
+        try:
+            session_date = date_cls.fromisoformat(date_)
+        except ValueError:
+            typer.echo(f"--date {date_} is not a valid date (use YYYY-MM-DD)", err=True)
+            raise typer.Exit(1) from None
+    else:
+        session_date = today
+    try:
+        is_session = core.calendar.is_session(session_date)
+    except ValueError:  # outside the calendar's range
+        typer.echo(f"--date {session_date} is outside the trading calendar", err=True)
+        raise typer.Exit(1) from None
+    if not is_session:
         typer.echo(f"premarket {session_date}: not a trading session, nothing to do")
         return
+    opens = core.calendar.session_open(session_date)
+    window = (
+        f"session {session_date} (opens {opens.astimezone(ET):%Y-%m-%d %H:%M} ET), "
+        f"run at {now.astimezone(ET):%Y-%m-%d %H:%M} ET"
+    )
+    if session_date != today:
+        problem = f"{session_date} is not today's ET date ({today})"
+    elif now >= opens:
+        problem = f"the {session_date} session has already opened"
+    else:
+        problem = None
+    warnings: list[str] = []
+    if problem is not None:
+        if not force:
+            typer.echo(f"premarket {session_date}: {problem}: {window}. Use --force to run anyway.", err=True)
+            raise typer.Exit(1)
+        warnings.append(f"WARNING: forced run outside the pre-market window ({problem}): {window}")
+        typer.echo(warnings[-1], err=True)
     auth = QuestradeAuth(core.factory, core.crypto, core.clock)
     api_key = core.env.anthropic_api_key
     cache_dir = Path.home() / ".cache" / "trader" / "finviz"
 
+    # Screens are never read from the cache (a run must see this morning's news and earnings); the
+    # quote pages behind the headlines are cached per ET day by the scraper itself.
     with FinvizScraper(
         min_interval_s=settings.finviz_min_interval_seconds,
         cache_dir=cache_dir,
         cache_ttl_s=settings.finviz_cache_hours * 3600,
+        cache_screens=False,
     ) as finviz:
 
         def job() -> dict[str, Any]:
@@ -233,8 +276,10 @@ def premarket(
                             finviz,
                         )
                         data = MarketDataService(core.factory, core.clock, core.calendar, qt)
-                        deps = PremarketDeps(core.factory, core.clock, finviz, data, service, settings)
-                        return await run_premarket(deps, session_date)
+                        deps = PremarketDeps(
+                            core.factory, core.clock, finviz, data, service, settings, core.calendar
+                        )
+                        return await run_premarket(deps, session_date, warnings)
                 finally:
                     if claude is not None:
                         await claude.close()
@@ -244,9 +289,10 @@ def premarket(
         out = run_job(core.factory, core.clock, "premarket", session_date, job, force=force)
     if out.status == "succeeded":
         typer.echo(out.detail["brief"])
+    elif out.status == "skipped":
+        typer.echo(f"premarket {session_date}: skipped ({out.detail.get('reason', 'no reason given')})")
     else:
-        typer.echo(f"premarket {session_date}: {out.status} {out.error or ''}")
-    if out.status == "failed":
+        typer.echo(f"premarket {session_date}: failed: {out.error or 'unknown error'}", err=True)
         raise typer.Exit(1)
 
 

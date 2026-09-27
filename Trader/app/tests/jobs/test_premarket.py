@@ -1,3 +1,4 @@
+import dataclasses
 import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -10,11 +11,17 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tests.factories import add_symbol
 from tests.fakes_questrade import FakeQuestrade
-from trader.adapters.claude.catalyst import OVER_CAP, CatalystClassifier, CatalystService, CatalystStore
+from trader.adapters.claude.catalyst import (
+    OVER_CAP,
+    CatalystClassifier,
+    CatalystService,
+    CatalystStore,
+    StoredCatalyst,
+)
 from trader.adapters.finviz.parser import Headline, ScreenerPage
 from trader.adapters.finviz.scraper import FinvizBlocked
 from trader.db import models as m
-from trader.jobs.premarket import PremarketDeps, run_premarket
+from trader.jobs.premarket import PremarketCandidate, PremarketDeps, brief_notes, format_brief, run_premarket
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import FixedClock
 from trader.market.data_service import MarketDataService
@@ -110,13 +117,22 @@ def seeded(db_factory: sessionmaker[Session]) -> dict[str, int]:
 
 
 def deps(
-    factory: sessionmaker[Session], finviz: FakeFinviz, messages: FakeMessages, **settings: Any
+    factory: sessionmaker[Session],
+    finviz: Any,
+    messages: FakeMessages,
+    *,
+    qt: FakeQuestrade | None = None,
+    lasts: dict[str, str] | None = None,
+    quote_at: dict[str, datetime] | None = None,
+    **settings: Any,
 ) -> PremarketDeps:
+    """`lasts` and `quote_at` override a ticker's pre-market last and last-trade time."""
     s = RuntimeSettings(**settings)
-    fq = FakeQuestrade()
+    fq = qt if qt is not None else FakeQuestrade()
     for t, (qid, last) in BOOK.items():
         fq.add_symbol(t, qid)
-        fq.set_quote(qid, last, last, last, CLOCK.now())
+        price = (lasts or {}).get(t, last)
+        fq.set_quote(qid, price, price, price, (quote_at or {}).get(t, CLOCK.now()))
     client = SimpleNamespace(messages=messages)
     service = CatalystService(
         factory, CLOCK, CatalystStore(factory, CLOCK), CatalystClassifier(client, lambda: s), finviz
@@ -200,3 +216,132 @@ async def test_the_cost_of_every_call_is_stored(
     store = CatalystStore(db_factory, CLOCK)
     assert store.spent(DAY) == Decimal("0.006000")  # 4 x (500 x $2/M + 50 x $10/M)
     assert store.spent(DAY + timedelta(days=1)) == 0
+
+
+# --- P2-T14 fix round (attempt 2) ---
+
+
+class ListFinviz(FakeFinviz):
+    """Screens return the given tickers (news / earnings); optionally reports a universe-filter count."""
+
+    def __init__(self, news: list[str], earnings: list[str] | None = None) -> None:
+        super().__init__()
+        self.news_rows, self.earnings_rows = news, earnings or []
+
+    def screen(self, filters: str, view: int = 111, signal: str | None = None) -> ScreenerPage:
+        self.screens.append(filters)
+        got = self.news_rows if "news_date_today" in filters else self.earnings_rows
+        return ScreenerPage(len(got), ["Ticker"], [{"Ticker": t} for t in got])
+
+
+class CountingFinviz(ListFinviz):
+    def __init__(self, news: list[str], universe_count: int) -> None:
+        super().__init__(news)
+        self.universe_count = universe_count
+        self.counts: list[str] = []
+
+    def count(self, filters: str, view: int = 111) -> int:
+        self.counts.append(filters)
+        return self.universe_count
+
+
+class FailingPriorCloses(MarketDataService):
+    async def prior_closes(self, symbol_ids: Any, session_date: date) -> dict[int, Decimal]:
+        raise RuntimeError("database\nunavailable")
+
+
+async def test_ignored_news_filter_is_a_failed_screen_by_universe_size(
+    db_factory: sessionmaker[Session], seeded: dict[str, int]
+) -> None:
+    finviz = ListFinviz(news=["AAA", "BBB", "CCC", "DDD", "EEE"], earnings=["DDD"])  # all 5 names
+    out = await run_premarket(deps(db_factory, finviz, FakeMessages()), DAY)
+    assert out["screen_errors"] == [
+        "news: filter 'news_date_today' ignored (matched all 5 universe-filter names)"
+    ]
+    assert out["candidates"] == 3  # AAA, BBB by gap + DDD from earnings; the news rows are dropped
+    assert "FinViz screens failed: news: filter 'news_date_today' ignored" in out["brief"]
+
+
+async def test_ignored_filter_uses_the_screeners_universe_count(
+    db_factory: sessionmaker[Session], seeded: dict[str, int]
+) -> None:
+    finviz = CountingFinviz(news=["AAA", "CCC", "ZZZ"], universe_count=3)
+    out = await run_premarket(deps(db_factory, finviz, FakeMessages()), DAY)
+    assert out["screen_errors"] == [
+        "news: filter 'news_date_today' ignored (matched all 3 universe-filter names)"
+    ]
+    assert finviz.counts == ["ind_stocksonly,sh_price_5to50,sh_avgvol_o1000,ta_averagetruerange_o0.5,geo_usa"]
+    ok = CountingFinviz(news=["AAA", "CCC", "ZZZ"], universe_count=700)
+    assert (await run_premarket(deps(db_factory, ok, FakeMessages()), DAY))["screen_errors"] == []
+
+
+async def test_failed_prior_closes_leave_gaps_unknown_but_keep_screens(
+    db_factory: sessionmaker[Session], seeded: dict[str, int]
+) -> None:
+    d = deps(db_factory, FakeFinviz(), FakeMessages())
+    data = FailingPriorCloses(db_factory, CLOCK, CAL, FakeQuestrade())
+    out = await run_premarket(dataclasses.replace(d, data=data), DAY)
+    assert out["candidates"] == 3  # AAA, CCC (news), DDD (earnings); FFF isn't in the universe
+    lines = out["brief"].splitlines()
+    assert all(" gap n/a " in line for line in lines[1:4])
+    assert lines[-1] == "Questrade quotes failed: RuntimeError: database unavailable"
+    assert out["quote_error"] == "Questrade quotes failed: RuntimeError: database unavailable"
+
+
+def test_brief_collapses_and_caps_every_interpolated_text() -> None:
+    c = PremarketCandidate(1, "AAA", "AAA Inc", None, ("news",))
+    cat = StoredCatalyst(1, "unknown", "neutral", None, None, "err:\n" + "x" * 500, None, Decimal(0), False)
+    brief = format_brief(DAY, [c], {1: cat}, [], ["news: HTTP 403\nForged line", "e" * 400])
+    lines = brief.splitlines()
+    assert len(lines) == 3
+    assert lines[1].startswith("AAA gap n/a [news] unknown (err: xxx") and len(lines[1]) < 260
+    assert lines[2].startswith("FinViz screens failed: news: HTTP 403 Forged line; eee")
+    assert len(lines[2]) < 260
+    assert brief_notes(["a\nb", "  ", "c" * 1000]) == ["a b", "c" * 399 + "…"]
+
+
+async def test_gap_threshold_uses_the_unrounded_gap(
+    db_factory: sessionmaker[Session], seeded: dict[str, int]
+) -> None:
+    """+2.996% rounds to 0.0300 for display, but is below the 3% threshold."""
+    finviz = ListFinviz(news=[])
+    out = await run_premarket(deps(db_factory, finviz, FakeMessages(), lasts={"CCC": "20.5992"}), DAY)
+    assert out["candidates"] == 2  # AAA and BBB only
+    assert not any(line.startswith("CCC") for line in out["brief"].splitlines())
+
+
+async def test_a_quote_older_than_the_prior_close_is_stale(
+    db_factory: sessionmaker[Session], seeded: dict[str, int]
+) -> None:
+    before_close = datetime(2026, 10, 5, 19, 59, tzinfo=UTC)  # 15:59 ET on the prior session
+    finviz = ListFinviz(news=["AAA"])
+    out = await run_premarket(deps(db_factory, finviz, FakeMessages(), quote_at={"AAA": before_close}), DAY)
+    lines = out["brief"].splitlines()
+    assert lines[1].startswith("BBB -5.00% [gap]")
+    assert any(line.startswith("AAA gap n/a [news]") for line in lines)
+
+
+async def test_budget_hit_adds_a_summary_line(
+    db_factory: sessionmaker[Session], seeded: dict[str, int]
+) -> None:
+    d = deps(db_factory, FakeFinviz(), FakeMessages(), claude_daily_budget_usd=Decimal("0.003"))
+    out = await run_premarket(d, DAY)
+    assert out["budget_hit"] == ["CCC", "DDD"]
+    assert out["brief"].splitlines()[-1] == "Claude daily budget reached: 2 not classified (CCC, DDD)"
+
+
+async def test_warnings_are_logged_and_in_the_brief(
+    db_factory: sessionmaker[Session], seeded: dict[str, int]
+) -> None:
+    warn = "WARNING: forced run outside the pre-market window"
+    out = await run_premarket(deps(db_factory, FakeFinviz(), FakeMessages()), DAY, warnings=[warn])
+    assert out["brief"].splitlines()[-1] == warn and out["warnings"] == [warn]
+    with db_factory() as s:
+        ev = s.execute(select(m.EventLog).where(m.EventLog.source == "job.premarket")).scalar_one()
+    assert ev.level == "warning" and ev.data["warnings"] == [warn]
+
+
+def test_premarket_deps_are_frozen(db_factory: sessionmaker[Session]) -> None:
+    d = deps(db_factory, FakeFinviz(), FakeMessages())
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        d.settings = RuntimeSettings()  # type: ignore[misc]

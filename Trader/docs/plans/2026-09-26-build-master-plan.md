@@ -1,6 +1,6 @@
 # Trader Build: Master Plan
 
-> **For agentic workers:** This is the top-level plan. The orchestrator follows §2–§5 to run the build. Detailed step-by-step plans live next to this file, one per phase (`2026-09-26-phase-1-data-layer.md` first). Before starting any phase whose detailed plan doesn't exist yet, the orchestrator writes it with the `superpowers:writing-plans` skill, following §7 (it goes through the gauntlet as task `Pn-T0`). Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** This is the top-level plan. The orchestrator follows §2–§5 to run the build. Detailed step-by-step plans live next to this file, one per phase (`2026-09-26-phase-1-data-layer.md` first). Before starting any phase whose detailed plan doesn't exist yet, the orchestrator writes it following §6.6 and §7 (it goes through the gauntlet as task `Pn-T0`). Phases 1–2 have full-code plans; from Phase 3 on, plans are specifications, not code (Stephen's decision, 2026-09-27), and builders write the code. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the Trader simulation platform described in the approved BRD and SPEC, in the dev environment, to the point where it meets the dev → prod promotion criteria (SPEC §15.1).
 
@@ -140,7 +140,7 @@ Every task, including each phase's planning task `Pn-T0`, must pass every stage 
 | 2 | **Breaker**, run in parallel with stage 3 | Writes 3–8 new tests aimed at the task's weak points (Review Focus items it owns, bad input, boundaries, time zones, concurrency, idempotency). **Passes** if all its new tests pass against the Builder's code. Failing tests are committed and go back to the Builder |
 | 3 | **Spec reviewer** and **Code reviewer** (run in parallel with each other and with the Breaker; both read-only) | No findings rated **must-fix**. Findings rated **should-fix** go back to the Builder once; **nit** findings are logged only |
 
-- **Planning tasks (`Pn-T0`)** skip the Breaker. Their Verifier checks the plan has no placeholders ("TBD", "similar to Task N", steps without code) and that every task has Files, Interfaces, tests and a commit step. Their Spec reviewer checks coverage of the BRD/SPEC items assigned to the phase.
+- **Planning tasks (`Pn-T0`)** skip the Breaker. Their Verifier checks the plan has no placeholders ("TBD", "similar to Task N") and that every task has Files, Interfaces, Behaviour and Acceptance tests (Phase 3+ plans contain no implementation code). Their Spec reviewer checks coverage of the BRD/SPEC items assigned to the phase.
 - **Attempts:** a task may go round the loop 3 times. On the 4th failure, set it to `blocked` and escalate.
 
 ### 5.4 Escalation
@@ -196,9 +196,10 @@ say so in your report rather than editing that code.
 
 ### 6.1 Builder
 ```
-Implement the task by following its steps in order, ticking each checkbox in the plan file as you go
-(commit the plan file together with your code). Use TDD exactly as written: run each failing test and
-see it fail before implementing. Run `bash Trader/app/scripts/check.sh` before every commit.
+Implement the task. For full-code plans (Phases 1–2) follow its steps in order; for specification
+plans (Phase 3+) design the code yourself to meet its Interfaces, Behaviour and Acceptance tests,
+matching the style of the existing code. Tick the plan's checkboxes as you go (commit the plan file
+with your code). Use TDD: write each acceptance test first, run it and see it fail, then implement. Run `bash Trader/app/scripts/check.sh` before every commit.
 Commit and push after every green step (`git pull --rebase --autostash origin trunk`, then `git push origin HEAD:trunk`).
 If a step is impossible as written (wrong API, spec conflict), do not improvise a different design:
 stop, log "failed" with the reason, and report back.
@@ -239,13 +240,28 @@ Report PASS if there are no must-fix findings.
 ```
 
 ### 6.6 Planner (task `Pn-T0`)
+
+A plan is a plan, not code (Stephen, 2026-09-27). Phases 1–2 used full-code plans; from Phase 3 on, plans describe
+WHAT to build and HOW TO KNOW it works, and builders write the code.
 ```
-Write the detailed plan for Phase <n> using the superpowers:writing-plans skill, saved as
-Trader/docs/plans/<date>-phase-<n>-<name>.md. It must follow the structure of the Phase 1 plan:
-tasks with Files, Interfaces (exact names and types, reusing what earlier phases produced; read the real
-code, not just the earlier plans), bite-sized TDD steps with full code, commit steps, dependencies and
-parallel lanes. Implement the task outline for Phase <n> in §7 of the master plan, keeping the §7.1 cross-phase contracts. List the phase's task IDs at the top of your plan;
-the orchestrator adds them to the task board.
+Write the detailed plan for Phase <n>, saved as Trader/docs/plans/<date>-phase-<n>-<name>.md.
+Do NOT write implementation code or full test code. Read the REAL code on trunk first, so names and
+signatures match what exists. The plan contains:
+- A task table: ID, title, dependencies, parallel lane. List the task IDs at the top; the orchestrator
+  adds them to the board.
+- A file map: which files each task creates or modifies (one owner per file where possible).
+- Per task:
+  - Goal (1–2 sentences) and the BRD/SPEC items it implements.
+  - Interfaces it must provide and consume: exact names, signatures, data shapes, enums, DB columns.
+    Signatures and short type definitions are allowed; bodies are not.
+  - Behaviour and decisions: rules, edge cases, error handling, settings (with keys, defaults and
+    ranges), and any SPEC ambiguity resolved (say so).
+  - Acceptance tests: a numbered list of test cases in plain words ("given X, when Y, then Z"),
+    including its Review Focus items. The builder writes these tests first (TDD).
+  - LIVE steps, if any, with the exact command and expected result.
+- The phase's Review Focus: 5 most likely failure modes, each assigned to a task's acceptance tests.
+- Keep the §7.1 cross-phase contracts; state any refinement and why.
+Aim for roughly 30–80 lines per task. Implement the task outline for Phase <n> in §7.
 ```
 
 ## 7. Task outlines for Phases 2–6

@@ -6,8 +6,15 @@ redacted and whose cause chain is cut (`from None`), so even a logged traceback 
 
 Error responses are read from Telegram's JSON body by `_RawErrorRequest`, so `description` is Telegram's
 own text (PTB would rewrite "Bad Request: x" as "X") and `status` its HTTP code. Server errors (5xx) are
-reported like network errors (status None): both are worth one retry. `Bot.initialize()` is never called:
-it would make a network call on start-up and PTB puts the token in its InvalidToken message.
+reported like network errors (status None, description "Telegram server error 502: Bad Gateway").
+`Bot.initialize()` is never called: it would make a network call on start-up and PTB puts the token in
+its InvalidToken message.
+
+Delivery certainty (fix round 1): a failure where the request surely never reached Telegram (the
+connection could not be made, the pool had no free connection, or Telegram answered 5xx) is raised as
+`TelegramNotSentError` (a `TelegramApiError` with `not_sent = True`), which the notifier may retry. Any
+other network failure (a read or write timeout, a dropped connection) may have delivered the message, so
+it stays a plain `TelegramApiError` with status None and is never re-sent.
 """
 
 import json
@@ -15,8 +22,9 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from types import TracebackType
-from typing import Any, Self, TypeVar
+from typing import Any, ClassVar, Self, TypeVar
 
+import httpx
 import telegram
 from pydantic import SecretStr
 from telegram.constants import ParseMode
@@ -40,6 +48,15 @@ T = TypeVar("T")
 
 ALLOWED_UPDATES = ("message", "callback_query")
 REDACTED = "<redacted>"
+# httpx failures raised before any byte of the request left: the message surely never reached Telegram.
+_CONNECT_PHASE = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
+
+class TelegramNotSentError(TelegramApiError):
+    """A failure where the request surely never reached Telegram (connect phase, or a 5xx answer):
+    retrying it cannot double a message. `status` is None, like any network error."""
+
+    not_sent: ClassVar[bool] = True
 
 
 class _ApiFailure(TelegramError):
@@ -172,7 +189,8 @@ class PtbTelegramApi:
         retry_after: float | None = None
         if isinstance(exc, _ApiFailure):
             if exc.status >= 500:
-                return TelegramApiError(None, self._redact(f"{exc.status} {exc.description}"))
+                text = f"Telegram server error {exc.status}: {exc.description}"
+                return TelegramNotSentError(None, self._redact(text))
             status, description, retry_after = exc.status, exc.description, exc.retry_after
         elif isinstance(exc, RetryAfter):
             raw = exc.retry_after
@@ -187,7 +205,10 @@ class PtbTelegramApi:
         elif isinstance(exc, Conflict):
             status, description = 409, exc.message
         elif isinstance(exc, NetworkError | TelegramError):
-            status, description = None, f"{type(exc).__name__}: {exc.message}"
+            description = self._redact(f"{type(exc).__name__}: {exc.message}")
+            if isinstance(exc.__cause__, _CONNECT_PHASE):
+                return TelegramNotSentError(None, description)
+            status = None
         else:
             status, description = None, f"{type(exc).__name__}: {exc}"
         return TelegramApiError(status, self._redact(description), retry_after)
@@ -245,11 +266,11 @@ class PtbTelegramApi:
         await self._call(lambda: self._bot.answer_callback_query(callback_id, text=text))
 
     async def aclose(self) -> None:
-        try:
-            if self._requests:
-                for request in self._requests:
-                    await request.shutdown()
-            else:
-                await self._bot.shutdown()
-        except Exception as exc:
-            raise self._error(exc) from None
+        await self._call(self._shutdown)
+
+    async def _shutdown(self) -> None:
+        if self._requests:
+            for request in self._requests:
+                await request.shutdown()
+        else:
+            await self._bot.shutdown()

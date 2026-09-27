@@ -13,7 +13,7 @@ import telegram
 from pydantic import SecretStr
 from structlog.testing import capture_logs
 
-from trader.adapters.telegram.api import PtbTelegramApi
+from trader.adapters.telegram.api import PtbTelegramApi, TelegramNotSentError
 from trader.adapters.telegram.types import TelegramApi, TelegramApiError
 from trader.notify.types import Button
 
@@ -240,9 +240,13 @@ async def test_403_and_5xx() -> None:
         await client.send_message(CHAT, "x")
 
     assert forbidden.value.status == 403
-    # A server error is treated like a network error (retryable): status None, the code in the text.
+    assert not isinstance(forbidden.value, TelegramNotSentError)
+    # A server error is treated like a network error that surely did not deliver (retryable): status
+    # None, the code in a clean text.
     assert gateway.value.status is None
-    assert "502" in gateway.value.description
+    assert isinstance(gateway.value, TelegramNotSentError)
+    assert gateway.value.description == "Telegram server error 502: Bad Gateway"
+    assert str(gateway.value) == "None Telegram server error 502: Bad Gateway"  # the T1 contract's str
 
 
 # --- 4. transport errors never carry the token ------------------------------------------------------
@@ -275,6 +279,42 @@ async def test_timeout_is_status_none() -> None:
 
     assert exc.value.status is None
     assert TOKEN not in exc.value.description
+    # the request may have reached Telegram: never marked as surely not sent
+    assert not isinstance(exc.value, TelegramNotSentError)
+    assert getattr(exc.value, "not_sent", False) is False
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "not_sent"),
+    [
+        (httpx.ConnectError("refused"), True),
+        (httpx.ConnectTimeout("slow connect"), True),
+        (httpx.PoolTimeout("pool full"), True),
+        (httpx.ReadTimeout("slow read"), False),
+        (httpx.WriteTimeout("slow write"), False),
+        (httpx.ReadError("connection reset"), False),
+        (httpx.RemoteProtocolError("server disconnected"), False),
+    ],
+)
+async def test_only_connect_phase_errors_are_marked_not_sent(side_effect: Exception, not_sent: bool) -> None:
+    with respx.mock() as router:
+        router.post(f"{BASE}/sendMessage").mock(side_effect=side_effect)
+        with pytest.raises(TelegramApiError) as exc:
+            await api().send_message(CHAT, "x")
+    assert exc.value.status is None
+    assert isinstance(exc.value, TelegramNotSentError) is not_sent
+
+
+async def test_aclose_failure_carries_no_context() -> None:
+    class FailingShutdown:
+        async def shutdown(self) -> None:
+            raise telegram.error.NetworkError(f"shutdown failed for {BASE}")
+
+    client = PtbTelegramApi(SecretStr(TOKEN), bot=cast(telegram.Bot, FailingShutdown()))
+    with pytest.raises(TelegramApiError) as exc:
+        await client.aclose()
+    assert exc.value.__cause__ is None and exc.value.__context__ is None
+    assert TOKEN not in "".join(traceback.format_exception(exc.value))
 
 
 class RaisingBot:

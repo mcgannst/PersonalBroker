@@ -5,8 +5,19 @@ writes a heartbeat, and refuses to run twice (SPEC §1, §6, §7.2, §9; BR-31, 
 Nothing is held in memory that the database doesn't have: which events are settled comes from `fired`
 (job_runs), the relay resumes from its cursors, the engine re-reads working orders and pending proposals.
 So a worker restarted mid-session carries on without firing or sending anything twice. Every part of a
-step is guarded: an exception is logged (structlog plus one `error` event, source `worker`) and the step
-goes on; the loop itself never dies on the engine, the relay or the database.
+step is guarded: an exception is logged and the step goes on; the loop itself never dies on the engine,
+the relay, the settings or the database.
+
+Four asyncio tasks run side by side, so none can delay another (Telegram never blocks trading):
+- the step loop (events, quotes, ticks, the session end) at `quote_poll_seconds` in the session;
+- the relay loop (`relay()`, which talks to Telegram) at the same cadence, with a last pump on stop;
+- the heartbeat loop, every `worker.heartbeat_seconds`, which also re-checks the single-instance lock;
+- the bot (long polling), restarted 30 s after it dies.
+
+Failure alerts (fix round 1): a part that fails writes ONE `error` event when its failure streak starts,
+one `critical` event at FAILED_STEPS_CRITICAL consecutive failures, and one `info` "recovered after N
+failures" event when it next succeeds; nothing per step in between (the relay turns every error event
+into a phone alert).
 """
 
 import argparse
@@ -29,7 +40,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from trader.db.models import WorkerHeartbeat
 from trader.db.session import session_scope
-from trader.engine.scheduler import DayPlan, FireResult
+from trader.engine.scheduler import DayPlan, FireResult, due_events
 from trader.events import log_event
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock, et_date
@@ -40,11 +51,12 @@ log = structlog.get_logger("worker")
 
 LOCK_NAME = "trader.worker"
 PRE_OPEN_LEAD = timedelta(seconds=60)  # the session loop starts this long before the open
-BOT_RESTART_SECONDS = 30.0
-FAILED_STEPS_CRITICAL = 10
+BOT_RESTART_SECONDS = 30.0  # a dead bot (or relay/heartbeat loop) is restarted after this long
+FAILED_STEPS_CRITICAL = 10  # consecutive failures of one part that raise one critical event
 BOT_STOP_GRACE_SECONDS = 5.0  # on top of one Telegram poll timeout
+RELAY_STOP_SECONDS = 15.0  # the relay's last pump on stop may take this long (real time) at most
 MAX_ERROR_CHARS = 500
-_BEAT_SLACK_SECONDS = 0.05  # a real sleep may wake a hair early by the wall clock
+EXIT_LOCK_LOST = 3  # `run` exits with this code when another worker took the lock
 
 
 class WorkerEngine(Protocol):
@@ -81,6 +93,9 @@ class WorkerDeps:
 
 @dataclass(frozen=True, slots=True)
 class StepReport:
+    """One step. `relayed` is kept for the contract but is always False since fix round 1: the relay
+    runs as its own task beside the step loop (a `--once` run pumps it once after its step)."""
+
     now: datetime
     phase: SessionPhase
     fired: list[FireResult]
@@ -116,11 +131,21 @@ def release_single_instance(conn: Connection) -> None:
     never goes back to the pool still holding the lock."""
     try:
         conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _lock_key()})
-    except Exception:
-        log.exception("worker.unlock_failed")
+    except Exception as exc:
+        log.warning("worker.unlock_failed", error=_describe(exc))
         conn.invalidate()
     finally:
         conn.close()
+
+
+def still_holds_lock(conn: Connection) -> bool:
+    """Whether `conn` still holds the worker lock: a re-entrant pg_try_advisory_lock on the same
+    connection (granted when this session holds it), then an unlock of the extra level. Raises when the
+    connection is dead."""
+    granted = bool(conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": _lock_key()}).scalar_one())
+    if granted:
+        conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _lock_key()})
+    return granted
 
 
 def _describe(exc: BaseException) -> str:
@@ -149,12 +174,16 @@ class Worker:
         self._ended: date | None = None
         self._fills_today = 0
         self._last_event: str | None = None
-        self._step_errors = 0
-        self._failed_steps = 0
+        self._streaks: dict[str, int] = {}  # consecutive failures per part
+        self._good_settings: RuntimeSettings | None = None
+        self._settings_failing = False
+        self._beat_failing = False
         self._started_at: datetime | None = None
-        self._last_beat: datetime | None = None
         self._hb_phase = "idle"
         self._hb_session: date | None = None
+        self._lock: Connection | None = None
+        self._lock_lost = False
+        self._exit_code: int | None = None
 
     # --- one iteration --------------------------------------------------------------------------------
 
@@ -163,7 +192,6 @@ class Worker:
         cal = self.deps.calendar
         phase = session_phase(cal, now)
         day = et_date(now)
-        self._step_errors = 0
         fired: list[FireResult] = []
         fills = 0
         ended = False
@@ -182,9 +210,7 @@ class Worker:
         else:
             self._hb_phase = "idle"
             self._hb_session = day if phase != "closed_day" else None
-        relayed = await self._relay()
-        self._count_step()
-        return StepReport(now, phase, fired, fills, relayed, ended)
+        return StepReport(now, phase, fired, fills, False, ended)
 
     async def _open_engine(self, day: date) -> WorkerEngine:
         """Today's engine, built once per session (rebuilt each session so settings changes apply)."""
@@ -196,10 +222,12 @@ class Worker:
 
     async def _guarded_engine(self, day: date) -> WorkerEngine | None:
         try:
-            return await self._open_engine(day)
+            engine = await self._open_engine(day)
         except Exception as exc:
             self._failed("engine", exc)
             return None
+        self._ok("engine")
+        return engine
 
     def _plan_for(self, day: date) -> DayPlan:
         if self._plan is None or self._plan.session_date != day:
@@ -207,23 +235,23 @@ class Worker:
         return self._plan
 
     async def _fire_due(self, day: date, now: datetime) -> list[FireResult]:
-        """Offer every due, unsettled event to `fire`, in time order (the plan is sorted). `fire` owns
-        idempotency and lateness; `fired` reads the settled keys from the database."""
+        """Offer every due, unsettled event to `fire`, in time order. `fire` owns idempotency and
+        lateness; `fired` reads the settled keys from the database."""
         try:
-            plan = self._plan_for(day)
-            settled = self.deps.fired(day)
+            due = due_events(self._plan_for(day), now, self.deps.fired(day))
         except Exception as exc:
             self._failed("plan", exc)
             return []
+        self._ok("plan")
         results: list[FireResult] = []
-        for event in plan.events:
-            if event.at > now or event.key in settled:
-                continue
+        for event in due:
+            streak = f"fire:{event.key}"
             try:
                 result = await self.deps.fire(event.key, day)
             except Exception as exc:
-                self._failed("fire", exc, key=event.key)
+                self._failed("fire", exc, streak=streak, key=event.key)
                 continue
+            self._ok("fire", streak=streak, key=event.key)
             results.append(result)
             if result.status == "fired":
                 self._last_event = event.key
@@ -235,6 +263,7 @@ class Worker:
         except Exception as exc:
             self._failed("poll_quotes", exc)
             return 0
+        self._ok("poll_quotes")
         self._fills_today += fills
         return fills
 
@@ -243,6 +272,8 @@ class Worker:
             await engine.tick(now)
         except Exception as exc:
             self._failed("tick", exc)
+        else:
+            self._ok("tick")
 
     async def _end_session(self, day: date) -> None:
         """Once per session day, whatever the outcome: `end_session` (run_job_async in T12) records it,
@@ -258,6 +289,8 @@ class Worker:
             await self.deps.end_session(day, body)
         except Exception as exc:
             self._failed("end_session", exc)
+        else:
+            self._ok("end_session")
 
     async def _relay(self) -> bool:
         if self.deps.relay is None:
@@ -267,39 +300,77 @@ class Worker:
         except Exception as exc:
             self._failed("relay", exc)
             return False
+        self._ok("relay")
         return True
 
-    # --- errors -----------------------------------------------------------------------------------------
+    # --- errors: one event per failure streak -----------------------------------------------------------
 
-    def _failed(self, part: str, exc: Exception, *, count: bool = True, **fields: Any) -> None:
-        if count:
-            self._step_errors += 1
+    def _failed(self, part: str, exc: Exception, *, streak: str | None = None, **fields: Any) -> None:
+        """Count a failure of `part`. The first of a streak writes one `error` event and logs the
+        traceback; the FAILED_STEPS_CRITICAL-th writes one `critical` event; the rest only log a line."""
+        key = streak or part
+        n = self._streaks.get(key, 0) + 1
+        self._streaks[key] = n
         if part == "bot":
             # Telegram's client puts the token in URLs: log the type only, never the text or a traceback.
-            log.error("worker.part_failed", part=part, error_type=type(exc).__name__, **fields)
-            message = f"worker {part} failed: {type(exc).__name__}"
+            detail = type(exc).__name__
         else:
-            log.error("worker.part_failed", part=part, exc_info=exc, **fields)
-            message = f"worker {part} failed: {_describe(exc)}"
-        self._event("error", message, {"part": part, **fields})
+            detail = _describe(exc)
+        if n == 1:
+            if part == "bot":
+                log.error("worker.part_failed", part=part, error_type=detail, **fields)
+            else:
+                log.error("worker.part_failed", part=part, exc_info=exc, **fields)
+            self._event("error", f"worker {part} failed: {detail}", {"part": part, **fields})
+        else:
+            log.warning("worker.part_still_failing", part=part, failures=n, error=detail, **fields)
+        if n == FAILED_STEPS_CRITICAL:
+            log.critical("worker.failing", part=part, failures=n, **fields)
+            self._event(
+                "critical",
+                f"worker {part} failed {n} times in a row: {detail}",
+                {"part": part, "failures": n, **fields},
+            )
 
-    def _count_step(self) -> None:
-        if not self._step_errors:
-            self._failed_steps = 0
-            return
-        self._failed_steps += 1
-        if self._failed_steps == FAILED_STEPS_CRITICAL:
-            log.critical("worker.failing", steps=self._failed_steps)
-            self._event("critical", f"worker: {FAILED_STEPS_CRITICAL} consecutive steps failed", {})
+    def _ok(self, part: str, *, streak: str | None = None, **fields: Any) -> None:
+        """A success of `part`: ends its failure streak with one `info` event."""
+        n = self._streaks.pop(streak or part, 0)
+        if n:
+            log.info("worker.part_recovered", part=part, failures=n, **fields)
+            self._event(
+                "info", f"worker {part} recovered after {n} failures", {"part": part, "failures": n, **fields}
+            )
 
     def _event(self, level: str, message: str, data: dict[str, Any]) -> None:
         try:
             with session_scope(self.deps.factory) as s:
                 log_event(s, self.deps.clock, level, "worker", message, data)
-        except Exception:
-            log.exception("worker.event_failed", level=level)
+        except Exception as exc:
+            log.warning("worker.event_failed", level=level, error=_describe(exc))
 
-    # --- heartbeat --------------------------------------------------------------------------------------
+    # --- settings ---------------------------------------------------------------------------------------
+
+    def _settings(self) -> RuntimeSettings:
+        """The runtime settings; on a failed read the last good ones (defaults if there never was a good
+        read). A failure streak logs one warning."""
+        try:
+            settings = self.deps.settings()
+        except Exception as exc:
+            if not self._settings_failing:
+                self._settings_failing = True
+                log.warning(
+                    "worker.settings_unavailable",
+                    error=_describe(exc),
+                    fallback="last_good" if self._good_settings is not None else "defaults",
+                )
+            return self._good_settings if self._good_settings is not None else RuntimeSettings()
+        if self._settings_failing:
+            self._settings_failing = False
+            log.info("worker.settings_recovered")
+        self._good_settings = settings
+        return settings
+
+    # --- heartbeat and lock -----------------------------------------------------------------------------
 
     def _beat(self, phase: str) -> None:
         now = self.deps.clock.now()
@@ -321,26 +392,62 @@ class Worker:
         try:
             with session_scope(self.deps.factory) as s:
                 s.execute(stmt)
-        except Exception:
-            log.exception("worker.heartbeat_failed", phase=phase)
+        except Exception as exc:
+            if not self._beat_failing:  # once per failure streak, not on every retry
+                self._beat_failing = True
+                log.error("worker.heartbeat_failed", phase=phase, error=_describe(exc))
             return
-        self._last_beat = now
+        if self._beat_failing:
+            self._beat_failing = False
+            log.info("worker.heartbeat_recovered", phase=phase)
 
-    def _seconds_to_beat(self) -> float:
-        every = float(self.deps.settings().worker_heartbeat_seconds)
-        if self._last_beat is None:
-            return 0.0
-        return every - (self.deps.clock.now() - self._last_beat).total_seconds()
+    def _check_lock(self, stop: asyncio.Event) -> bool:
+        """True while this worker holds the single-instance lock. A dead lock connection is replaced by a
+        new one that re-takes the lock; when another worker holds it, write a critical event, set `stop`
+        and remember the exit code. When the database can't be reached at all, try again next time."""
+        if self._lock is not None:
+            try:
+                if still_holds_lock(self._lock):
+                    return True
+            except Exception as exc:
+                log.warning("worker.lock_connection_lost", error=_describe(exc))
+            else:
+                return self._lost_lock(stop)  # the connection lives but another session holds the lock
+            try:
+                self._lock.invalidate()
+                self._lock.close()
+            except Exception as exc:
+                log.debug("worker.lock_close_failed", error=_describe(exc))
+            self._lock = None
+        bind = self.deps.factory.kw.get("bind")
+        if not isinstance(bind, sqlalchemy.Engine):
+            return self._lost_lock(stop)
+        try:
+            conn = acquire_single_instance(bind)
+        except Exception as exc:
+            log.warning("worker.lock_retake_failed", error=_describe(exc))
+            return False  # nobody can take it while the database is unreachable; retry next heartbeat
+        if conn is None:
+            return self._lost_lock(stop)
+        self._lock = conn
+        log.warning("worker.lock_retaken")
+        self._event("warning", "worker lock connection was lost; the lock was taken again", {})
+        return True
 
-    def _beat_if_due(self) -> None:
-        if self._seconds_to_beat() <= _BEAT_SLACK_SECONDS:
-            self._beat(self._hb_phase)
+    def _lost_lock(self, stop: asyncio.Event) -> bool:
+        self._lock_lost = True
+        self._exit_code = EXIT_LOCK_LOST
+        log.critical("worker.lock_lost", process=self.deps.process)
+        self._event("critical", "worker lost its single-instance lock to another worker; stopping", {})
+        stop.set()
+        return False
 
     # --- the loop ---------------------------------------------------------------------------------------
 
     async def run(self, stop: asyncio.Event, *, once: bool = False) -> None:
-        """Run until `stop` is set (SIGTERM and SIGINT set it), or one step with `once`, which never starts
-        the bot. A second worker exits at once with SystemExit(2), before doing anything else."""
+        """Run until `stop` is set (SIGTERM and SIGINT set it), or one step (plus one relay pump) with
+        `once`, which never starts the bot. A second worker exits at once with SystemExit(2), before doing
+        anything else; a worker that loses its lock to another stops cleanly with SystemExit(3)."""
         bind = self.deps.factory.kw.get("bind")
         if not isinstance(bind, sqlalchemy.Engine):
             raise TypeError("the worker needs a sessionmaker bound to an Engine")
@@ -348,53 +455,95 @@ class Worker:
         if lock is None:
             log.critical("worker.already_running", process=self.deps.process)
             raise SystemExit(2)
-        bot_task: asyncio.Task[None] | None = None
+        self._lock = lock
+        tasks: dict[str, asyncio.Task[None]] = {}
         removers: list[Callable[[], object]] = []
         try:
             self._started_at = self.deps.clock.now()
             self._beat("starting")
             if once:
                 await self.step()
+                await self._relay()
                 return
             removers = _install_signal_handlers(stop)
+            tasks["heartbeat"] = asyncio.create_task(
+                self._supervise("heartbeat_loop", self._heartbeat_loop, stop)
+            )
+            if self.deps.relay is not None:
+                tasks["relay"] = asyncio.create_task(self._supervise("relay_loop", self._relay_loop, stop))
             if self.deps.bot is not None:
-                bot_task = asyncio.create_task(self._supervise_bot(stop))
+                tasks["bot"] = asyncio.create_task(self._supervise("bot", self.deps.bot, stop))
             while not stop.is_set():
                 await self.step()
-                self._beat_if_due()
-                await self._pause(self._interval(), stop)
+                if stop.is_set():
+                    break
+                await self._sleep_or_stop(self._interval(), stop)
         finally:
             stop.set()
-            if bot_task is not None:
-                await self._finish_bot(bot_task)
-            self._beat("stopped")
-            release_single_instance(lock)
-            for remove in removers:
-                remove()
+            await self._shutdown(tasks, removers)
+        if self._exit_code is not None:
+            raise SystemExit(self._exit_code)
+
+    async def _shutdown(
+        self, tasks: dict[str, asyncio.Task[None]], removers: list[Callable[[], object]]
+    ) -> None:
+        """Each step runs even if an earlier one fails: heartbeat `stopping`, the relay's last pump and
+        the bot (bounded), heartbeat `stopped` (not when another worker owns the row now), the lock, the
+        signal handlers."""
+        try:
+            if not self._lock_lost:
+                self._beat("stopping")
+            timeout = self._settings().telegram_poll_timeout_seconds + BOT_STOP_GRACE_SECONDS
+            await asyncio.gather(
+                self._finish(tasks.get("relay"), RELAY_STOP_SECONDS),
+                self._finish(tasks.get("bot"), timeout),
+                self._finish(tasks.get("heartbeat"), 0),
+            )
+        finally:
+            try:
+                if not self._lock_lost:
+                    self._beat("stopped")
+            finally:
+                try:
+                    if self._lock is not None:
+                        release_single_instance(self._lock)
+                        self._lock = None
+                except Exception as exc:
+                    log.warning("worker.release_failed", error=_describe(exc))
+                finally:
+                    for remove in removers:
+                        try:
+                            remove()
+                        except Exception as exc:
+                            log.warning("worker.signal_restore_failed", error=_describe(exc))
+
+    @staticmethod
+    async def _finish(task: asyncio.Task[None] | None, timeout: float) -> None:
+        """Wait for a task to see `stop` (up to `timeout` real seconds), then cancel it."""
+        if task is None:
+            return
+        if timeout > 0:
+            await asyncio.wait({task}, timeout=timeout)
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     def _interval(self) -> float:
-        settings = self.deps.settings()
+        settings = self._settings()
         if self._hb_phase == "session":
             return float(settings.quote_poll_seconds)
         idle = float(settings.worker_idle_poll_seconds)
         now = self.deps.clock.now()
         cal = self.deps.calendar
         day = et_date(now)
-        if session_phase(cal, now) == "pre_market":
-            # wake in time for the session loop, however long the idle poll is
-            until = (cal.session_open(day) - PRE_OPEN_LEAD - now).total_seconds()
-            idle = min(idle, max(until, float(settings.quote_poll_seconds)))
-        return idle
-
-    async def _pause(self, seconds: float, stop: asyncio.Event) -> None:
-        """Sleep `seconds` (stop cuts it short), beating the heartbeat on time in between."""
-        remaining = seconds
-        while remaining > 0 and not stop.is_set():
-            chunk = min(remaining, max(self._seconds_to_beat(), 0.5))
-            await self._sleep_or_stop(chunk, stop)
-            remaining -= chunk
-            if not stop.is_set():
-                self._beat_if_due()
+        try:
+            pre_market = session_phase(cal, now) == "pre_market"
+            until = (cal.session_open(day) - PRE_OPEN_LEAD - now).total_seconds() if pre_market else idle
+        except Exception as exc:
+            log.warning("worker.interval_failed", error=_describe(exc))
+            return idle
+        # wake in time for the session loop, however long the idle poll is
+        return min(idle, max(until, float(settings.quote_poll_seconds)))
 
     async def _sleep_or_stop(self, seconds: float, stop: asyncio.Event) -> None:
         if stop.is_set():
@@ -408,29 +557,42 @@ class Worker:
                 task.cancel()
             await asyncio.gather(sleeper, waiter, return_exceptions=True)
 
-    async def _supervise_bot(self, stop: asyncio.Event) -> None:
-        """The bot runs beside the quote loop, so long polling never delays it; a bot that dies is logged
-        and restarted after 30 s."""
-        bot = self.deps.bot
-        assert bot is not None
+    async def _supervise(
+        self, part: str, body: Callable[[asyncio.Event], Awaitable[None]], stop: asyncio.Event
+    ) -> None:
+        """Run `body(stop)` beside the step loop; one that raises is logged and restarted after 30 s,
+        one that returns before `stop` is restarted the same way."""
         while not stop.is_set():
             try:
-                await bot(stop)
+                await body(stop)
             except Exception as exc:
-                self._failed("bot", exc, count=False)
+                self._failed(part, exc)
             else:
                 if stop.is_set():
                     return
-                log.warning("worker.bot_returned")
+                log.warning("worker.task_returned", part=part)
             await self._sleep_or_stop(BOT_RESTART_SECONDS, stop)
 
-    async def _finish_bot(self, task: asyncio.Task[None]) -> None:
-        """Wait for the bot to see `stop` (up to one poll timeout), then cancel it."""
-        timeout = self.deps.settings().telegram_poll_timeout_seconds + BOT_STOP_GRACE_SECONDS
-        _, pending = await asyncio.wait({task}, timeout=timeout)
-        for t in pending:
-            t.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+    async def _relay_loop(self, stop: asyncio.Event) -> None:
+        """Pump the relay on the step cadence, then once more when `stop` is set (so alerts recorded by
+        the last step go out), unless another worker has taken over."""
+        while True:
+            await self._relay()
+            if stop.is_set():
+                return
+            await self._sleep_or_stop(self._interval(), stop)
+            if self._lock_lost:
+                return
+
+    async def _heartbeat_loop(self, stop: asyncio.Event) -> None:
+        """Beat every `worker.heartbeat_seconds`, whatever the step loop is doing, after checking the
+        single-instance lock is still ours."""
+        while not stop.is_set():
+            await self._sleep_or_stop(float(self._settings().worker_heartbeat_seconds), stop)
+            if stop.is_set():
+                return
+            if self._check_lock(stop):
+                self._beat(self._hb_phase)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -442,7 +604,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         return asyncio.run(runtime.run_worker(once=args.once))
-    except SystemExit as exc:  # a refused second worker exits 2
+    except SystemExit as exc:  # a refused second worker exits 2, one that lost its lock 3
         if exc.code is None:
             return 0
         return exc.code if isinstance(exc.code, int) else 1

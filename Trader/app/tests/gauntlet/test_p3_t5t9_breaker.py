@@ -477,7 +477,12 @@ async def test_t9_persistent_step_failure_gives_one_critical_and_no_alert_flood(
 ) -> None:
     """Two minutes of a quote feed that fails on every 2 s step: exactly one critical event, and not one
     alert-level event per step (the relay turns every worker error/critical event into a Telegram alert,
-    so 60 events would be 60 phone alerts in two minutes)."""
+    so 60 events would be 60 phone alerts in two minutes).
+
+    Adapted in the P3-T5/T9 fix round to the orchestrator's ruling 4 (which replaced the plan's "one error
+    event per failing part per step" rule): one `error` event when the streak starts, one `critical` at
+    FAILED_STEPS_CRITICAL consecutive failures, nothing in between, and one `info` "recovered after N
+    failures" event when the part succeeds again."""
     clock = FixedClock(et(TUE, 10, 0))
     h = Harness(db_factory, clock)
 
@@ -496,6 +501,14 @@ async def test_t9_persistent_step_failure_gives_one_critical_and_no_alert_flood(
     assert len(alerts) <= FAILED_STEPS_CRITICAL + 1, (
         f"{len(alerts)} alert-level worker events in two minutes; each becomes a Telegram alert"
     )
+    assert levels == ["error", "critical"]  # ruling 4: one error at the start, one critical at 10
+    h.engines[0].poll_error = None
+    for _ in range(5):
+        await w.step()
+        clock.advance(timedelta(seconds=2))
+    events = _events(db_factory)
+    assert [e.level for e in events] == ["error", "critical", "info"]
+    assert events[-1].message == "worker poll_quotes recovered after 60 failures"
 
 
 @pytest.mark.db

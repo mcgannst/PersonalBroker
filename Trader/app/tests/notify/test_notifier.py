@@ -9,11 +9,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from structlog.testing import capture_logs
 
 from tests.fakes_telegram import FakeTelegramApi
+from trader.adapters.telegram.api import TelegramNotSentError
 from trader.adapters.telegram.types import TelegramApiError
 from trader.db.models import EventLog, Notification
 from trader.market.clock import FixedClock
 from trader.notify.notifier import NullNotifier, TelegramNotifier, split_text
-from trader.notify.types import Button, Notifier, OutboundMessage
+from trader.notify.types import Button, Buttons, Notifier, OutboundMessage
 
 NOW = datetime(2026, 10, 6, 13, 40, tzinfo=UTC)
 CHAT = 424242
@@ -79,6 +80,32 @@ def test_split_without_line_breaks_cuts_hard() -> None:
     assert "".join(parts) == "z" * 9000
 
 
+def test_split_prefers_spaces_when_there_is_no_line_break() -> None:
+    text = " ".join(["word"] * 30)  # 149 characters
+    parts = split_text(text, limit=50)
+    assert all(len(p) <= 50 for p in parts)
+    assert " ".join(parts) == text
+    assert all(p.startswith("word") and p.endswith("word") for p in parts)
+
+
+def test_split_closes_and_reopens_tags_across_parts() -> None:
+    text = '<b>bold <a href="https://x/y?a=1&amp;b=2">' + "link " * 30 + "</a> tail</b>"
+    parts = split_text(text, limit=80)
+    assert len(parts) > 2 and all(len(p) <= 80 for p in parts)
+    for p in parts:
+        assert p.startswith("<b>") and p.endswith("</b>")
+        assert p.count("<a ") == p.count("</a>") <= 1
+        assert p.count("<b>") == p.count("</b>") == 1
+    assert parts[1].startswith('<b><a href="https://x/y?a=1&amp;b=2">')
+
+
+def test_split_never_cuts_an_entity_and_drops_blank_parts() -> None:
+    parts = split_text("a" * 8 + "&amp;" + "b" * 3 + "\n\n   \n", limit=10)
+    assert [p.strip() for p in parts] == ["a" * 8, "&amp;bbb"]
+    assert split_text("") == [] and split_text(" \n ") == []
+    assert split_text("x" * 20 + "\n" + " " * 30, limit=20) == ["x" * 20]
+
+
 # --- 10. NullNotifier -------------------------------------------------------------------------------
 
 
@@ -140,16 +167,80 @@ async def test_same_dedupe_key_reaches_api_once(db_factory: sessionmaker[Session
 
 
 @pytest.mark.db
-async def test_failed_send_keeps_key_used(db_factory: sessionmaker[Session]) -> None:
-    """At most once: a key whose send failed is not tried again by a later send."""
+async def test_failed_send_may_be_retried_by_a_later_send_up_to_three_times(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """Fix round 1: a `failed` row (surely not delivered) is claimed again by a later send with the same
+    key, up to three sends in total; a key that finally went out is never sent again."""
     notifier, api, _ = make(db_factory)
-    api.fail("send_message", TelegramApiError(403, "Forbidden: bot was blocked by the user"))
+    api.fail("send_message", TelegramApiError(403, "Forbidden: bot was blocked by the user"), times=3)
 
-    await notifier.send(OutboundMessage(kind="alert", text="x", dedupe_key="alert:1"))
-    await notifier.send(OutboundMessage(kind="alert", text="x", dedupe_key="alert:1"))
+    for _ in range(5):
+        await notifier.send(OutboundMessage(kind="alert", text="x", dedupe_key="alert:1"))
+
+    assert len(api.calls_of("send_message")) == 3
+    (row,) = rows(db_factory)
+    assert (row.status, row.attempts) == ("failed", 3)
+    events_ = events(db_factory)
+    assert len(events_) == 3
+    assert [e.data["retry_later"] for e in events_] == [True, True, False]
+
+
+@pytest.mark.db
+async def test_429_storm_does_not_lose_the_alert_for_good(db_factory: sessionmaker[Session]) -> None:
+    notifier, api, sleep = make(db_factory)
+    api.fail(
+        "send_message", TelegramApiError(429, "Too Many Requests: retry after 5", retry_after=5), times=2
+    )
+
+    await notifier.send(OutboundMessage(kind="kill_switch", text="k", dedupe_key="event:9"))
+    (row,) = rows(db_factory)
+    assert (row.status, row.attempts, row.message_ids) == ("failed", 1, None)
+    await notifier.send(OutboundMessage(kind="kill_switch", text="k", dedupe_key="event:9"))
+    await notifier.send(OutboundMessage(kind="kill_switch", text="k", dedupe_key="event:9"))
+
+    assert len(api.calls_of("send_message")) == 3  # 429, 429 (the in-send retry), then sent
+    (row,) = rows(db_factory)
+    assert (row.status, row.attempts, row.message_ids, row.error) == ("sent", 2, [1], None)
+    assert sleep.waits == [5, 1.0]  # the 429 wait, then the 1 s spacing before the next send
+
+
+@pytest.mark.db
+async def test_read_timeout_is_unknown_and_never_resent(db_factory: sessionmaker[Session]) -> None:
+    """A read timeout may have delivered the message: no retry, status `unknown`, never sent again."""
+    notifier, api, sleep = make(db_factory)
+    api.fail("send_message", TelegramApiError(None, "TimedOut: Timed out"))
+
+    await notifier.send(OutboundMessage(kind="fill", text="x", dedupe_key="fill:5"))
+    await notifier.send(OutboundMessage(kind="fill", text="x", dedupe_key="fill:5"))
 
     assert len(api.calls_of("send_message")) == 1
-    assert [r.status for r in rows(db_factory)] == ["failed"]
+    assert sleep.waits == []
+    (row,) = rows(db_factory)
+    assert (row.status, row.error) == ("unknown", "TimedOut: Timed out")
+    (event,) = events(db_factory)
+    assert event.level == "warning" and "may or may not have been delivered" in event.message
+
+
+@pytest.mark.db
+async def test_partly_delivered_message_is_never_claimed_again(db_factory: sessionmaker[Session]) -> None:
+    class SecondPartRefused(FakeTelegramApi):
+        async def send_message(
+            self, chat_id: int, text: str, buttons: Buttons = (), silent: bool = False
+        ) -> int:
+            if len(self.calls_of("send_message")) == 1:
+                self.fail("send_message", TelegramApiError(400, "Bad Request: can't parse entities"))
+            return await super().send_message(chat_id, text, buttons, silent)
+
+    notifier, api, _ = make(db_factory, SecondPartRefused())
+    text = "\n".join(f"row {i:04d} " + "q" * 80 for i in range(100))
+
+    await notifier.send(OutboundMessage(kind="daily_summary", text=text, dedupe_key="summary:1"))
+    await notifier.send(OutboundMessage(kind="daily_summary", text=text, dedupe_key="summary:1"))
+
+    assert len(api.calls_of("send_message")) == 2
+    (row,) = rows(db_factory)
+    assert (row.status, row.message_ids) == ("failed", [1])
 
 
 @pytest.mark.db
@@ -185,7 +276,7 @@ async def test_429_waits_retry_after_then_sends_once(db_factory: sessionmaker[Se
     assert len(api.calls_of("send_message")) == 2  # the failed attempt and the retry
     assert sleep.waits == [3]
     (row,) = rows(db_factory)
-    assert (row.status, row.message_ids, row.attempts) == ("sent", [1], 2)
+    assert (row.status, row.message_ids, row.attempts) == ("sent", [1], 1)  # attempts counts sends
     assert events(db_factory) == []
 
 
@@ -201,28 +292,41 @@ async def test_429_wait_is_capped(db_factory: sessionmaker[Session]) -> None:
 
 
 @pytest.mark.db
-async def test_network_error_waits_two_seconds_and_retries_once(db_factory: sessionmaker[Session]) -> None:
+@pytest.mark.parametrize(
+    "exc",
+    [
+        TelegramNotSentError(None, "NetworkError: httpx.ConnectError: connection refused"),
+        TelegramNotSentError(None, "Telegram server error 502: Bad Gateway"),
+    ],
+    ids=["connect", "5xx"],
+)
+async def test_surely_unsent_error_waits_two_seconds_and_retries_once(
+    db_factory: sessionmaker[Session], exc: TelegramApiError
+) -> None:
     notifier, api, sleep = make(db_factory)
-    api.fail("send_message", TelegramApiError(None, "TimedOut: Timed out"), times=2)
+    api.fail("send_message", exc, times=2)
 
     await notifier.send(OutboundMessage(kind="alert", text="x"))
 
     assert len(api.calls_of("send_message")) == 2
     assert sleep.waits == [2]
     (row,) = rows(db_factory)
-    assert (row.status, row.error) == ("failed", "None TimedOut: Timed out")
+    assert (row.status, row.error) == ("failed", exc.description)  # reads cleanly: no "None ..."
     assert len(events(db_factory)) == 1
 
 
 @pytest.mark.db
 async def test_api_raising_on_every_call_never_raises(db_factory: sessionmaker[Session]) -> None:
+    """An unexpected exception may have happened after the request went out: `unknown`, not retried."""
     notifier, api, _ = make(db_factory)
     api.fail("send_message", RuntimeError("unexpected"), times=10)
 
     await notifier.send(OutboundMessage(kind="alert", text="x"))
     await notifier.send(OutboundMessage(kind="alert", text="y", dedupe_key="k"))
+    await notifier.send(OutboundMessage(kind="alert", text="y", dedupe_key="k"))
 
-    assert [r.status for r in rows(db_factory)] == ["failed", "failed"]
+    assert len(api.calls_of("send_message")) == 2
+    assert [r.status for r in rows(db_factory)] == ["unknown", "unknown"]
     assert rows(db_factory)[0].error == "RuntimeError"
 
 

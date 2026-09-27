@@ -10,6 +10,8 @@ import asyncio
 import heapq
 import itertools
 import os
+import signal
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -17,8 +19,9 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import Engine, select
+from sqlalchemy import Connection, Engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
+from structlog.testing import capture_logs
 
 from trader import worker as worker_mod
 from trader.db.models import EventLog, WorkerHeartbeat
@@ -254,14 +257,15 @@ async def test_session_step_polls_ticks_relays_once_and_sleeps_quote_poll(
     stop = asyncio.Event()
     h.on_relay = lambda: stop.set() if len(h.relay_calls) >= 6 else None
     w = Worker(h.deps())
-    report = await w.step()  # one step on its own: each part exactly once
-    assert (len(h.engines[0].polls), len(h.engines[0].ticks), len(h.relay_calls)) == (1, 1, 1)
-    assert report.relayed and report.phase == "open"
-    h.relay_calls.clear()
+    report = await w.step()  # one step on its own: each part exactly once, and no Telegram in it
+    assert (len(h.engines[0].polls), len(h.engines[0].ticks), len(h.relay_calls)) == (1, 1, 0)
+    assert not report.relayed and report.phase == "open"
     await _run(w, stop, vt)
     eng = h.engines[0]
-    assert len(eng.polls) == len(eng.ticks) == 1 + len(h.relay_calls) == 7
+    # the relay runs as its own task on the step cadence
+    assert len(h.relay_calls) == 6 and len(eng.polls) == len(eng.ticks) == 7
     assert _gaps(h.relay_calls) == {h.settings.quote_poll_seconds}
+    assert _gaps(eng.polls[1:]) == {h.settings.quote_poll_seconds}  # [0] is the lone step above
 
 
 async def test_saturday_step_only_relays_and_sleeps_idle_poll(db_factory: sessionmaker[Session]) -> None:
@@ -310,7 +314,6 @@ async def test_end_session_runs_once_after_the_close(db_factory: sessionmaker[Se
     assert h.end_calls == [(TUE, et(TUE, 16, 0))]
     assert [r.now for r in reports if r.ended] == [et(TUE, 16, 0)]
     assert h.engines[0].ended == [TUE]  # the body ran the engine's end_of_session
-    assert all(r.relayed for r in reports)
 
 
 async def test_after_close_start_fires_due_safety_events_before_ending(
@@ -346,24 +349,62 @@ async def test_failing_parts_are_logged_and_the_step_goes_on(db_factory: session
     report = await w.step()
     assert [k for k, _, _ in h.fire_calls] == ["orb_open"]
     eng = h.engines[0]
-    assert len(eng.polls) == 1 and len(eng.ticks) == 1 and len(h.relay_calls) == 1
+    assert len(eng.polls) == 1 and len(eng.ticks) == 1
     assert report.fired == [] and report.fills == 0 and report.relayed is False
+    assert await w._relay() is False  # the relay (its own task in `run`) fails on its own
+    assert len(h.relay_calls) == 1
     events = _events(db_factory)
     assert [e.level for e in events] == ["error"] * 3
     joined = " ".join(e.message for e in events)
     assert "fire" in joined and "poll_quotes" in joined and "relay" in joined
 
 
-async def test_ten_consecutive_failed_steps_log_one_critical_event(db_factory: sessionmaker[Session]) -> None:
-    clock = FixedClock(et(SAT, 11, 0))
+async def test_failure_streak_gives_one_error_one_critical_and_one_recovery(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """Fix round 1 alert rule: a part failing on every step writes one `error` event when the streak
+    starts, one `critical` at FAILED_STEPS_CRITICAL, nothing per step in between, and one `info`
+    "recovered after N failures" when it next succeeds; a new streak starts over."""
+    clock = FixedClock(et(TUE, 10, 0))
     h = Harness(db_factory, clock)
-    h.relay_error = RuntimeError("relay down")
     w = Worker(h.deps())
+    await w.step()
+    eng = h.engines[0]
+    eng.poll_error = RuntimeError("Questrade 503")
     for _ in range(15):
         await w.step()
-        clock.advance(timedelta(seconds=30))
-    levels = [e.level for e in _events(db_factory)]
-    assert levels.count("critical") == 1 and levels.count("error") == 15
+        clock.advance(timedelta(seconds=2))
+    assert [e.level for e in _events(db_factory)] == ["error", "critical"]
+    eng.poll_error = None
+    for _ in range(3):
+        await w.step()
+    eng.poll_error = RuntimeError("again")
+    await w.step()
+    events = _events(db_factory)
+    assert [e.level for e in events] == ["error", "critical", "info", "error"]
+    assert events[2].message == "worker poll_quotes recovered after 15 failures"
+    assert events[2].data == {"part": "poll_quotes", "failures": 15}
+
+
+async def test_streaks_are_per_part_and_per_event_key(db_factory: sessionmaker[Session]) -> None:
+    """Two parts failing together each get their own error event, once; the relay failing in its own
+    loop is its own streak too."""
+    clock = FixedClock(et(TUE, 10, 0))
+    h = Harness(db_factory, clock)
+    h.relay_error = RuntimeError("relay down")
+
+    async def engine_for(d: date) -> FakeEngine:
+        eng = await Harness.engine_for(h, d)
+        eng.poll_error = RuntimeError("quotes down")
+        return eng
+
+    w = Worker(WorkerDeps(**{**vars(h.deps()), "engine_for": engine_for}))
+    for _ in range(5):
+        await w.step()
+        await w._relay()
+        clock.advance(timedelta(seconds=2))
+    events = _events(db_factory)
+    assert sorted((e.level, e.data["part"]) for e in events) == [("error", "poll_quotes"), ("error", "relay")]
 
 
 # 6 ---------------------------------------------------------------------------------------------------------
@@ -418,7 +459,7 @@ async def test_restart_mid_session_does_not_refire_and_keeps_polling(
     reports = await _steps(w, clock, et(TUE, 10, 0, 10), 2)
     assert h.fire_calls == []
     assert len(h.engines) == 1 and len(h.engines[0].polls) == len(h.engines[0].ticks) == 6
-    assert all(r.phase == "open" and r.relayed for r in reports)
+    assert all(r.phase == "open" for r in reports)
 
 
 # 8 ---------------------------------------------------------------------------------------------------------
@@ -534,3 +575,236 @@ def test_module_is_runnable_as_python_dash_m() -> None:
     assert src is not None
     with open(src) as f:
         assert 'if __name__ == "__main__":\n    raise SystemExit(main())' in f.read()
+
+
+# --- fix round 1 (P3-T5/T9 attempt 2) --------------------------------------------------------------------
+
+
+async def test_settings_never_readable_uses_defaults_and_shuts_down_cleanly(
+    db_factory: sessionmaker[Session], migrated_engine: Engine
+) -> None:
+    """Ruling 1: every settings read in `run` is guarded. With the settings store down from the start,
+    the worker runs on the defaults, logs one warning for the whole streak, and its shutdown still writes
+    the stopped heartbeat, releases the lock and restores the signal handlers."""
+    clock = FixedClock(et(SAT, 11, 0))
+    vt = VirtualTime(clock)
+    h = Harness(db_factory, clock, sleep=vt.sleep)
+    stop = asyncio.Event()
+    h.on_relay = lambda: stop.set() if len(h.relay_calls) >= 4 else None
+
+    def settings() -> RuntimeSettings:
+        raise ConnectionError("settings store down")
+
+    before = signal.getsignal(signal.SIGTERM)
+    with capture_logs() as logs:
+        await _run(Worker(WorkerDeps(**{**vars(h.deps()), "settings": settings})), stop, vt)
+    assert len(h.relay_calls) == 4
+    assert _gaps(h.relay_calls) == {RuntimeSettings().worker_idle_poll_seconds}
+    assert [e["event"] for e in logs].count("worker.settings_unavailable") == 1
+    hb = _heartbeat(db_factory)
+    assert hb is not None and hb.phase == "stopped"
+    again = acquire_single_instance(migrated_engine)
+    assert again is not None
+    release_single_instance(again)
+    assert signal.getsignal(signal.SIGTERM) == before
+
+
+async def test_settings_outage_falls_back_to_the_last_good_read(db_factory: sessionmaker[Session]) -> None:
+    clock = FixedClock(et(SAT, 11, 0))
+    vt = VirtualTime(clock)
+    good = RuntimeSettings().model_copy(update={"worker_idle_poll_seconds": 60.0})
+    h = Harness(db_factory, clock, settings=good, sleep=vt.sleep)
+    stop = asyncio.Event()
+    reads = {"n": 0}
+
+    def settings() -> RuntimeSettings:
+        reads["n"] += 1
+        if reads["n"] > 1:
+            raise ConnectionError("settings store down")
+        return good
+
+    h.on_relay = lambda: stop.set() if len(h.relay_calls) >= 4 else None
+    await _run(Worker(WorkerDeps(**{**vars(h.deps()), "settings": settings})), stop, vt)
+    assert reads["n"] > 4
+    assert _gaps(h.relay_calls) == {60.0}  # the last good value, not the 30 s default
+
+
+async def test_relay_blocking_for_60s_does_not_delay_the_step_loop(db_factory: sessionmaker[Session]) -> None:
+    """Ruling 2: Telegram never blocks trading. A relay pump stuck for 60 s (Telegram timing out) runs in
+    its own task; the 2 s quote cadence goes on meanwhile, and the relay resumes afterwards."""
+    clock = FixedClock(et(TUE, 10, 0))
+    vt = VirtualTime(clock)
+    stop = asyncio.Event()
+    relay_calls: list[datetime] = []
+
+    async def relay() -> None:
+        relay_calls.append(clock.now())
+        if len(relay_calls) == 1:
+            await vt.sleep(60)
+
+    class CountingEngine(FakeEngine):
+        async def poll_quotes(self) -> list[Any]:
+            result = await super().poll_quotes()
+            if len(self.polls) >= 40:
+                stop.set()
+            return result
+
+    h = Harness(db_factory, clock, sleep=vt.sleep)
+
+    async def engine_for(d: date) -> FakeEngine:
+        eng = CountingEngine(d, clock)
+        h.engines.append(eng)
+        return eng
+
+    deps = WorkerDeps(**{**vars(h.deps()), "relay": relay, "engine_for": engine_for})
+    await _run(Worker(deps), stop, vt)
+    polls = h.engines[0].polls
+    assert len(polls) == 40 and _gaps(polls) == {2.0}
+    start = et(TUE, 10, 0)
+    assert relay_calls[0] == start and relay_calls[1] == start + timedelta(seconds=62)
+    assert _gaps(relay_calls[1:-1]) == {2.0}  # the last one is the pump on stop
+
+
+async def test_heartbeat_stays_fresh_during_a_150s_step(db_factory: sessionmaker[Session]) -> None:
+    """Ruling 2: the heartbeat is its own task, so a 150 s poll never lets it go stale."""
+    clock = FixedClock(et(TUE, 10, 0))
+    vt = VirtualTime(clock)
+    stop = asyncio.Event()
+    ages: list[float] = []
+    h = Harness(db_factory, clock, sleep=vt.sleep)
+
+    class SlowEngine(FakeEngine):
+        async def poll_quotes(self) -> list[Any]:
+            result = await super().poll_quotes()
+            for _ in range(15):
+                await vt.sleep(10)
+                hb = _heartbeat(db_factory)
+                assert hb is not None
+                ages.append((clock.now() - hb.beat_at).total_seconds())
+            stop.set()
+            return result
+
+    async def engine_for(d: date) -> FakeEngine:
+        eng = SlowEngine(d, clock)
+        h.engines.append(eng)
+        return eng
+
+    await _run(Worker(WorkerDeps(**{**vars(h.deps()), "engine_for": engine_for})), stop, vt)
+    assert len(ages) == 15 and max(ages) <= h.settings.worker_heartbeat_seconds
+
+
+async def test_shutdown_writes_stopping_then_stopped(db_factory: sessionmaker[Session]) -> None:
+    phases: list[str] = []
+
+    class Recording(Worker):
+        def _beat(self, phase: str) -> None:
+            phases.append(phase)
+            super()._beat(phase)
+
+    clock = FixedClock(et(TUE, 10, 0))
+    vt = VirtualTime(clock)
+    h = Harness(db_factory, clock, sleep=vt.sleep)
+    await _run(Recording(h.deps()), asyncio.Event(), vt, once=True)
+    assert phases == ["starting", "stopping", "stopped"]
+
+
+def test_heartbeat_db_failure_is_logged_once_per_streak(db_factory: sessionmaker[Session]) -> None:
+    clock = FixedClock(et(SAT, 11, 0))
+    down = {"on": True}
+
+    def factory() -> Session:
+        if down["on"]:
+            raise ConnectionError("database is down")
+        return db_factory()
+
+    w = Worker(WorkerDeps(**{**vars(Harness(db_factory, clock).deps()), "factory": factory}))
+    with capture_logs() as logs:
+        for _ in range(5):
+            w._beat("idle")
+        down["on"] = False
+        w._beat("idle")
+    names = [e["event"] for e in logs]
+    assert names.count("worker.heartbeat_failed") == 1 and names.count("worker.heartbeat_recovered") == 1
+    assert all("exc_info" not in e for e in logs)
+
+
+def _kill_lock_backend(w: Worker, engine: Engine) -> None:
+    assert w._lock is not None
+    pid = w._lock.execute(text("SELECT pg_backend_pid()")).scalar_one()
+    with engine.connect() as admin:
+        admin.execute(text("SELECT pg_terminate_backend(:p)"), {"p": pid})
+        admin.commit()
+
+
+def _take_lock_when_free(engine: Engine) -> Connection:
+    """PostgreSQL drops a terminated backend's locks shortly after: poll (bounded, real time)."""
+    deadline = time.monotonic() + 10
+    while True:
+        conn = acquire_single_instance(engine)
+        if conn is not None:
+            return conn
+        assert time.monotonic() < deadline, "the terminated backend's lock was never released"
+        time.sleep(0.05)
+
+
+async def test_lock_lost_to_another_worker_stops_with_exit_3(
+    db_factory: sessionmaker[Session], migrated_engine: Engine
+) -> None:
+    """Should-fix 5: each heartbeat re-checks the lock. When the lock backend is killed and a second
+    worker takes the lock, the first writes one critical event, stops cleanly (no `stopping`/`stopped`
+    heartbeat over the new owner's row) and exits 3."""
+    clock = FixedClock(et(TUE, 10, 0))
+    vt = VirtualTime(clock)
+    h = Harness(db_factory, clock, sleep=vt.sleep)
+    stop = asyncio.Event()
+    w = Worker(h.deps())
+    taken: list[Connection] = []
+
+    def on_relay() -> None:
+        if len(h.relay_calls) == 3:
+            _kill_lock_backend(w, migrated_engine)
+            taken.append(_take_lock_when_free(migrated_engine))
+
+    h.on_relay = on_relay
+    try:
+        with pytest.raises(SystemExit) as exit_info:
+            await asyncio.wait_for(w.run(stop), timeout=30)
+    finally:
+        await vt.aclose()
+        for conn in taken:
+            release_single_instance(conn)
+    assert exit_info.value.code == 3
+    assert stop.is_set() and clock.now() == et(TUE, 10, 0, 15)  # the first heartbeat after the kill
+    critical = [e for e in _events(db_factory) if e.level == "critical"]
+    assert len(critical) == 1 and "lost its single-instance lock" in critical[0].message
+    hb = _heartbeat(db_factory)
+    assert hb is not None and hb.phase not in ("stopping", "stopped")
+    assert len(h.relay_calls) == 8  # t = 0..14 s: no last pump once another worker owns the relay
+
+
+async def test_lock_connection_lost_without_a_rival_is_retaken(
+    db_factory: sessionmaker[Session], migrated_engine: Engine
+) -> None:
+    clock = FixedClock(et(TUE, 10, 0))
+    vt = VirtualTime(clock)
+    h = Harness(db_factory, clock, sleep=vt.sleep)
+    stop = asyncio.Event()
+    w = Worker(h.deps())
+
+    def on_relay() -> None:
+        if len(h.relay_calls) == 3:
+            _kill_lock_backend(w, migrated_engine)
+            release_single_instance(_take_lock_when_free(migrated_engine))  # wait until it is free
+        if len(h.relay_calls) >= 20:
+            stop.set()
+
+    h.on_relay = on_relay
+    await _run(w, stop, vt)
+    assert len(h.relay_calls) == 20
+    events = [(e.level, e.message) for e in _events(db_factory)]
+    assert events == [("warning", "worker lock connection was lost; the lock was taken again")]
+    hb = _heartbeat(db_factory)
+    assert hb is not None and hb.phase == "stopped"
+    again = acquire_single_instance(migrated_engine)  # released on stop
+    assert again is not None
+    release_single_instance(again)

@@ -346,6 +346,11 @@ class MessageRenderer:
             final = f"Failed: {error or 'the order was refused'}"
         else:
             final = f"Already decided ({_clip(final_status, VIA_CHARS)})"
+        # When Stephen decided (P4-T6), on Telegram or the web. An automatic approval or an auto-submit on
+        # expiry is nobody's decision, so "Approved (auto)" keeps its P3 wording.
+        if v.decided_at is not None and not final.startswith("Approved (auto)"):
+            if final_status in _APPROVED or final_status == "rejected":
+                final += f" at {self._time(v.decided_at)}"
         return _fit("\n".join(self._proposal_lines(v, closed=True)), f"<b>{_e(final)}</b>")
 
     # --- fills and the overlay ---------------------------------------------------------------------------

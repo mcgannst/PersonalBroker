@@ -391,17 +391,19 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - **Kill switches:** `GET` returns `views.killswitch_states(...)` for the live run and the current session plus the last 50 `kill_switch_events` rows (newest first). `reset` accepts `daily_loss_pct`, `max_drawdown_pct`, `expectancy`; `manual_pause` → 400 "use Resume"; an unknown switch → 404; not tripped → 409 (checked before the call; `KillSwitches.reset` itself raises `ValueError("kill switch ... is not tripped")` when another request reset it first, which also maps to 409); the reason is stripped and must be 3–500 characters; calls `KillSwitches.reset(run_id, switch, reason, actor(user))` (audited by P2). `pause` calls `KillSwitches.pause(run_id, current_session(...), actor)`; already paused → 409 "Already paused." `resume` calls `KillSwitches.resume(run_id, actor)`; not paused → 409 "Not paused." Resume never resets an automatic switch (BR-34).
 
 **Acceptance tests (real DB, real `ProposalService` through `trader.runtime.build_decider` on a test `Core`):**
-- [ ] 1. A pending entry proposal approved on the web → `submitted` (or `approved` then submitted per P2), `decided_via = "web"`, `decided_by = "web:stephen"`, one order, one audit row with that actor.
-- [ ] 2. **Safety:** with `manual_pause` active, approving a pending entry → `rejected`, `blocked` set, message `Entry blocked: kill switch manual_pause is tripped`, and no order; approving a pending **stop** proposal while paused → submitted with a working stop order. The same with `max_drawdown_pct` tripped.
-- [ ] 3. A web approve and then a Telegram `decide` (the bot's decider from `build_decider`) on the same proposal → the second is `already_decided`; exactly one order. Two concurrent web approvals (threads) → one `already_decided`, one order.
-- [ ] 4. Approving after `expires_at` (fake clock) → `already_decided` with status `expired` and message `Already expired`.
-- [ ] 5. An unknown id, and a proposal of another run → 404; a request without a session → 401 (conftest `user=None`).
-- [ ] 6. `GET /api/proposals?status=pending` lists only pending ones of the live run, oldest first; `GET /api/proposals/{id}` of a decided one has `decided_at` and `decided_by`.
-- [ ] 7. The decision route module constructs no `ProposalService` (a test asserts the router module does not import `ProposalService`, and that `decider_for` is called with the live run id).
-- [ ] 8. Kill switches: `max_drawdown_pct` tripped → reset with reason "  reviewed  " → cleared, audit `killswitch.reset:max_drawdown_pct` with reason `reviewed`; a reason of two characters → 422; `manual_pause` reset → 400; not tripped → 409; unknown → 404.
-- [ ] 9. Pause then resume: `KillSwitches.blocking` returns `manual_pause` then None; a second pause → 409; resume with `max_drawdown_pct` also tripped leaves it tripped (it stays in the response as tripped).
-- [ ] 10. `proposal_closed` of a view with `decided_at` 13:36:10Z on 2026-10-06 ends `Approved via web at 07:36 MT`; without `decided_at` the P3 wording is unchanged (the existing P3-T4 tests still pass).
-- [ ] 11. Gate and commit `P4-T6: ...`.
+- [x] 1. A pending entry proposal approved on the web → `submitted` (or `approved` then submitted per P2), `decided_via = "web"`, `decided_by = "web:stephen"`, one order, one audit row with that actor.
+- [x] 2. **Safety:** with `manual_pause` active, approving a pending entry → `rejected`, `blocked` set, message `Entry blocked: kill switch manual_pause is tripped`, and no order; approving a pending **stop** proposal while paused → submitted with a working stop order. The same with `max_drawdown_pct` tripped.
+- [x] 3. A web approve and then a Telegram `decide` (the bot's decider from `build_decider`) on the same proposal → the second is `already_decided`; exactly one order. Two concurrent web approvals (threads) → one `already_decided`, one order.
+- [x] 4. Approving after `expires_at` (fake clock) → `already_decided` with status `expired` and message `Already expired`.
+- [x] 5. An unknown id, and a proposal of another run → 404; a request without a session → 401 (conftest `user=None`).
+- [x] 6. `GET /api/proposals?status=pending` lists only pending ones of the live run, oldest first; `GET /api/proposals/{id}` of a decided one has `decided_at` and `decided_by`.
+- [x] 7. The decision route module constructs no `ProposalService` (a test asserts the router module does not import `ProposalService`, and that `decider_for` is called with the live run id).
+- [x] 8. Kill switches: `max_drawdown_pct` tripped → reset with reason "  reviewed  " → cleared, audit `killswitch.reset:max_drawdown_pct` with reason `reviewed`; a reason of two characters → 422; `manual_pause` reset → 400; not tripped → 409; unknown → 404.
+- [x] 9. Pause then resume: `KillSwitches.blocking` returns `manual_pause` then None; a second pause → 409; resume with `max_drawdown_pct` also tripped leaves it tripped (it stays in the response as tripped).
+- [x] 10. `proposal_closed` of a view with `decided_at` 13:36:10Z on 2026-10-06 ends `Approved via web at 07:36 MT`; without `decided_at` the P3 wording is unchanged (the existing P3-T4 tests still pass).
+- [x] 11. Gate and commit `P4-T6: ...`.
+
+**Build notes (T6, 2026-09-27):** the decision time is added only to a human decision (`Approved via telegram|web`, `Rejected`, `Rejected: <reason>`); `Approved (auto)` (auto mode, or an exit auto-submitted on expiry) keeps its P3 wording, because nobody decided and `tests/integration/test_worker_day.py` pins it exactly. `GET /api/proposals?status=all` is newest first (pending stays oldest first); `date` filters by the signal's ET session date; `limit` is 1–200. A not-tripped check before `reset` uses `KillSwitches.active` for the current session (as the page shows it). `decision_message` in `trader.api.routers.proposals` builds the page text.
 
 ---
 

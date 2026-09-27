@@ -161,7 +161,7 @@ def env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_reads_environment(env: None) -> None:
     s = EnvSettings()  # type: ignore[call-arg]
-    assert s.database_url.endswith("/trader_dev")
+    assert s.database_url.get_secret_value().endswith("/trader_dev")
     assert s.telegram_chat_id == 42
     assert s.tz_display == "America/Edmonton"
 
@@ -223,8 +223,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class EnvSettings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
-    database_url: str
-    migration_database_url: str
+    # The URLs embed the DB role passwords, so they are secrets too: use .get_secret_value().
+    database_url: SecretStr
+    migration_database_url: SecretStr
     app_encryption_key: SecretStr
     session_secret: SecretStr
     anthropic_api_key: SecretStr | None = None
@@ -2430,7 +2431,7 @@ class Core:
 
 def build_core(env: EnvSettings | None = None) -> Core:
     env = env or get_env()
-    engine = make_engine(env.database_url)
+    engine = make_engine(env.database_url.get_secret_value())
     factory = make_session_factory(engine)
     clock = RealClock()
     return Core(

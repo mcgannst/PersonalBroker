@@ -13,8 +13,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class EnvSettings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
-    database_url: str
-    migration_database_url: str
+    # The URLs embed the DB role passwords, so they are secrets too: use .get_secret_value().
+    database_url: SecretStr
+    migration_database_url: SecretStr
     app_encryption_key: SecretStr
     session_secret: SecretStr
     anthropic_api_key: SecretStr | None = None

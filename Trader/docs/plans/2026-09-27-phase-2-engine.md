@@ -4833,7 +4833,7 @@ git push origin HEAD:trunk
   - `entry_cancel`: `Cancel(order_id, "entry_cancel_at")` for each working entry order. `flatten`: `Cancel(..., "flatten_close")` for each working entry, then `Exit(position_id, "market", None, "flatten_close")` for each open position.
   - `on_fill`: an entry fill with a `stop_loss` gives `Exit(position_id, "stop", stop_loss, "protective_stop")`; any other fill gives `[]`.
 
-- [ ] **Step 1: Write the failing scenario tests**
+- [x] **Step 1: Write the failing scenario tests**
 
 `Trader/app/tests/strategies/scenarios/__init__.py`: empty file.
 
@@ -5117,12 +5117,12 @@ def test_the_plugin_loads_through_its_entry_point() -> None:
     assert cls is OrbSip and cls.version == "1.0.0" and cls.kind == "entry"
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `uv --directory Trader/app run pytest tests/strategies/scenarios -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.strategies.orb_sip'`.
 
-- [ ] **Step 3: Implement `trader/strategies/orb_sip.py`**
+- [x] **Step 3: Implement `trader/strategies/orb_sip.py`**
 
 ```python
 """orb_sip 1.0.0: the 5-minute Opening Range Breakout on Stocks in Play (SPEC §5.2, BR-04, BR-11, BR-13)."""
@@ -5390,12 +5390,12 @@ class OrbSip:
         return None
 ```
 
-- [ ] **Step 4: Run the scenarios**
+- [x] **Step 4: Run the scenarios**
 
 Run: `uv --directory Trader/app run pytest tests/strategies -q`
 Expected: all pass. In `test_catalyst_missing_bearish_or_weak_is_rejected` the volumes (5900, 5800, 5600, 5500) fix the rank order AAA, BBB, DDD, EEE.
 
-- [ ] **Step 5: Run the gate, commit and push**
+- [x] **Step 5: Run the gate, commit and push**
 
 Run: `uv --directory Trader/app run ruff format .` then `bash Trader/app/scripts/check.sh` → all pass.
 ```bash

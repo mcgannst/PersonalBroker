@@ -209,19 +209,19 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 - **Clean exit (P1-REVIEW should-fix 4):** in `run_job` and `run_job_async`, if marking the run `succeeded` fails (a DB error or `JobRunMissing`), log `job.record_success_failed` at critical level and return `JobOutcome("failed", detail, error="succeeded but could not be recorded: <ExceptionType>")` instead of raising; the CLI then prints one line and exits 1 (no traceback).
 
 **Acceptance tests:**
-- [ ] 1. With `orb_sip` and `spy_overlay` (default params), the plan for Tue 2026-10-06 has `orb_open` 13:35:05Z, `entry_cancel` 15:30Z, `overlay_decision` 19:30Z, `flatten` 19:50Z; for Fri 2026-11-27 (13:00 ET close) `overlay_decision` 17:30Z and `flatten` 17:50Z.
-- [ ] 2. The plan for Thanksgiving is `is_session=False` with no events, and `fire_event` returns `not_session` and writes nothing.
-- [ ] 3. `fire_event("orb_open")` at 09:35:05 ET runs the runner once and records `event:orb_open` succeeded; a second call returns `skipped` and the runner count stays 1.
-- [ ] 4. Two concurrent `fire_event` calls (asyncio.gather, real DB) run the runner once; the other result is `skipped`.
-- [ ] 5. At 09:35:00 → `too_early`, nothing written; with `force=True` it fires.
-- [ ] 6. At 09:36:00 (55 s late) `orb_open` fires; at 09:40:00 (295 s late, grace 120) it is `missed`, a failed job run and an `error` event exist, and the runner was never built.
-- [ ] 7. `flatten` 20 minutes late (before the close) still fires; after the close it is `missed`; a `flatten` that already succeeded returns `skipped` at 15:55 even though it is late (the cron backup on a normal day).
-- [ ] 8. The runner raising → `failed`, error recorded; a later call runs it again (a failed run is retried).
-- [ ] 9. Two strategies scheduling one key at different times → the earliest time and one `error` event.
-- [ ] 10. `run_job_async` has `run_job`'s skip, lock and failure semantics (three tests mirroring the P1 runner tests).
-- [ ] 11. `run_job` and `run_job_async` whose success update fails (the row deleted underneath, or the session factory made to fail on the second commit) return `failed` with "could not be recorded" and do not raise.
-- [ ] 12. Settled keys: after `orb_open` is `missed`, `fired_keys` contains it and `due_events` no longer returns it (exactly one failed run and one `error` event after ten further `due_events`/`fire_event` rounds driven the way the worker drives them); a runner that fails three times makes the key settled, and a fourth round does not call it.
-- [ ] 13. Gate and commit `P3-T3: ...`.
+- [x] 1. With `orb_sip` and `spy_overlay` (default params), the plan for Tue 2026-10-06 has `orb_open` 13:35:05Z, `entry_cancel` 15:30Z, `overlay_decision` 19:30Z, `flatten` 19:50Z; for Fri 2026-11-27 (13:00 ET close) `overlay_decision` 17:30Z and `flatten` 17:50Z.
+- [x] 2. The plan for Thanksgiving is `is_session=False` with no events, and `fire_event` returns `not_session` and writes nothing.
+- [x] 3. `fire_event("orb_open")` at 09:35:05 ET runs the runner once and records `event:orb_open` succeeded; a second call returns `skipped` and the runner count stays 1.
+- [x] 4. Two concurrent `fire_event` calls (asyncio.gather, real DB) run the runner once; the other result is `skipped`.
+- [x] 5. At 09:35:00 → `too_early`, nothing written; with `force=True` it fires.
+- [x] 6. At 09:36:00 (55 s late) `orb_open` fires; at 09:40:00 (295 s late, grace 120) it is `missed`, a failed job run and an `error` event exist, and the runner was never built.
+- [x] 7. `flatten` 20 minutes late (before the close) still fires; after the close it is `missed`; a `flatten` that already succeeded returns `skipped` at 15:55 even though it is late (the cron backup on a normal day).
+- [x] 8. The runner raising → `failed`, error recorded; a later call runs it again (a failed run is retried).
+- [x] 9. Two strategies scheduling one key at different times → the earliest time and one `error` event.
+- [x] 10. `run_job_async` has `run_job`'s skip, lock and failure semantics (three tests mirroring the P1 runner tests).
+- [x] 11. `run_job` and `run_job_async` whose success update fails (the row deleted underneath, or the session factory made to fail on the second commit) return `failed` with "could not be recorded" and do not raise.
+- [x] 12. Settled keys: after `orb_open` is `missed`, `fired_keys` contains it and `due_events` no longer returns it (exactly one failed run and one `error` event after ten further `due_events`/`fire_event` rounds driven the way the worker drives them); a runner that fails three times makes the key settled, and a fourth round does not call it.
+- [x] 13. Gate and commit `P3-T3: ...`.
 
 ---
 

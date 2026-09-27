@@ -494,13 +494,13 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - **Telegram test:** when `telegram_configured` is false → 409 "Telegram is not configured"; else `services.notifier.send(...)` of `telegram_test_message(<now in MT>, buttons=False)` with its "Sent by `trader telegram-test`" wording changed to say it was sent from the web app, and `sent: true`. `Notifier.send` never raises; the result says "check your Telegram".
 
 **Acceptance tests:**
-- [ ] 1. `GET /api/system` on seeded data: the newest run per job, 50 errors newest first, failed and unknown notifications without text, `rate_limit` read from the heartbeat detail, `telegram_configured` from services, `alembic_revision` `0005`.
-- [ ] 2. `GET /api/events?since=10` returns ids 11.. oldest first; `?level=error` excludes `warning`; a message containing a bot token URL is masked.
-- [ ] 3. `POST /api/jobs/nightly/run {"force": true}` spawns `trader nightly --force` once (fake spawn records argv), returns 202 and writes the audit row; a second call while the fake child runs → 409; `POST /api/jobs/event/run` → 404; a holiday date → 422; `POST /api/jobs/token-refresh/run {}` spawns exactly `trader token-refresh`, and with `{"force": true}` or a `date` → 422.
-- [ ] 4. `SubprocessJobLauncher` reaps a finished child (no zombie in its table) and `running()` turns false; a child exiting 1 writes one `warning` event with the job and exit code, a child exiting 0 writes none.
-- [ ] 5. Token paste with a fake store whose `access()` succeeds → 200 `TokenOut` ok, audit row `credentials.questrade.seed` without the token; with `access()` raising `QuestradeAuthError("The refresh token was rejected")` → 422 with that message; the token string appears in no response, captured log line, event or audit row.
-- [ ] 6. Telegram test with `telegram_configured` false → 409; true → one `RecordingNotifier` message of kind `reply`.
-- [ ] 7. Gate and commit `P4-T9: ...`.
+- [x] 1. `GET /api/system` on seeded data: the newest run per job, 50 errors newest first, failed and unknown notifications without text, `rate_limit` read from the heartbeat detail, `telegram_configured` from services, `alembic_revision` `0005`.
+- [x] 2. `GET /api/events?since=10` returns ids 11.. oldest first; `?level=error` excludes `warning`; a message containing a bot token URL is masked.
+- [x] 3. `POST /api/jobs/nightly/run {"force": true}` spawns `trader nightly --force` once (fake spawn records argv), returns 202 and writes the audit row; a second call while the fake child runs → 409; `POST /api/jobs/event/run` → 404; a holiday date → 422; `POST /api/jobs/token-refresh/run {}` spawns exactly `trader token-refresh`, and with `{"force": true}` or a `date` → 422.
+- [x] 4. `SubprocessJobLauncher` reaps a finished child (no zombie in its table) and `running()` turns false; a child exiting 1 writes one `warning` event with the job and exit code, a child exiting 0 writes none.
+- [x] 5. Token paste with a fake store whose `access()` succeeds → 200 `TokenOut` ok, audit row `credentials.questrade.seed` without the token; with `access()` raising `QuestradeAuthError("The refresh token was rejected")` → 422 with that message; the token string appears in no response, captured log line, event or audit row.
+- [x] 6. Telegram test with `telegram_configured` false → 409; true → one `RecordingNotifier` message of kind `reply`.
+- [x] 7. Gate and commit `P4-T9: ...`.
 
 ---
 

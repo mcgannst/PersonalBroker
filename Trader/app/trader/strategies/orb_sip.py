@@ -1,11 +1,12 @@
 """orb_sip 1.0.0: the 5-minute Opening Range Breakout on Stocks in Play (SPEC §5.2, BR-04, BR-11, BR-13)."""
 
+from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from trader.broker.types import Q4, Fill
+from trader.broker.types import Q4, Fill, dec_str
 from trader.market.calendar import SessionCalendar
 from trader.market.indicators import is_bearish, is_doji, rvol
 from trader.market.types import Candle, UniverseMember
@@ -25,11 +26,8 @@ ORB_EVENT = "orb_open"
 CANCEL_EVENT = "entry_cancel"
 FLATTEN_EVENT = "flatten"
 ORB_AT = "open+5m5s"  # 9:35:05 ET: five seconds after the opening bar closes
+ORB_AT_SECONDS = SessionOffset.parse(ORB_AT).seconds
 NO_CATALYST = frozenset({"none", "unknown"})
-
-
-def _s(v: Decimal | None) -> str | None:
-    return None if v is None else str(v)
 
 
 def _candle_json(c: Candle) -> dict[str, Any]:
@@ -54,6 +52,18 @@ def _catalyst_json(cat: CatalystInfo | None) -> dict[str, Any] | None:
     }
 
 
+@dataclass(frozen=True, slots=True)
+class _Scored:
+    """One opening bar that met rvol_min, with its typed inputs (no re-parsing of evidence strings)."""
+
+    rvol: Decimal
+    ticker: str
+    symbol_id: int
+    candle: Candle
+    atr14: Decimal | None
+    atr_source: str | None  # open_bar_stats | universe | None
+
+
 class OrbSipParams(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -66,18 +76,31 @@ class OrbSipParams(BaseModel):
     max_positions: int = Field(1, ge=1, le=10)
     require_catalyst: bool = True
     catalyst_min_quality: int = Field(50, ge=0, le=100)
-    stop_atr_fraction: Decimal = Field(Decimal("0.10"), gt=0, le=Decimal("5"), allow_inf_nan=False)
+    stop_atr_fraction: Decimal = Field(Decimal("0.10"), gt=0, le=Decimal("1"), allow_inf_nan=False)
     entry_offset: Decimal = Field(Decimal("0.01"), ge=0, le=Decimal("5"), allow_inf_nan=False)
     entry_cancel_at: str | None = "open+120m"
     exit_at: str = "close-10m"
     doji_body_pct_max: Decimal = Field(Decimal("0.10"), ge=0, le=Decimal("1"), allow_inf_nan=False)
     stale_universe: Literal["skip", "trade"] = "skip"
 
-    @field_validator("entry_cancel_at", "exit_at")
+    @field_validator("entry_cancel_at")
     @classmethod
-    def _offset(cls, v: str | None) -> str | None:
-        if v is not None:
-            SessionOffset.parse(v)
+    def _cancel_after_orb(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        off = SessionOffset.parse(v)
+        if off.anchor == "open" and off.seconds <= ORB_AT_SECONDS:
+            raise ValueError(f"entry_cancel_at {v!r} must be later than the ORB event ({ORB_AT})")
+        if off.anchor == "close" and off.seconds >= 0:
+            raise ValueError(f"entry_cancel_at {v!r} must be before the close (e.g. 'close-60m')")
+        return v
+
+    @field_validator("exit_at")
+    @classmethod
+    def _exit_before_close(cls, v: str) -> str:
+        off = SessionOffset.parse(v)
+        if off.anchor != "close" or off.seconds >= 0:
+            raise ValueError(f"exit_at {v!r} must be a negative offset from the close (e.g. 'close-10m')")
         return v
 
     @model_validator(mode="after")
@@ -116,16 +139,36 @@ class OrbSip:
         return []
 
     async def on_fill(self, ctx: StrategyContext, fill: Fill) -> list[Intent]:
-        if fill.purpose != "entry" or fill.stop_loss is None:
+        if fill.purpose != "entry":
+            return []
+        if fill.stop_loss is None:
+            ctx.note(
+                "orb: entry fill has no stop_loss; no protective stop placed",
+                level="error",
+                position_id=fill.position_id,
+                order_id=fill.order_id,
+                symbol_id=fill.symbol_id,
+            )
             return []
         return [Exit(fill.position_id, "stop", fill.stop_loss, "protective_stop")]
 
     # --- the 9:35 scan ----------------------------------------------------------------------------------
     async def _orb(self, ctx: StrategyContext) -> list[Intent]:
         p = self.params
-        slots = p.max_positions - ctx.entries_today
+        held = {x.symbol_id for x in ctx.positions}
+        entry_orders = [o for o in ctx.working_orders if o.purpose == "entry"]
+        working = {o.symbol_id for o in entry_orders}
+        # entries_today counts today's entry proposals, which already cover today's open positions and
+        # working entries; the larger of the two never double counts and still sees a carried position.
+        used = max(ctx.entries_today, len(ctx.positions) + len(entry_orders))
+        slots = p.max_positions - used
         if slots <= 0:
-            ctx.note("orb: max_positions already used today", entries_today=ctx.entries_today)
+            ctx.note(
+                "orb: max_positions already used today",
+                entries_today=ctx.entries_today,
+                open_positions=len(ctx.positions),
+                working_entries=len(entry_orders),
+            )
             return []
         status = await ctx.data.universe_status(ctx.session_date)
         if status.stale and p.stale_universe == "skip":
@@ -156,7 +199,7 @@ class OrbSip:
                 level="warning",
                 missing={str(k): v for k, v in sorted(opening.missing.items())},
             )
-        scored: list[tuple[Decimal, str, int, Candle]] = []
+        scored: list[_Scored] = []
         no_baseline: list[int] = []
         for sid, candle in opening.bars.items():
             st = stats.get(sid)
@@ -164,34 +207,56 @@ class OrbSip:
             if r is None:
                 no_baseline.append(sid)
             elif r >= p.rvol_min:
-                scored.append((r, members[sid].ticker, sid, candle))
+                member = members[sid]
+                if st is not None and st.atr14 is not None:
+                    atr14, atr_source = st.atr14, "open_bar_stats"
+                elif member.atr14 is not None:
+                    atr14, atr_source = member.atr14, "universe"
+                else:
+                    atr14, atr_source = None, None
+                scored.append(_Scored(r, member.ticker, sid, candle, atr14, atr_source))
         if no_baseline:
             ctx.note("orb: no opening-volume baseline", symbol_ids=sorted(no_baseline))
-        scored.sort(key=lambda t: (-t[0], t[1]))
+        scored.sort(key=lambda t: (-t.rvol, t.ticker))
 
         records: list[CandidateRecord] = []
         survivors: list[CandidateRecord] = []
-        for rank, (r, ticker, sid, candle) in enumerate(scored[: p.top_n], start=1):
-            member = members[sid]
-            st = stats.get(sid)
-            atr14 = st.atr14 if st is not None and st.atr14 is not None else member.atr14
+        levels: dict[int, tuple[Decimal, Decimal]] = {}  # symbol_id -> (entry, stop_loss)
+        for rank, sc in enumerate(scored[: p.top_n], start=1):
+            member = members[sc.symbol_id]
+            st = stats.get(sc.symbol_id)
             rec = CandidateRecord(
-                symbol_id=sid,
-                rvol=r,
+                symbol_id=sc.symbol_id,
+                rvol=sc.rvol,
                 rank=rank,
-                candle=_candle_json(candle),
+                candle=_candle_json(sc.candle),
                 data={
-                    "ticker": ticker,
-                    "rvol": str(r),
+                    "ticker": sc.ticker,
+                    "rvol": str(sc.rvol),
                     "rank": rank,
-                    "direction": self._direction(candle),
-                    "atr14": _s(atr14),
-                    "price": str(candle.close),
+                    "direction": self._direction(sc.candle),
+                    "atr14": dec_str(sc.atr14),
+                    "atr_source": sc.atr_source,
+                    "price": str(sc.candle.close),
                     "avg_volume": member.avg_volume,
-                    "avg_open_vol_14d": _s(st.avg_open_vol_14d if st else None),
+                    "avg_open_vol_14d": dec_str(st.avg_open_vol_14d if st else None),
+                    "universe_source": member.source,
                 },
             )
-            rec.reject_reason = self._screen(candle, atr14, member)
+            if sc.symbol_id in held:
+                rec.reject_reason = "already_held"
+            elif sc.symbol_id in working:
+                rec.reject_reason = "entry_working"
+            else:
+                rec.reject_reason = self._screen(sc.candle, sc.atr14, member)
+            if rec.reject_reason is None and sc.atr14 is not None:
+                entry = (sc.candle.high + p.entry_offset).quantize(Q4, ROUND_HALF_UP)
+                stop_loss = (entry - p.stop_atr_fraction * sc.atr14).quantize(Q4, ROUND_HALF_UP)
+                if stop_loss <= 0 or stop_loss >= entry:
+                    rec.reject_reason = "stop_invalid"
+                    rec.data.update(entry=str(entry), stop_loss=str(stop_loss))
+                else:
+                    levels[sc.symbol_id] = (entry, stop_loss)
             records.append(rec)
             if rec.reject_reason is None:
                 survivors.append(rec)
@@ -209,10 +274,7 @@ class OrbSip:
             if reason is not None:
                 rec.reject_reason = reason
                 continue
-            candle = opening.bars[rec.symbol_id]
-            atr14 = Decimal(str(rec.data["atr14"]))
-            entry = (candle.high + p.entry_offset).quantize(Q4, ROUND_HALF_UP)
-            stop_loss = (entry - p.stop_atr_fraction * atr14).quantize(Q4, ROUND_HALF_UP)
+            entry, stop_loss = levels[rec.symbol_id]
             rec.passed = True
             rec.data.update(entry=str(entry), stop_loss=str(stop_loss))
             evidence = {**rec.data, "candle": rec.candle}

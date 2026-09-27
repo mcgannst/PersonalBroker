@@ -1,12 +1,14 @@
-from datetime import UTC, date, datetime
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
 
 from tests.strategies.fakes import CAL, NOW, SESSION, FakeData, make_ctx, position, quote
-from trader.broker.types import FillEvent
-from trader.strategies.base import Exit
+from trader.adapters.questrade.models import QtQuote
+from trader.broker.types import FillEvent, OrderView
+from trader.strategies.base import DecisionNote, Exit
 from trader.strategies.registry import load_plugin
 from trader.strategies.spy_overlay import DECISION_EVENT, SpyOverlay, SpyOverlayParams
 
@@ -90,3 +92,99 @@ def test_invalid_params_are_rejected(bad: dict[str, object]) -> None:
 def test_the_plugin_loads_through_its_entry_point() -> None:
     cls = load_plugin("spy_overlay")
     assert cls is SpyOverlay and cls.kind == "overlay" and cls.version == "1.0.0"
+
+
+# --- fix round 1 (gauntlet findings) ------------------------------------------------------------------
+
+
+async def run_with(
+    q: QtQuote | None, *, orders: list[OrderView] | None = None, now: datetime = NOW
+) -> tuple[list[object], DecisionNote]:
+    d = data_with_spy(None)
+    if q is not None:
+        d.quote_map[SPY] = q
+    s = SpyOverlay()
+    ctx = make_ctx(d, s.params, positions=[position(5, 1), position(6, 1)], orders=orders or [], now=now)
+    (event,) = s.schedule(CAL)
+    intents = await s.on_event(ctx, event)
+    return list(intents), next(n for n in ctx.notes if n.message.startswith("overlay"))
+
+
+async def test_a_tiny_positive_return_holds_even_though_it_rounds_to_zero() -> None:
+    intents, note = await run_with(quote(SPY, "500.0001", "500.0001", "500.0001"))
+    assert intents == [] and note.data["decision"] == "hold" and note.data["spy_return"] == "0.000000"
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ({"delay": 15}, "delayed"),
+        ({"delay": None}, "delayed"),
+        ({"last_trade_time": None}, "no_trade_time"),
+        ({"last_trade_time": datetime(2026, 10, 5, 19, 59, tzinfo=UTC)}, "not_this_session"),
+        ({"last_trade_time": NOW - timedelta(seconds=121)}, "stale"),
+    ],
+)
+async def test_a_quote_that_is_not_current_holds_with_a_warning(
+    change: dict[str, object], reason: str
+) -> None:
+    q = replace(quote(SPY, "497.00", "497.00", "497.00"), **change)  # type: ignore[arg-type]
+    intents, note = await run_with(q)
+    assert intents == [] and note.level == "warning"
+    assert note.data["decision"] == "hold" and note.data["reason"] == reason
+    assert note.data["benchmark"] == "SPY" and "quote_time" in note.data and "delay" in note.data
+
+
+async def test_a_quote_just_inside_the_age_limit_is_used() -> None:
+    q = replace(quote(SPY, "497.00", "497.00", "497.00"), last_trade_time=NOW - timedelta(seconds=120))
+    intents, note = await run_with(q)
+    assert note.data["decision"] == "exit" and len(intents) == 2
+    assert note.data["quote_time"] == (NOW - timedelta(seconds=120)).isoformat() and note.data["delay"] == 0
+
+
+@pytest.mark.parametrize(("last", "last_regular"), [("0", None), ("-1", None), ("0", "0")])
+async def test_a_non_positive_price_counts_as_missing(last: str, last_regular: str | None) -> None:
+    q = replace(
+        quote(SPY, "497.00", "497.00", "497.00"),
+        last=Decimal(last),
+        last_regular=None if last_regular is None else Decimal(last_regular),
+    )
+    intents, note = await run_with(q)
+    assert intents == [] and note.level == "warning" and note.data["reason"] == "missing"
+
+
+def _order(oid: int, purpose: str, position_id: int) -> OrderView:
+    return OrderView(
+        oid,
+        1,
+        "sell",
+        "stop" if purpose == "stop" else "market",
+        purpose,  # type: ignore[arg-type]
+        10,
+        None,
+        None,
+        "working",
+        position_id,
+        1,
+        None,
+        NOW,
+    )
+
+
+async def test_exits_skip_positions_already_exiting_but_not_ones_with_only_a_stop() -> None:
+    orders = [_order(40, "exit", 5), _order(41, "stop", 6)]
+    intents, note = await run_with(quote(SPY, "497.00", "497.00", "497.00"), orders=orders)
+    assert intents == [Exit(6, "market", None, "overlay_negative")]
+    assert note.data["already_exiting"] == [5] and note.data["position_ids"] == [5, 6]
+
+
+@pytest.mark.parametrize("bad", ["close", "close+5m", "open+60m", "open"])
+def test_decision_at_must_be_before_the_close(bad: str) -> None:
+    with pytest.raises(ValidationError):
+        SpyOverlayParams(decision_at=bad)
+
+
+def test_max_quote_age_is_bounded() -> None:
+    assert SpyOverlayParams().max_quote_age_seconds == 120
+    with pytest.raises(ValidationError):
+        SpyOverlayParams(max_quote_age_seconds=0)

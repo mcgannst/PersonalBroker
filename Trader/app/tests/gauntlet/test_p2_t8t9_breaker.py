@@ -195,7 +195,8 @@ async def test_a_symbol_already_held_or_working_is_not_entered_again(held_as: st
     ("aaa_bar", "atr", "params"),
     [
         (BULL, "0", OrbSipParams(min_atr=Decimal("0"))),  # ATR 0: stop_loss == entry
-        (bar("5.00", "5.50", "4.95", "5.40", 5000), "1.50", OrbSipParams(stop_atr_fraction=Decimal("5"))),
+        # fix round 1: stop_atr_fraction is now capped at 1, so a large ATR drives the stop below zero
+        (bar("5.00", "5.50", "4.95", "5.40", 5000), "6.00", OrbSipParams(stop_atr_fraction=Decimal("1"))),
     ],
     ids=["stop-equals-entry", "stop-below-zero"],
 )

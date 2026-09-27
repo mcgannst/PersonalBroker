@@ -1,8 +1,10 @@
 """Hand-built ORB scenarios (SPEC §16): rankings, rejects, and fills through the real quote fill model."""
 
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -23,8 +25,8 @@ from tests.strategies.fakes import (
 from trader.adapters.questrade.models import QtQuote
 from trader.broker.fill_model import FillParams, QuoteFillModel
 from trader.broker.types import FillDecision, FillEvent, OrderSpec
-from trader.market.types import UniverseStatus
-from trader.strategies.base import Cancel, EnterLong, Exit, ScheduledEvent
+from trader.market.types import Candle, UniverseStatus
+from trader.strategies.base import Cancel, EnterLong, Exit, Intent, ScheduledEvent, StrategyContext
 from trader.strategies.orb_sip import CANCEL_EVENT, FLATTEN_EVENT, ORB_EVENT, OrbSip, OrbSipParams
 from trader.strategies.registry import load_plugin
 
@@ -50,9 +52,11 @@ def standard() -> tuple[FakeData, FakeCatalysts]:
     return data, cats
 
 
-async def run_orb(data: FakeData, cats: FakeCatalysts, params: OrbSipParams | None = None, **ctx_kw: object):  # type: ignore[no-untyped-def]
+async def run_orb(
+    data: FakeData, cats: FakeCatalysts, params: OrbSipParams | None = None, **ctx_kw: Any
+) -> tuple[OrbSip, StrategyContext, list[Intent]]:
     strategy = OrbSip(params)
-    ctx = make_ctx(data, strategy.params, cats, **ctx_kw)  # type: ignore[arg-type]
+    ctx = make_ctx(data, strategy.params, cats, **ctx_kw)
     intents = await strategy.on_event(ctx, orb_event(strategy))
     return strategy, ctx, intents
 
@@ -296,3 +300,105 @@ def test_invalid_params_are_rejected(bad: dict[str, object]) -> None:
 def test_the_plugin_loads_through_its_entry_point() -> None:
     cls = load_plugin("orb_sip")
     assert cls is OrbSip and cls.version == "1.0.0" and cls.kind == "entry"
+
+
+# --- fix round 1 (gauntlet findings) ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kw", "reason"),
+    [
+        ({"positions": [position(5, AAA)]}, "already_held"),
+        ({"orders": [working_entry(9, AAA)]}, "entry_working"),
+    ],
+)
+async def test_held_or_working_names_are_skipped_and_the_next_name_fills_the_slot(
+    kw: dict[str, Any], reason: str
+) -> None:
+    data, cats = standard()
+    _, ctx, intents = await run_orb(data, cats, OrbSipParams(max_positions=2), entries_today=1, **kw)
+    assert [i.symbol_id for i in intents if isinstance(i, EnterLong)] == [BBB]
+    assert {c.symbol_id: c.reject_reason for c in ctx.candidates}[AAA] == reason
+    assert cats.requested == [[BBB]]  # no catalyst spend on a name that is already held
+
+
+async def test_free_slots_never_double_count_held_names() -> None:
+    """entries_today already counts today's position; a carried position with no entries still uses a slot."""
+    data, cats = standard()
+    _, _, used = await run_orb(data, cats, entries_today=0, positions=[position(5, DDD)])
+    assert used == []
+    _, _, both = await run_orb(data, cats, OrbSipParams(max_positions=3), entries_today=1)
+    assert [i.symbol_id for i in both if isinstance(i, EnterLong)] == [AAA, BBB]
+
+
+@pytest.mark.parametrize(
+    ("aaa_bar", "atr"),
+    [
+        (BULL, "0"),  # ATR 0: stop_loss == entry
+        (bar("5.00", "5.50", "4.95", "5.40", 5000), "6.00"),  # 5.51 - 6.00 < 0
+    ],
+)
+async def test_an_invalid_stop_rejects_the_candidate_and_the_next_name_is_used(
+    aaa_bar: Candle, atr: str
+) -> None:
+    data, cats = standard()
+    data.members = [m for m in data.members if m.symbol_id != AAA]
+    data.add(AAA, "AAA", aaa_bar, atr=atr)
+    params = OrbSipParams(min_atr=Decimal("0"), stop_atr_fraction=Decimal("1"))
+    _, ctx, intents = await run_orb(data, cats, params)
+    assert {c.symbol_id: c.reject_reason for c in ctx.candidates}[AAA] == "stop_invalid"
+    (e,) = intents
+    assert isinstance(e, EnterLong) and e.symbol_id == BBB and e.stop is not None
+    assert Decimal("0") < e.stop_loss < e.stop
+    assert cats.requested == [[BBB]]
+
+
+async def test_evidence_names_the_universe_and_atr_sources() -> None:
+    data, cats = standard()
+    _, _, (e,) = await run_orb(data, cats)
+    assert isinstance(e, EnterLong)
+    assert e.evidence["universe_source"] == "finviz" and e.evidence["atr_source"] == "open_bar_stats"
+    data.stats[AAA] = replace(data.stats[AAA], atr14=None)
+    _, _, (e2,) = await run_orb(data, cats)
+    assert isinstance(e2, EnterLong) and e2.evidence["atr_source"] == "universe"
+
+
+async def test_an_entry_fill_without_a_stop_loss_is_an_error_note() -> None:
+    data, cats = standard()
+    s = OrbSip()
+    ctx = make_ctx(data, s.params, cats)
+    fill = FillEvent(1, 1, 1, AAA, "buy", "entry", 10, Decimal("21.56"), NOW, 5, 1, None, None)
+    assert await s.on_fill(ctx, fill) == []
+    assert ctx.notes[-1].level == "error" and ctx.notes[-1].data["position_id"] == 5
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"stop_atr_fraction": "1.01"},
+        {"stop_atr_fraction": "0"},
+        {"exit_at": "close"},
+        {"exit_at": "close+5m"},
+        {"exit_at": "open+300m"},
+        {"entry_cancel_at": "open+5m"},
+        {"entry_cancel_at": "open+5m5s"},
+        {"entry_cancel_at": "close"},
+        {"entry_cancel_at": "close+10m"},
+    ],
+)
+def test_offsets_and_stop_fraction_are_bounded(bad: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        OrbSipParams.model_validate(bad)
+
+
+@pytest.mark.parametrize(
+    "good",
+    [
+        {"stop_atr_fraction": "1"},
+        {"entry_cancel_at": "open+5m6s"},
+        {"entry_cancel_at": "close-60m"},
+        {"exit_at": "close-1m"},
+    ],
+)
+def test_boundary_offsets_are_accepted(good: dict[str, object]) -> None:
+    OrbSipParams.model_validate(good)

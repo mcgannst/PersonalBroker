@@ -306,21 +306,21 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 - **Polling loop:** `get_updates(offset, timeout=telegram.poll_timeout_seconds)`, offset = last update id + 1; each update is handled in its own try block (one bad update never stops the loop). A 409 Conflict (another poller for this bot) logs one `critical` event and backs off 30 s; other errors back off 1, 2, 4 … 60 s. `stop` ends the loop after the current call.
 
 **Acceptance tests (FakeTelegramApi, a real DB, a fake `decide` that records calls unless stated):**
-- [ ] 1. A valid Approve callback from the configured chat calls `decide(id, "approve", "telegram", "telegram:<from_id>")` once; the recorded call order is `answer_callback` then `edit_message`.
-- [ ] 2. The same callback delivered twice (a replay) calls `decide` once; the second is answered `Already answered`.
-- [ ] 3. A callback with one character of the MAC changed, or a proposal id changed (MAC no longer matches), is refused without calling `decide`.
-- [ ] 4. A valid callback from another chat id is ignored: no `decide`, no answer, one warning event without the text.
-- [ ] 5. Tapping Reject after Approve on the same message is refused (nonce used); with the real `ProposalService`, a web `decide` first and then a tap gives `Already submitted` and one order (Review Focus 2).
-- [ ] 6. A tap after the proposal expired (real `ProposalService`, fake clock past `expires_at`) answers `Already expired` and edits the message to `Expired` (the proposal nonce has `expires_at` NULL, so the claim itself succeeds).
-- [ ] 7. `answer_callback` failing with a 400 still leaves the decision made and the message edited; `edit_message` failing is logged and the loop continues.
-- [ ] 8. `decide` raising a `RuntimeError` releases the nonce, so a second tap works; `decide` raising `KeyError` answers `Unknown proposal` and a second tap gets `Already answered`.
-- [ ] 9. An expired nonce (pause confirmation after 60 s) answers `Button expired`.
-- [ ] 10. A callback whose message id differs from the bound one answers `Old message`.
-- [ ] 11. `send_proposal` sends once per pending proposal and returns False on the second call; with `resend=True` it sends a new message with a new nonce; a non-pending proposal is not sent. `sync_closed` edits a message whose proposal was decided on the web.
-- [ ] 12. A journal `y` callback writes `rules_followed = true`, `answered_via = "telegram"` for the live run and date.
-- [ ] 13. The run loop: a 409 logs one critical event and sleeps 30 s (fake sleep); a text `/status` update goes to the command handler and its reply is sent.
-- [ ] 14. Every generated callback data string is ≤ 64 bytes for a proposal id of 10 digits.
-- [ ] 15. Gate and commit `P3-T6: ...`.
+- [x] 1. A valid Approve callback from the configured chat calls `decide(id, "approve", "telegram", "telegram:<from_id>")` once; the recorded call order is `answer_callback` then `edit_message`.
+- [x] 2. The same callback delivered twice (a replay) calls `decide` once; the second is answered `Already answered`.
+- [x] 3. A callback with one character of the MAC changed, or a proposal id changed (MAC no longer matches), is refused without calling `decide`.
+- [x] 4. A valid callback from another chat id is ignored: no `decide`, no answer, one warning event without the text.
+- [x] 5. Tapping Reject after Approve on the same message is refused (nonce used); with the real `ProposalService`, a web `decide` first and then a tap gives `Already submitted` and one order (Review Focus 2).
+- [x] 6. A tap after the proposal expired (real `ProposalService`, fake clock past `expires_at`) answers `Already expired` and edits the message to `Expired` (the proposal nonce has `expires_at` NULL, so the claim itself succeeds).
+- [x] 7. `answer_callback` failing with a 400 still leaves the decision made and the message edited; `edit_message` failing is logged and the loop continues.
+- [x] 8. `decide` raising a `RuntimeError` releases the nonce, so a second tap works; `decide` raising `KeyError` answers `Unknown proposal` and a second tap gets `Already answered`.
+- [x] 9. An expired nonce (pause confirmation after 60 s) answers `Button expired`.
+- [x] 10. A callback whose message id differs from the bound one answers `Old message`.
+- [x] 11. `send_proposal` sends once per pending proposal and returns False on the second call; with `resend=True` it sends a new message with a new nonce; a non-pending proposal is not sent. `sync_closed` edits a message whose proposal was decided on the web.
+- [x] 12. A journal `y` callback writes `rules_followed = true`, `answered_via = "telegram"` for the live run and date.
+- [x] 13. The run loop: a 409 logs one critical event and sleeps 30 s (fake sleep); a text `/status` update goes to the command handler and its reply is sent.
+- [x] 14. Every generated callback data string is ≤ 64 bytes for a proposal id of 10 digits.
+- [x] 15. Gate and commit `P3-T6: ...`.
 
 ---
 

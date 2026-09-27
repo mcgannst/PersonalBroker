@@ -7,9 +7,9 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 1 |
-| Current task | P1-T1 (fixing), P1-T8 (building), P1-T2 (Verifier), P1-T4 + P1-T5 (Breaker+reviewers) |
+| Current task | T1 fix review, T2 B+S+C, T3 building, T4 fixing, T5 Breaker, T8 B+review |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-27T05:10:00Z |
+| Last updated (UTC) | 2026-09-27T05:35:00Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | `docker/.env.dev` (moves to `trader_dev.trader.api_credentials` in P1-T6) |
 | Token last refreshed (UTC) | 2026-09-27T03:36:53Z (spike S1) |
@@ -22,14 +22,14 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 
 | ID | Title | Depends on | Status | Attempt | Stage results | Last commit |
 |---|---|---|---|---|---|---|
-| P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | fixing | 2 | V✅ B❌ S✅ C✅(3 should-fix) | f5b6daa |
-| P1-T2 | Database models, migration 0001, test database fixture | T1 | gauntlet | 1 |  | 8cb3256 |
-| P1-T3 | Crypto and runtime settings store | T2 | todo | 0 | | |
-| P1-T4 | Market types, clock and session calendar | T1 | gauntlet | 1 | V✅ | 59be3e7 |
-| P1-T5 | FinViz parser and scraper | T1 | gauntlet | 1 |  | 2dae157 |
+| P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | gauntlet | 2 | V✅ B✅ (fix review running) | 3a3a50f |
+| P1-T2 | Database models, migration 0001, test database fixture | T1 | gauntlet | 1 | V✅ | 8cb3256 |
+| P1-T3 | Crypto and runtime settings store | T2 | building | 1 |  |  |
+| P1-T4 | Market types, clock and session calendar | T1 | fixing | 2 | V✅ B❌ S✅ C✅(should-fix) | c07c6a5 |
+| P1-T5 | FinViz parser and scraper | T1 | gauntlet | 1 | V✅ S❌ C❌ (Breaker running) | 2dae157 |
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | todo | 0 | | |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | todo | 0 | | |
-| P1-T8 | Indicators | T4 | building | 1 |  |  |
+| P1-T8 | Indicators | T4 | gauntlet | 1 | V✅ | 02af350 |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | todo | 0 | | |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | todo | 0 | | |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | todo | 0 | | |
@@ -175,3 +175,93 @@ None open.
 
 ### 2026-09-27T04:27:18Z · P1-T5 · Breaker · attempt 1 · started
 - Notes: writing Trader/app/tests/gauntlet/test_p1_t5_breaker.py
+
+### 2026-09-27T04:27:34Z · P1-T4 · Spec reviewer · attempt 1 · finished
+- Result: PASS (0 must-fix, 1 should-fix, 4 nits)
+- Commits: 59be3e7 reviewed
+- Findings: should-fix, test_no_wall_clock.py:7 regex misses datetime.today(, time.time(, pd.Timestamp.now( - nit, Candle does not enforce UTC-aware start/end (types.py:17) - nit, SPEC 3a names ReplayClock but plan provides FixedClock - nit, calendar.py:11 horizon ends today+1y from the library's wall-clock default (last session 2027-09-24) - nit, wall-clock guard exempts any file named clock.py, not only trader/market/clock.py
+- Notes: code matches plan Step 3 verbatim, Interfaces block satisfied, 11 task tests pass, DST and early closes (13:00 ET) verified
+
+### 2026-09-27T04:27:35Z · P1-T4 · Code reviewer · attempt 1 · finished
+- Result: PASS (0 must-fix, 2 should-fix, 5 nit)
+- Commits: reviewed 59be3e7
+- Findings: should-fix calendar.py:43-46 sessions_before accepts n<=0 (n=0 gives an obscure xcals error, n<0 returns dates on or after d), should-fix calendar.py:11 calendar bounds are 2020-01-02 to construction date plus 1 year and out-of-range dates raise DateOutOfBounds (a ValueError) even from is_session, undocumented and untested. Nits: datetime args raise, type-ignores avoidable, wall-clock guard gaps, Candle has no docstring or checks, missing tests for non-session previous_session
+- Notes: tz handling correct (xcals 4.13.2 returns UTC Timestamps, output is datetime.timezone.utc), construction about 0.1 s and cached by xcals
+
+### 2026-09-27T04:27:53Z · P1-T2 · Verifier · attempt 1 · started
+- Notes: pull, status, check.sh, plan ticks, files on trunk, live alembic current
+
+### 2026-09-27T04:28:03Z · P1-T1 · Verifier · attempt 2 · started
+- Notes: verifying fix commit 3a3a50f on trunk 02af350
+
+### 2026-09-27T04:28:05Z · P1-T8 · Builder · attempt 1 · finished
+- Result: done, all 5 plan steps complete and ticked
+- Commits: 02af350
+- Gate: check.sh passed on rebased trunk (54 tests, ruff/format/mypy clean)
+- Notes: ATR hand values 1.4000 and 1.3333 match. Ran ruff format on the two new files only, not the whole tree. No deviations from the plan code.
+
+### 2026-09-27T04:28:32Z · P1-T5 · Spec reviewer · attempt 1 · finished
+- Result: FAIL (1 must-fix, 2 should-fix, 3 nits)
+- Commits: be6fa8d, 1813101, 2dae157 reviewed
+- Findings: must-fix: scraper.py:107-119 screen() returns an empty or truncated universe with no FinvizError when the layout changes or a page parses to zero rows, so the nightly fallback never triggers (SPEC 4.2 parse failure fallback, Review Focus 3). should-fix: no backoff when blocked (SPEC 4.2), non-block HTTP errors such as 500 or 404 are parsed as pages (scraper.py:88). nits: signal ignored-check, total 0 reported as FilterIgnored, sync httpx vs SPEC 2 async
+- Notes: code matches the plan text verbatim. The gaps come from the plan itself
+
+### 2026-09-27T04:28:41Z · P1-T8 · Verifier · attempt 1 · started
+- Notes: pulling trunk, running check.sh, checking plan ticks
+
+### 2026-09-27T04:28:46Z · P1-T2 · Verifier · attempt 1 · finished
+- Result: PASS
+- Commits: none (read-only), verified at trunk 02af350
+- Gate: check.sh passed (ruff, format, mypy clean, 54 passed, 0 failed, 0 skipped)
+- Findings: all 10 P1-T2 steps ticked, all 10 task files on trunk, working tree clean, live alembic current = 0001 (head)
+- Notes: only a testcontainers.postgres DeprecationWarning (nit)
+
+### 2026-09-27T04:28:54Z · P1-T5 · Code reviewer · attempt 1 · finished
+- Result: FAIL (1 must-fix, 5 should-fix, 7 nits)
+- Commits: reviewed be6fa8d, 1813101, 2dae157 (read-only)
+- Findings: MUST-FIX scraper.py:88/107-119 plus parser.py:55/78-87, a layout change or a non-2xx other than 403/429/503 gives an empty or short universe with no FinvizError, so the P1-T9 fallback never fires (Review Focus 3). SHOULD-FIX: cached quote pages parse "Today" as the read date, not the fetch date (scraper.py:80, parser.py:132). httpx transport errors are not wrapped in FinvizError (scraper.py:86). Cache write is not atomic and cache reads are trusted unchecked in a predictable /tmp dir (scraper.py:81/92-93). No context manager, and close() closes an injected client (scraper.py:54/69). parse_news returns [] silently when the table is missing (parser.py:119-121)
+- Notes: pagination always terminates (row count, empty page or MAX_PAGES). Rate-limit timing and the sha256 cache key are correct. No secrets
+
+### 2026-09-27T04:29:13Z · P1-T1 · Verifier · attempt 2 · finished
+- Result: PASS
+- Commits: verified trunk 02af350 (includes fix 3a3a50f)
+- Gate: check.sh green (ruff, format, mypy clean, 54 passed), incl. gauntlet/test_p1_t1_breaker.py 8/8 and test_build_scripts.py 8/8
+- Notes: all 10 P1-T1 steps ticked, tree clean. Fixes present: SecretStr DB URLs in config.py, _ensure_newline in env_setup.py, notify.py exits 1 on HTTP/URL/ok=false errors
+
+### 2026-09-27T04:29:14Z · P1-T4 · Breaker · attempt 1 · finished
+- Result: FAIL (7 of 8 new tests pass)
+- Commits: c07c6a5
+- Gate: ruff, format and mypy pass. pytest has 3 failures: the 2 known P1-T1 breaker tests plus test_sessions_before_zero_is_empty
+- Findings: sessions_before(d, 0) raises ValueError ("count cannot be 0") from exchange_calendars.sessions_window instead of returning []
+- Notes: DST boundaries, 2026 holidays and early closes, long weekends and the year boundary, et_date at midnight, FixedClock with non-UTC input, out-of-range dates and a stricter AST wall-clock guard all pass. The calendar end date comes from the xcals default (today plus about 1 year, now 2027-09-24), which is an implicit wall-clock read
+
+### 2026-09-27T04:29:31Z · P1-T2 · Code reviewer · attempt 1 · started
+- Notes: reviewing P1-T2 diffs on origin/trunk (read-only)
+
+### 2026-09-27T04:29:31Z · P1-T2 · Spec reviewer · attempt 1 · started
+- Notes: reviewing P1-T2 commits against phase-1 plan, SPEC §10, §13, §15 and Global Constraints
+
+### 2026-09-27T04:29:34Z · P1-T3 · Builder · attempt 1 · started
+- Notes: worktree agent-aa0b661308a340722, synced to trunk c07c6a5
+
+### 2026-09-27T04:29:35Z · P1-T8 · Verifier · attempt 1 · finished
+- Result: PASS
+- Commits: verified at trunk 02af350 (none made)
+- Gate: check.sh fully green (ruff, format, mypy, 54 tests passed), git status clean
+- Findings: none. P1-T8 Steps 1-5 all ticked. indicators.py and test_indicators.py present on trunk
+- Notes: trunk advanced to c07c6a5 (P1-T4 breaker tests) after the verify pull, not covered by this run
+
+### 2026-09-27T04:29:37Z · P1-T2 · Breaker · attempt 1 · started
+- Notes: writing Trader/app/tests/gauntlet/test_p1_t2_breaker.py
+
+### 2026-09-27T04:29:46Z · P1-T1 · Spec+Code reviewer · attempt 2 · started
+- Notes: reviewing fix commit 3a3a50f (read-only)
+
+### 2026-09-27T04:30:12Z · P1-T4 · Builder · attempt 2 · started
+- Result: fixing gauntlet findings (sessions_before n=0, calendar range, stricter wall-clock test, nits)
+
+### 2026-09-27T04:31:00Z · P1-T8 · Verifier · attempt 1 · finished
+- Result: PASS (re-run on trunk c07c6a5 after coordinator note)
+- Commits: none
+- Gate: ruff, format, mypy green. pytest 61 passed, 1 failed, and the one failure is the known P1-T4 test tests/gauntlet/test_p1_t4_breaker.py::test_sessions_before_zero_is_empty (allowed). git status clean
+- Findings: none for P1-T8

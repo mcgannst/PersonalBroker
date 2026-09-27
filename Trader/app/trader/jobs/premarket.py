@@ -1,8 +1,11 @@
 """Pre-market scan (SPEC §4.2, §4.3, §9 at 08:00 ET; BR-03, BR-05).
 
-Candidates: universe names on the FinViz news or earnings screen, or gapping at least premarket.gap_min_pct
-on Questrade's pre-market quotes. The biggest movers (by |gap|, up to claude.premarket_max_candidates) get
-headlines and a Claude classification; the rest are stored as "not classified (over cap)".
+Candidates: universe names on the FinViz news or earnings screens, or gapping at least premarket.gap_min_pct
+on Questrade's pre-market quotes. Each screen setting may hold several "|"-separated filter lists, one screen
+each, unioned: the default earnings window is "reported after yesterday's close OR before today's open"
+(Stephen, 2026-09-27), which FinViz can't express in one screen. The biggest movers (by |gap|, up to
+claude.premarket_max_candidates) get headlines and a Claude classification; the rest are stored as
+"not classified (over cap)".
 
 Nothing external can sink the scan on its own:
 - a failed FinViz screen is reported in the brief and the gaps still count. FinViz's verified "0 Total"
@@ -137,33 +140,58 @@ def brief_notes(notes: Sequence[str]) -> list[str]:
     return [one_line(n, 2 * MAX_ERROR_CHARS) for n in notes if one_line(n)]
 
 
+def _earnings_date(extra: str, session_date: date, calendar: SessionCalendar) -> date:
+    """The report date an earnings screen implies: an `earningsdate_yesterday*` screen (reported after
+    yesterday's close) means the previous session, any other the session itself."""
+    if any(token.startswith("earningsdate_yesterday") for token in extra.split(",")):
+        return calendar.previous_session(session_date)
+    return session_date
+
+
+@dataclass
+class _ScreenResult:
+    flagged: dict[str, set[str]] = field(default_factory=dict)  # ticker -> sources
+    earnings_dates: dict[str, date] = field(default_factory=dict)  # ticker -> latest report date
+    errors: list[str] = field(default_factory=list)
+
+
 async def _screens(
-    deps: PremarketDeps, universe: Sequence[UniverseMember], by_ticker: Mapping[str, UniverseMember]
-) -> tuple[dict[str, set[str]], list[str]]:
+    deps: PremarketDeps,
+    universe: Sequence[UniverseMember],
+    by_ticker: Mapping[str, UniverseMember],
+    session_date: date,
+) -> _ScreenResult:
+    """One FinViz screen per "|"-separated filter list of each setting; the matches are unioned."""
     s = deps.settings
-    flagged: dict[str, set[str]] = {}
-    errors: list[str] = []
+    out = _ScreenResult()
     baseline: int | None = None
-    for source, extra in (("news", s.premarket_news_filter), ("earnings", s.premarket_earnings_filter)):
-        try:
-            page = await asyncio.to_thread(deps.finviz.screen, f"{s.universe_finviz_filters},{extra}")
-        except FinvizError as exc:
-            errors.append(f"{source}: {one_line(exc, MAX_ERROR_CHARS)}")
-            continue
-        total = page.total if page.total is not None else len(page.rows)
-        if total > 0:
-            if baseline is None:
-                baseline = await _universe_count(deps, len(universe))
-            if total == baseline:
-                errors.append(
-                    f"{source}: filter {extra!r} ignored (matched all {total} universe-filter names)"
-                )
+    for source, setting in (("news", s.premarket_news_filter), ("earnings", s.premarket_earnings_filter)):
+        alternatives = setting.split("|")
+        for extra in alternatives:
+            label = source if len(alternatives) == 1 else f"{source} [{extra}]"
+            try:
+                page = await asyncio.to_thread(deps.finviz.screen, f"{s.universe_finviz_filters},{extra}")
+            except FinvizError as exc:
+                out.errors.append(f"{label}: {one_line(exc, MAX_ERROR_CHARS)}")
                 continue
-        for row in page.rows:
-            ticker = to_questrade_ticker(row.get("Ticker", ""))
-            if ticker in by_ticker:
-                flagged.setdefault(ticker, set()).add(source)
-    return flagged, errors
+            total = page.total if page.total is not None else len(page.rows)
+            if total > 0:
+                if baseline is None:
+                    baseline = await _universe_count(deps, len(universe))
+                if total == baseline:
+                    out.errors.append(
+                        f"{label}: filter {extra!r} ignored (matched all {total} universe-filter names)"
+                    )
+                    continue
+            reported = _earnings_date(extra, session_date, deps.calendar)
+            for row in page.rows:
+                ticker = to_questrade_ticker(row.get("Ticker", ""))
+                if ticker not in by_ticker:
+                    continue
+                out.flagged.setdefault(ticker, set()).add(source)
+                if source == "earnings":
+                    out.earnings_dates[ticker] = max(reported, out.earnings_dates.get(ticker, reported))
+    return out
 
 
 async def _universe_count(deps: PremarketDeps, universe_size: int) -> int:
@@ -208,7 +236,8 @@ async def run_premarket(
     if not universe:
         raise RuntimeError(f"no universe for {session_date}: the nightly job must run first")
     by_ticker = {u.ticker: u for u in universe}
-    flagged, screen_errors = await _screens(deps, universe, by_ticker)
+    screened = await _screens(deps, universe, by_ticker, session_date)
+    flagged, screen_errors = screened.flagged, screened.errors
 
     raw_gaps, quote_error = await _gaps(deps, universe, session_date)
     gaps: dict[int, Decimal] = {}
@@ -237,8 +266,9 @@ async def run_premarket(
     top, over = candidates[:cap], candidates[cap:]
 
     def request(c: PremarketCandidate) -> CatalystRequest:
-        earnings = session_date if "earnings" in c.sources else None
-        return CatalystRequest(c.symbol_id, c.ticker, c.company, c.gap_pct, earnings)
+        return CatalystRequest(
+            c.symbol_id, c.ticker, c.company, c.gap_pct, screened.earnings_dates.get(c.ticker)
+        )
 
     catalysts = await deps.catalysts.classify_many([request(c) for c in top], session_date)
     deps.catalysts.mark_unclassified([request(c) for c in over], session_date, OVER_CAP)

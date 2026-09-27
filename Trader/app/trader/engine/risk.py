@@ -24,6 +24,7 @@ RiskCheck = Literal[
     "market_enabled",
     "zero_shares",
     "invalid",
+    "duplicate_symbol",  # the engine's own pre-check: one live entry per symbol per run (P2-T13)
 ]
 
 

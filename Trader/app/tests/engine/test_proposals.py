@@ -7,7 +7,7 @@ from typing import Any, Literal
 import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import Engine as SqlEngine
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.factories import add_strategy_config, add_symbol
@@ -528,3 +528,26 @@ def test_an_auto_executed_expiry_is_audited(env: Env) -> None:
     assert audit.before == {"proposal_id": flat.id, "status": "pending"}
     assert audit.after == {"status": "submitted", "via": "auto", "order_id": expired.order_id, "error": None}
     assert expired.decision_latency_ms is None  # nobody decided
+
+
+def test_expire_due_locks_every_position_by_id_before_any_order(env: Env) -> None:
+    """P2-REVIEW: the sweep must lock positions in id order up front (like SimBroker.on_quotes), not one
+    by one in proposal-id order, or two auto-flattens could deadlock with a concurrent quote batch."""
+    pid = open_position(env)
+    env.svc.create(env.signal_id, exit_sized(env, pid), "exit")
+    engine = env.factory.kw["bind"]
+    seen: list[str] = []
+
+    def capture(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+        if "FOR UPDATE" in statement:
+            seen.append(" ".join(statement.split()))
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        (expired,) = env.svc.expire_due(T + timedelta(minutes=5))
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert expired.status == "submitted"
+    first_position = next(i for i, sql in enumerate(seen) if "FROM trader.positions" in sql)
+    assert "ORDER BY trader.positions.id" in seen[first_position]
+    assert all("FROM trader.orders" not in sql for sql in seen[:first_position])

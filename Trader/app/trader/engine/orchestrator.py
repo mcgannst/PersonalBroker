@@ -63,8 +63,8 @@ INTENT_LOCK = "engine.intents"
 
 _log = logging.getLogger(__name__)
 
-# the orchestrator's own check (fix-round ruling). RiskCheck is P2-T10's Literal and does not list it yet
-DUPLICATE_SYMBOL = cast(RiskCheck, "duplicate_symbol")
+# the orchestrator's own check (fix-round ruling), run under the intent lock before RiskManager.evaluate
+DUPLICATE_SYMBOL: RiskCheck = "duplicate_symbol"
 OutcomeStatus = ProposalStatus | Literal["rejected_by_risk", "skipped_duplicate", "error"]
 
 
@@ -101,7 +101,8 @@ class EventResult:
     session_date: date
     strategies: list[str] = field(default_factory=list)
     outcomes: list[IntentOutcome] = field(default_factory=list)
-    failed: list[str] = field(default_factory=list)  # strategies whose on_event (or its handling) raised
+    # strategies whose on_event (or its handling) raised, or that own positions but could not start
+    failed: list[str] = field(default_factory=list)
 
 
 class Engine:
@@ -137,7 +138,7 @@ class Engine:
     # --- public entry points ---------------------------------------------------------------------------
     async def run_event(self, event_key: str, session_date: date) -> EventResult:
         result = EventResult(event_key, session_date)
-        for strategy, cfg in self.registry.enabled():
+        for strategy, cfg, exits_only in self._event_strategies(event_key, result):
             try:
                 event = next((e for e in strategy.schedule(self._cal) if e.key == event_key), None)
                 if event is None:
@@ -145,6 +146,8 @@ class Engine:
                 ctx = await self._context(strategy, cfg, session_date)
                 intents = await strategy.on_event(ctx, event)
                 self._persist(ctx, strategy, session_date)
+                if exits_only:  # a disabled owner may only wind down: no new entries
+                    intents = [i for i in intents if not isinstance(i, EnterLong)]
             except Exception as exc:  # one broken plug-in must not stop the others (SPEC §5.1)
                 result.failed.append(strategy.key)
                 self._alert(
@@ -163,6 +166,37 @@ class Engine:
             # _handle isolates every intent itself: it never raises
             result.outcomes += await self._handle(strategy, cfg, intents, session_date, event_key)
         return result
+
+    def _event_strategies(
+        self, event_key: str, result: EventResult
+    ) -> list[tuple[Strategy, StrategyConfigView, bool]]:
+        """Every enabled strategy, plus (exits only) any disabled one that still owns an open position or a
+        working order: its flatten, stop and cancel events must still run (BR-42), or a strategy disabled
+        mid-session would leave its position open overnight."""
+        out = [(strategy, cfg, False) for strategy, cfg in self.registry.enabled()]
+        running = {strategy.key for strategy, _, _ in out}
+        owner_ids = {p.strategy_config_id for p in self.broker.open_positions()} | {
+            o.strategy_config_id for o in self.broker.working_orders()
+        }
+        for config_id in sorted(i for i in owner_ids if i is not None):
+            key: str | None = None
+            try:
+                key = self.registry.config_key(config_id)
+                if key is None or key in running:
+                    continue
+                running.add(key)
+                strategy, cfg = self.registry.instance(key)
+            except Exception as exc:
+                result.failed.append(key or f"config {config_id}")
+                self._alert(
+                    "critical",
+                    f"strategy {key} (config {config_id}) owns open positions or orders but could not "
+                    f"start for event {event_key}: {_describe(exc)}",
+                    {"strategy": key, "strategy_config_id": config_id, "event_key": event_key},
+                )
+                continue
+            out.append((strategy, cfg, True))
+        return out
 
     async def on_quotes(self, quotes: Sequence[QtQuote], now: datetime) -> list[FillEvent]:
         fills = self.broker.on_quotes(quotes, now)
@@ -329,7 +363,14 @@ class Engine:
         own = self.registry.config_ids(strategy.key)
         visible_ids = self._entry_config_ids() if strategy.kind == "overlay" else own
         positions = [p for p in self.broker.open_positions() if p.strategy_config_id in visible_ids]
-        orders = [o for o in self.broker.working_orders() if o.strategy_config_id in own]
+        position_ids = {p.id for p in positions}
+        # An overlay also sees the working orders of the positions it watches (an exit already on its way
+        # carries the entry strategy's config id), so it doesn't propose a second exit (SPEC §5.3).
+        orders = [
+            o
+            for o in self.broker.working_orders()
+            if o.strategy_config_id in own or (strategy.kind == "overlay" and o.position_id in position_ids)
+        ]
         return StrategyContext(
             clock=self._clock,
             calendar=self._cal,

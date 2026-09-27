@@ -453,7 +453,7 @@ def test_rerun_is_skipped_and_force_makes_no_new_claude_calls(db_factory: sessio
 
     second = run_job(db_factory, CLOCK, "premarket", DAY, job)
     assert second.status == "skipped" and second.detail == {"reason": "already succeeded"}
-    assert len(finviz.screens) == 2  # the skipped run did no work at all
+    assert len(finviz.screens) == 3  # news + two earnings screens; the skipped run did no work at all
 
     forced = run_job(db_factory, CLOCK, "premarket", DAY, job, force=True)
     assert forced.status == "succeeded"

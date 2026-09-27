@@ -219,6 +219,16 @@ class ProposalService:
                     .with_for_update(skip_locked=True)
                 ).scalars()
             )
+            # Lock every affected position up front, by id, as SimBroker.on_quotes/end_of_session do. Expiring
+            # proposal by proposal would lock positions in proposal-id order and could deadlock with them.
+            position_ids = sorted({p.position_id for p in rows if p.position_id is not None})
+            if position_ids:
+                s.execute(
+                    select(m.Position.id)
+                    .where(m.Position.id.in_(position_ids))
+                    .order_by(m.Position.id)
+                    .with_for_update()
+                ).all()
             for p in rows:
                 self._expire(s, p, now, settings)
             return rows

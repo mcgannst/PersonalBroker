@@ -185,6 +185,13 @@ def test_ecn_only_with_direct_route_and_commission_per_fill() -> None:
     )
 
 
+def test_commission_is_rounded_to_the_4dp_the_ledger_stores() -> None:
+    """P2-REVIEW: a 5-dp commission setting would make in-memory P&L differ from the numeric(14,4) rows."""
+    m = QuoteFillModel(FillParams(commission=Decimal("4.95125")))
+    fees = m.fees("buy", 10, Decimal("20"))
+    assert fees.commission == Decimal("4.9513") and fees.total == Decimal("4.9513")
+
+
 def test_quote_snapshot_is_returned() -> None:
     d = filled(buy(), q(bid="9.99", ask="10.00", last="10.00"))
     assert d.quote_snapshot["bid"] == "9.99" and d.quote_snapshot["ask"] == "10.00"

@@ -151,7 +151,7 @@ The docs don't say whether these limits apply per app or per login. ⚠ VERIFY i
 ### 4.2 FinViz scraper
 
 - **Universe (nightly):** the screener URL is built from settings, for example `https://finviz.com/screener.ashx?v=111&f=ind_stocksonly,sh_price_5to50,sh_avgvol_o1000,ta_averagetruerange_o0.5,geo_usa`. **`ind_stocksonly` excludes ETFs and other funds** (decided 2026-09-26: 542 stocks instead of 695 when tested). SPY is fetched separately for the overlay. It pages through the results 20 rows at a time and parses the ticker, price, volume and sector. FinViz ignores unknown filter codes and returns the unfiltered list, so a result count equal to the unfiltered count is treated as an error. Ticker share classes are mapped to Questrade's form (`BF-B` → `BF.B`).
-- **Pre-market (08:00 ET):** candidate tickers come from (a) a FinViz "news today / earnings today" screen and (b) a Questrade quote check on the universe for pre-market change ≥ 3% (⚠ VERIFY pre-market data). Headlines come from each ticker's FinViz quote page. The screens are fetched fresh on every run (never from the page cache); quote pages are cached per ET day. A screen whose count equals the universe filters' own count means FinViz ignored the extra filter, and counts as a failed screen.
+- **Pre-market (08:00 ET):** candidate tickers come from (a) FinViz news and earnings screens and (b) a Questrade quote check on the universe for pre-market change ≥ 3% (⚠ VERIFY pre-market data). The news screen is "news today" (`news_date_today`). The earnings window is **"reported after yesterday's close OR before today's open"** (Stephen's decision, 2026-09-27): FinViz can't OR two values of one filter in a single screen (it silently ignores `earningsdate_yesterdayafter|todaybefore`, verified live 2026-09-27), so the job runs two screens, `earningsdate_yesterdayafter` and `earningsdate_todaybefore`, and unions them. Each of `premarket.news_filter` and `premarket.earnings_filter` holds one or more `|`-separated filter lists, one screen per list; a failed screen is reported on its own and the others still count. A name from the "after yesterday's close" screen gets the previous session as its earnings date; any other earnings match gets today. Headlines come from each ticker's FinViz quote page. The screens are fetched fresh on every run (never from the page cache); quote pages are cached per ET day. A screen whose count equals the universe filters' own count means FinViz ignored the extra filter, and counts as a failed screen.
 - **Empty screens (P2-T14 fix round, 2026-09-27):** a screen that matches nothing is a valid, empty result only when FinViz's page is verifiably empty: not blocked, its result count reads exactly 0 ("0 Total", or "#1 / 0 Total"), it has no rows, and it has either no results table (FinViz's real zero-match page has none) or one whose header has a Ticker column. A missing count, a count above 0 without a table or rows, and a table without Ticker are still errors. The nightly universe never accepts an empty result.
 - **Politeness:** at most 1 request per 2 seconds (`finviz.min_interval_seconds`, never below 2), measured from the end of the previous request, failed or not; a browser User-Agent; results cached for 12 hours (`finviz.cache_hours`); and backoff when blocked. A screener request that gets HTTP 429 or 503 is retried after 30 s, then 90 s, then fails as blocked. HTTP 403 is never retried. News (quote-page) requests aren't retried: the caller skips that ticker. Nothing that fails validation is cached.
 - **Failures:** HTTP 403/429/503, an empty body or a bot-check page count as *blocked*; other non-2xx or transport errors, a layout change, a result count that doesn't match the rows, an empty universe, and ignored filters all raise an error. The scraper never returns an empty or partial universe.
@@ -162,7 +162,7 @@ The docs don't say whether these limits apply per app or per login. ⚠ VERIFY i
 
 ### 4.3 Claude API: catalyst classification
 
-- **Input:** ticker, company name, up to 10 headlines with timestamps, the gap %, and the earnings date.
+- **Input:** ticker, company name, up to 10 headlines with timestamps, the gap %, and the earnings date (from the pre-market earnings screens, §4.2: the previous session for a report after yesterday's close, today for one before today's open; none when the name wasn't on an earnings screen).
 - **Output** (JSON-schema structured output):
 
 ```json
@@ -492,6 +492,34 @@ Data-layer settings (Phase 1):
 | `finviz.min_interval_seconds` | `2.0` | 2–60 | Spacing between FinViz requests |
 | `finviz.cache_hours` | `12.0` | 0–168 | FinViz page cache lifetime |
 | `open_bar.lookback_sessions` | `14` | 5–30 | Sessions averaged for the opening-bar volume (`avg_open_vol_14d`) |
+
+Engine settings (Phase 2; `trader/settings_store.py` is the source of truth):
+
+| Key | Default | Allowed | Purpose |
+|---|---|---|---|
+| `starting_cash` | `720` | > 0, ≤ 10,000,000 | Sim account's starting cash, in `starting_cash_currency` |
+| `starting_cash_currency`, `account_currency` | `USD`, `USD` | `USD` \| `CAD` | CAD starting cash is converted once at `fx.cad_usd_rate` less `fx.fee_pct` (§7.3) |
+| `fx.cad_usd_rate` | `0.72` | > 0, ≤ 2 | CAD → USD conversion rate |
+| `fx.fee_pct` | `0.015` | 0–0.10 | Questrade's FX fee |
+| `cash_account_mode` | `true` | bool | Buying power is settled cash (T+1) when on, total cash when off |
+| `risk_pct` | `0.02` | > 0, ≤ 0.10 | Equity risked per trade (§6.1) |
+| `slippage_buffer` | `0.005` | 0–0.05 | Cash-sizing headroom: shares ≤ buying power / (entry × (1 + buffer)) |
+| `no_entry_before_close_minutes` | `30` | 0–390 | No entry from this long before the close (BR-42); the broker cancels later entries |
+| `quote_poll_seconds` | `2.0` | 1–60 | Quote polling interval for working orders |
+| `stale_quote_seconds` | `10.0` | 1–300 | A quote older than this never fills (§7.2) |
+| `slippage_min`, `slippage_bps` | `0.01`, `5` | 0–1, 0–100 | Slippage = max(min, bps × price) |
+| `fees.commission`, `fees.direct_route`, `fees.ecn_per_share`, `fees.sec_rate` | `0`, `false`, `0.0035`, `0.0000206` | see code | Commission, ECN fee when direct-routed, SEC fee on sells |
+| `proposal_ttl_entry_seconds`, `proposal_ttl_stop_seconds`, `proposal_ttl_exit_seconds` | `300`, `180`, `300` | 30–3600 | Proposal TTLs by kind; cancels use the exit TTL (§6.2) |
+| `stop_escalation_seconds` | `60` | 10–3600 | Unprotected-position escalation after a protective stop expires |
+| `auto_flatten_on_expiry` | `true` | bool | An expired exit or cancel proposal executes automatically |
+| `killswitch.daily_loss_pct`, `killswitch.max_drawdown_pct` | `0.05`, `0.15` | > 0, ≤ 1 | Kill-switch thresholds (§6.3) |
+| `killswitch.expectancy_min_trades`, `killswitch.expectancy_threshold_r` | `50`, `0` | 1–10000, −10–10 | Expectancy kill switch |
+| `claude.model` | `claude-sonnet-5` | `claude-sonnet-5` \| `claude-haiku-4-5` | Catalyst classifier model |
+| `claude.daily_budget_usd` | `1.00` | 0–100 | Daily Claude spend cap (§4.3) |
+| `claude.premarket_max_candidates` | `50` | 0–500 | Pre-market classification cap (§4.3) |
+| `premarket.gap_min_pct` | `0.03` | > 0, ≤ 1 | Pre-market gap that makes a candidate |
+| `premarket.news_filter` | `news_date_today` | one or more `\|`-separated filter lists | FinViz news screen(s) (§4.2) |
+| `premarket.earnings_filter` | `earningsdate_yesterdayafter\|earningsdate_todaybefore` | one or more `\|`-separated filter lists | FinViz earnings screens, unioned (§4.2) |
 
 Every stored value is validated; `load()` fails closed on an invalid row, and every change is written to `audit_log`.
 

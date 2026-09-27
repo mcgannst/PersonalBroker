@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from trader.adapters.questrade.models import QtQuote
 from trader.broker.types import AccountState, Fill, OrderView, PositionView, dec_str
+from trader.events import Level
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock
 from trader.market.types import Candle, Interval, OpenBarStats, OpeningBars, UniverseMember, UniverseStatus
@@ -151,7 +152,7 @@ class CandidateRecord:
 @dataclass(frozen=True, slots=True)
 class DecisionNote:
     message: str
-    level: str = "info"
+    level: Level = "info"
     data: dict[str, Any] = field(default_factory=dict)
 
 
@@ -201,7 +202,7 @@ class StrategyContext:
     candidates: list[CandidateRecord] = field(default_factory=list)
     notes: list[DecisionNote] = field(default_factory=list)
 
-    def note(self, message: str, level: str = "info", **data: Any) -> None:
+    def note(self, message: str, level: Level = "info", **data: Any) -> None:
         self.notes.append(DecisionNote(message, level, data))
 
 

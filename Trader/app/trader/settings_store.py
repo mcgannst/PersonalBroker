@@ -24,6 +24,12 @@ log = structlog.get_logger("settings_store")
 DEFAULT_UNIVERSE_FILTERS = "ind_stocksonly,sh_price_5to50,sh_avgvol_o1000,ta_averagetruerange_o0.5,geo_usa"
 # A comma-separated list of FinViz filter tokens, for example "sh_price_5to50,geo_usa".
 FINVIZ_FILTERS_PATTERN = r"^[a-z0-9_.]+(,[a-z0-9_.]+)*$"
+# One or more such lists separated by "|": the pre-market job runs one screen per list and unions the
+# results, because FinViz can't OR two values of one filter in a single screen (it silently ignores
+# "earningsdate_yesterdayafter|todaybefore", verified live 2026-09-27).
+FINVIZ_FILTER_SETS_PATTERN = r"^[a-z0-9_.]+(,[a-z0-9_.]+)*(\|[a-z0-9_.]+(,[a-z0-9_.]+)*)*$"
+# Stephen's decision (2026-09-27): earnings reported after yesterday's close OR before today's open.
+DEFAULT_EARNINGS_FILTER = "earningsdate_yesterdayafter|earningsdate_todaybefore"
 TICKER_PATTERN = r"^[A-Z][A-Z0-9.\-]{0,9}$"
 OVERLAY_SYMBOL = "SPY"  # the market overlay reads SPY bars, so it must always be in the universe
 # A session event key (Phase 3). At most 39 characters, so the job name `event:<key>` fits job_runs.job
@@ -140,11 +146,12 @@ class RuntimeSettings(BaseModel):
     premarket_gap_min_pct: Decimal = Field(
         Decimal("0.03"), gt=0, le=Decimal("1"), allow_inf_nan=False, alias="premarket.gap_min_pct"
     )
+    # Each: one or more "|"-separated FinViz filter lists added to the universe filters; one screen per list.
     premarket_news_filter: str = Field(
-        "news_date_today", pattern=FINVIZ_FILTERS_PATTERN, alias="premarket.news_filter"
+        "news_date_today", pattern=FINVIZ_FILTER_SETS_PATTERN, alias="premarket.news_filter"
     )
     premarket_earnings_filter: str = Field(
-        "earningsdate_today", pattern=FINVIZ_FILTERS_PATTERN, alias="premarket.earnings_filter"
+        DEFAULT_EARNINGS_FILTER, pattern=FINVIZ_FILTER_SETS_PATTERN, alias="premarket.earnings_filter"
     )
     # --- Phase 3: worker, scheduler, Telegram, day-level jobs (SPEC §1, §4.4, §9)
     worker_heartbeat_seconds: int = Field(15, ge=5, le=300, alias="worker.heartbeat_seconds")

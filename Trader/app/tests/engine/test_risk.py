@@ -1,12 +1,12 @@
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 
 from trader.broker.types import AccountState, OrderView, PositionView
-from trader.engine.risk import Rejection, RiskContext, RiskManager, SizedOrder
+from trader.engine.risk import Rejection, RiskCheck, RiskContext, RiskManager, SizedOrder
 from trader.market.calendar import SessionCalendar
 from trader.settings_store import RuntimeSettings
 from trader.strategies.base import Cancel, EnterLong, Exit
@@ -175,3 +175,8 @@ def test_a_stop_loss_at_or_below_zero_is_invalid(stop_loss: str) -> None:
     intent = replace(ENTRY, stop_loss=Decimal(stop_loss))
     out = RISK.evaluate(intent, ctx(account=account("100000", "100000")))
     assert isinstance(out, Rejection) and out.check == "invalid" and "above zero" in out.reason
+
+
+def test_risk_check_names_the_engines_duplicate_symbol_check() -> None:
+    """P2-REVIEW: the engine's duplicate_symbol rejection is a typed RiskCheck, not a cast."""
+    assert "duplicate_symbol" in get_args(RiskCheck)

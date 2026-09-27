@@ -383,8 +383,12 @@ async def test_an_exit_passes_with_every_kill_switch_tripped_after_hours(
 async def test_no_strategy_enabled_does_nothing_but_open_positions_still_get_on_fill(
     db_factory: sessionmaker[Session],
 ) -> None:
-    """Disabled after its entry was submitted: the next event runs no strategy and writes nothing, yet the
-    late fill still reaches the (now disabled) owner so its position gets a protective stop."""
+    """Disabled after its entry was submitted: the next event makes no new entry and writes nothing, yet the
+    late fill still reaches the (now disabled) owner so its position gets a protective stop.
+
+    P2-REVIEW: a disabled strategy that still owns a working order or open position now runs its events
+    exits-only (BR-42: its flatten must still happen), so it is listed in `strategies` but its entry intent
+    is dropped."""
     calls = Calls()
     w: World
     a = make_plugin("alpha", calls, {"open_evt": lambda ctx: [enter(w.ids["AAA"])]}, on_fill=protect)
@@ -393,7 +397,7 @@ async def test_no_strategy_enabled_does_nothing_but_open_positions_still_get_on_
     w.registry.update("alpha", enabled=False, actor="stephen")
     signals_before = count(db_factory, m.Signal)
     res = await w.engine.run_event("open_evt", DAY)
-    assert (res.strategies, res.outcomes) == ([], [])
+    assert (res.strategies, res.outcomes) == (["alpha"], [])
     assert count(db_factory, m.Signal) == signals_before
     assert len(await fill_all(w, "AAA")) == 1
     assert [k for k, *_ in calls.fills] == ["alpha"]

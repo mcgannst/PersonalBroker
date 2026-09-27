@@ -10,8 +10,9 @@ Hardening (P2-B1 fix round):
 - Each order in a quote batch runs in its own savepoint: an exception rolls back that order only, logs an
   error event (order id, exception type) and the batch carries on.
 - Nothing fills outside regular hours [session_open, session_close); such an order stays working.
-- Lock order is always POSITION rows, then ORDER rows (submit, cancel, on_quotes, end_of_session), so two
-  callers can't deadlock.
+- Lock order is always POSITION rows (by id), then ORDER rows, then the cash advisory lock (submit, cancel,
+  on_quotes, end_of_session), so two callers can't deadlock. The proposal service locks its PROPOSAL rows
+  first, then positions by id (expire_due locks all of a sweep's positions up front).
 - A sell is re-checked against its locked position (open, same qty) and cancelled if it no longer fits.
 - An entry whose cost (price x qty + fees) exceeds buying power is cancelled at fill time.
 - account_state reads cash and positions in one REPEATABLE READ transaction.

@@ -155,7 +155,10 @@ async def test_candidates_come_from_screens_and_gaps(
     assert finviz.news_calls == ["AAA", "BBB", "CCC", "DDD"]
     assert finviz.screens == [
         "ind_stocksonly,sh_price_5to50,sh_avgvol_o1000,ta_averagetruerange_o0.5,geo_usa,news_date_today",
-        "ind_stocksonly,sh_price_5to50,sh_avgvol_o1000,ta_averagetruerange_o0.5,geo_usa,earningsdate_today",
+        "ind_stocksonly,sh_price_5to50,sh_avgvol_o1000,ta_averagetruerange_o0.5,geo_usa,"
+        "earningsdate_yesterdayafter",
+        "ind_stocksonly,sh_price_5to50,sh_avgvol_o1000,ta_averagetruerange_o0.5,geo_usa,"
+        "earningsdate_todaybefore",
     ]
     lines = out["brief"].splitlines()
     assert lines[0] == "Pre-market brief for 2026-10-06: 4 candidates"
@@ -200,8 +203,10 @@ async def test_a_finviz_failure_falls_back_to_gaps(
     db_factory: sessionmaker[Session], seeded: dict[str, int]
 ) -> None:
     out = await run_premarket(deps(db_factory, FakeFinviz(fail=True), FakeMessages()), DAY)
-    assert out["candidates"] == 2 and len(out["screen_errors"]) == 2  # AAA and BBB by gap alone
+    # AAA and BBB by gap alone; one error per screen (news, and each of the two earnings screens)
+    assert out["candidates"] == 2 and len(out["screen_errors"]) == 3
     assert "FinViz screens failed: news: HTTP 403" in out["brief"]
+    assert "earnings [earningsdate_todaybefore]: HTTP 403" in out["brief"]
 
 
 async def test_no_universe_is_an_error(db_factory: sessionmaker[Session]) -> None:
@@ -298,6 +303,66 @@ def test_brief_collapses_and_caps_every_interpolated_text() -> None:
     assert lines[2].startswith("FinViz screens failed: news: HTTP 403 Forged line; eee")
     assert len(lines[2]) < 260
     assert brief_notes(["a\nb", "  ", "c" * 1000]) == ["a b", "c" * 399 + "…"]
+
+
+# --- P2-REVIEW: earnings window is "after yesterday's close OR before today's open" (Stephen, 2026-09-27) ---
+
+
+class ByFilterFinviz(FakeFinviz):
+    """Each screen returns the tickers mapped to its last filter token; a mapped exception is raised."""
+
+    def __init__(self, by_token: dict[str, list[str] | Exception]) -> None:
+        super().__init__()
+        self.by_token = by_token
+
+    def screen(self, filters: str, view: int = 111, signal: str | None = None) -> ScreenerPage:
+        self.screens.append(filters)
+        got = self.by_token.get(filters.split(",")[-1], [])
+        if isinstance(got, Exception):
+            raise got
+        return ScreenerPage(len(got), ["Ticker"], [{"Ticker": t} for t in got])
+
+
+def test_default_earnings_window_is_yesterday_after_close_or_today_before_open() -> None:
+    s = RuntimeSettings()
+    assert s.premarket_earnings_filter == "earningsdate_yesterdayafter|earningsdate_todaybefore"
+    assert RuntimeSettings.model_validate({"premarket.news_filter": "news_date_today|news_date_prevdays2"})
+    for bad in ("a||b", "|a", "a|", "a|B"):
+        with pytest.raises(ValueError):
+            RuntimeSettings.model_validate({"premarket.earnings_filter": bad})
+    with pytest.raises(ValueError):  # the universe filters stay one list: no alternatives there
+        RuntimeSettings.model_validate({"universe.finviz_filters": "geo_usa|sh_price_5to50"})
+
+
+async def test_both_earnings_screens_are_unioned_with_their_report_dates(
+    db_factory: sessionmaker[Session], seeded: dict[str, int]
+) -> None:
+    finviz = ByFilterFinviz(
+        {
+            "earningsdate_yesterdayafter": ["DDD", "EEE"],
+            "earningsdate_todaybefore": ["EEE", "CCC"],
+        }
+    )
+    out = await run_premarket(deps(db_factory, finviz, FakeMessages()), DAY)
+    assert out["screen_errors"] == []
+    assert out["candidates"] == 5  # AAA, BBB by gap; CCC, DDD, EEE from the two earnings screens
+    with db_factory() as s:
+        rows = {r.symbol_id: r for r in s.execute(select(m.Catalyst)).scalars()}
+    # after yesterday's close -> the previous session; before today's open (or both) -> today
+    assert rows[seeded["DDD"]].earnings_date == PREV
+    assert rows[seeded["EEE"]].earnings_date == DAY and rows[seeded["CCC"]].earnings_date == DAY
+    assert rows[seeded["AAA"]].earnings_date is None
+
+
+async def test_one_failed_earnings_screen_keeps_the_other(
+    db_factory: sessionmaker[Session], seeded: dict[str, int]
+) -> None:
+    finviz = ByFilterFinviz(
+        {"earningsdate_yesterdayafter": FinvizBlocked("HTTP 403"), "earningsdate_todaybefore": ["DDD"]}
+    )
+    out = await run_premarket(deps(db_factory, finviz, FakeMessages()), DAY)
+    assert out["screen_errors"] == ["earnings [earningsdate_yesterdayafter]: HTTP 403"]
+    assert any(line.startswith("DDD +0.50% [earnings]") for line in out["brief"].splitlines())
 
 
 async def test_gap_threshold_uses_the_unrounded_gap(

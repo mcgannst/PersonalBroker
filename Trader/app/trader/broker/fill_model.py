@@ -72,7 +72,9 @@ class QuoteFillModel:
     def fees(self, side: Side, qty: int, price: Decimal) -> Fees:
         ecn = (self._p.ecn_per_share * qty).quantize(Q4, ROUND_HALF_UP) if self._p.direct_route else ZERO
         sec = (self._p.sec_fee_rate * price * qty).quantize(Q4, ROUND_HALF_UP) if side == "sell" else ZERO
-        return Fees(commission=self._p.commission, ecn=ecn, sec=sec)
+        # every fee is 4 dp like its numeric(14,4) column, so in-memory P&L equals what the ledger stores
+        commission = self._p.commission.quantize(Q4, ROUND_HALF_UP)
+        return Fees(commission=commission, ecn=ecn, sec=sec)
 
     def evaluate(self, order: OrderSpec, market: QtQuote | Candle, now: datetime) -> FillDecision | None:
         out = self.assess(order, market, now)

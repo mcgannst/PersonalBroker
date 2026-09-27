@@ -363,6 +363,7 @@ def build_fake(
     auto: bool = True,
     max_positions: int = 1,
     data: FakeData | None = None,
+    extra_plugins: dict[str, type[Any]] | None = None,
 ) -> FakeWorld:
     clock = FixedClock(T_ORB)
     store = SettingsStore(factory, now=clock.now)
@@ -373,7 +374,9 @@ def build_fake(
     with factory() as s:
         ids = {t: add_symbol(s, t, questrade_id=101 + i) for i, t in enumerate(("AAA", "BBB"))}
         s.commit()
-    registry = StrategyRegistry(factory, clock, plugins={"alpha": fake_plugin("alpha", events)})
+    registry = StrategyRegistry(
+        factory, clock, plugins={"alpha": fake_plugin("alpha", events), **(extra_plugins or {})}
+    )
     registry.ensure_defaults()
     registry.update("alpha", params={"max_positions": max_positions}, actor="test")
     broker = SimBroker(
@@ -573,3 +576,68 @@ async def test_a_failing_strategy_is_reported_in_the_result(db_factory: sessionm
     assert (res.strategies, res.failed, res.outcomes) == ([], ["alpha"], [])
     (err,) = events_at(db_factory, "error")
     assert "alpha" in err.message and err.data["event_key"] == "open_evt"
+
+
+# --- P2-REVIEW ---------------------------------------------------------------------------------------------
+async def test_a_strategy_disabled_mid_session_still_flattens_but_never_enters(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """BR-42: disabling a strategy that holds a position must not leave it open overnight."""
+    w: FakeWorld
+    w = build_fake(
+        db_factory,
+        {
+            "open_evt": lambda ctx: [enter_stop(w.ids["AAA"])],
+            "flatten": lambda ctx: [
+                *(Exit(p.id, "market", None, "flatten") for p in ctx.positions),
+                enter_stop(w.ids["BBB"]),  # a disabled owner's new entry is dropped
+            ],
+        },
+        max_positions=2,
+    )
+    await w.engine.run_event("open_evt", DAY)
+    await fill_aaa(w)
+    w.engine.registry.update("alpha", enabled=False, actor="test")
+    res = await w.engine.run_event("flatten", DAY)
+    assert res.strategies == ["alpha"] and res.failed == []
+    (out,) = res.outcomes
+    assert isinstance(out.intent, Exit) and out.status == "submitted"
+    # with nothing open or working, a disabled strategy doesn't run at all
+    w.clock.set(T_FILL + timedelta(seconds=5))
+    q = quote(w.ids["AAA"], "21.60", "21.62", "21.61", at=w.clock.now())
+    await w.engine.on_quotes([q], w.clock.now())
+    assert w.broker.open_positions() == []
+    assert (await w.engine.run_event("flatten", DAY)).strategies == []
+
+
+async def test_the_overlay_sees_exits_already_working_for_its_positions(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """SPEC §5.3: an exit order carries the entry strategy's config id; the overlay must still see it."""
+    seen: list[list[int]] = []
+
+    def watch(ctx: StrategyContext) -> list[Intent]:
+        seen.append([o.id for o in ctx.working_orders if o.purpose == "exit"])
+        return []
+
+    overlay = fake_plugin("omega", {"overlay_evt": watch})
+    overlay.kind = "overlay"  # type: ignore[attr-defined]
+    w: FakeWorld
+    w = build_fake(
+        db_factory,
+        {
+            "open_evt": lambda ctx: [enter_stop(w.ids["AAA"])],
+            "flatten": lambda ctx: [Exit(p.id, "market", None, "flatten") for p in ctx.positions],
+        },
+        extra_plugins={"omega": overlay},
+    )
+    w.engine.registry.ensure_defaults()
+    await w.engine.run_event("open_evt", DAY)
+    await fill_aaa(w)
+    w.store.set("approval_mode", "manual", actor="test")
+    (pending,) = (await w.engine.run_event("flatten", DAY)).outcomes
+    w.engine.proposals.decide(pending.proposal_id, "approve", "web", "stephen")  # type: ignore[arg-type]
+    exit_ids = [o.id for o in w.broker.working_orders() if o.purpose == "exit"]
+    assert len(exit_ids) == 1
+    await w.engine.run_event("overlay_evt", DAY)
+    assert seen == [exit_ids]

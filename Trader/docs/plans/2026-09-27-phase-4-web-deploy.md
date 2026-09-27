@@ -668,15 +668,15 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - **Security:** change password (current, new twice, match and length ≥ 8 checked before sending); two-step: Set up (password) shows the secret and the `otpauth://` link (tap to open an authenticator on the phone) and a code field to confirm; Disable (password and code). Secrets are shown only in the setup step and cleared from state when leaving it.
 
 **Acceptance tests:**
-- [ ] 1. Approval mode Manual → Auto asks for confirmation; confirming calls `putSetting("approval_mode", "auto")`; cancelling calls nothing.
-- [ ] 2. `FieldInput` for each `FieldKind` in the fixtures renders the right control and produces the right value type (decimal as a string `"0.02"`, integer as a number, `string_list` as an array); a value above `maximum` shows the rule and disables Save.
-- [ ] 3. A server 422 with `fields` shows the message under the field.
-- [ ] 4. Strategy form: changing `top_n` and saving calls `putStrategy("orb_sip", {params: {top_n: 10}})` only; disabling a strategy with `owns_open_positions` shows the warning.
-- [ ] 5. Kill-switch reset: the button is disabled until the reason has 3 characters; confirming calls `resetKillSwitch("max_drawdown_pct", {reason})`; Pause asks for confirmation then calls `pause()`.
-- [ ] 6. Questrade token: the input is `type="password"`, is empty after submit, and the call carries the pasted value.
-- [ ] 7. Password change with mismatched passwords or a 7-character new password makes no call; a matching 8-character one calls `changePassword`.
-- [ ] 8. Two-step setup shows the secret and the link after `totpSetup`, and confirm calls `totpConfirm` with the 6-digit code.
-- [ ] 9. Gate and commit `P4-T15: ...`.
+- [x] 1. Approval mode Manual → Auto asks for confirmation; confirming calls `putSetting("approval_mode", "auto")`; cancelling calls nothing.
+- [x] 2. `FieldInput` for each `FieldKind` in the fixtures renders the right control and produces the right value type (decimal as a string `"0.02"`, integer as a number, `string_list` as an array); a value above `maximum` shows the rule and disables Save.
+- [x] 3. A server 422 with `fields` shows the message under the field.
+- [x] 4. Strategy form: changing `top_n` and saving calls `putStrategy("orb_sip", {params: {top_n: 10}})` only; disabling a strategy with `owns_open_positions` shows the warning.
+- [x] 5. Kill-switch reset: the button is disabled until the reason has 3 characters; confirming calls `resetKillSwitch("max_drawdown_pct", {reason})`; Pause asks for confirmation then calls `pause()`.
+- [x] 6. Questrade token: the input is `type="password"`, is empty after submit, and the call carries the pasted value.
+- [x] 7. Password change with mismatched passwords or a 7-character new password makes no call; a matching 8-character one calls `changePassword`.
+- [x] 8. Two-step setup shows the secret and the link after `totpSetup`, and confirm calls `totpConfirm` with the 6-digit code.
+- [x] 9. Gate and commit `P4-T15: ...`.
 
 ---
 

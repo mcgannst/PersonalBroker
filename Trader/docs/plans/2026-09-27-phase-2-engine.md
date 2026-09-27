@@ -1632,7 +1632,7 @@ git push origin HEAD:trunk
   - **Settled cash rule:** `settled = sum(credits with settle_date <= today) + sum(every debit)`. A purchase reduces settled cash immediately (you can only spend settled money once), while sale proceeds count only from their settle date. `total` is the sum of every row.
   - There is no update or delete method; the database refuses both.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `Trader/app/tests/broker/__init__.py`: empty file.
 
@@ -1742,12 +1742,12 @@ def test_ledger_rows_are_append_only(db_factory: sessionmaker[Session]) -> None:
         assert not hasattr(LEDGER, "update") and not hasattr(LEDGER, "delete")
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `uv --directory Trader/app run pytest tests/broker/test_ledger.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.broker'`.
 
-- [ ] **Step 3: Implement `trader/broker/ledger.py`**
+- [x] **Step 3: Implement `trader/broker/ledger.py`**
 
 `Trader/app/trader/broker/__init__.py`: empty file.
 
@@ -1835,12 +1835,12 @@ class Ledger:
         return CashBalances(total=Decimal(total), settled=Decimal(settled))
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `uv --directory Trader/app run pytest tests/broker/test_ledger.py -q`
 Expected: all pass. (`Decimal("1009.9900") == Decimal("1009.99")` is true, so the equality checks don't depend on scale.)
 
-- [ ] **Step 5: Run the gate, commit and push**
+- [x] **Step 5: Run the gate, commit and push**
 
 Run: `uv --directory Trader/app run ruff format .` then `bash Trader/app/scripts/check.sh` → all pass.
 ```bash

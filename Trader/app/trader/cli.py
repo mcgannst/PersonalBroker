@@ -92,3 +92,78 @@ def questrade_check(symbol: str = "SPY") -> None:
             typer.echo(f"rate limit remaining: {qt.rate_limit_remaining}")
 
     asyncio.run(run())
+
+
+@app.command()
+def nightly(
+    date_: str | None = typer.Option(None, "--date", help="Target session YYYY-MM-DD"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Build the universe and caches for the next session (SPEC §9, 20:00 ET)."""
+    import asyncio
+    from datetime import date as date_cls
+    from pathlib import Path
+    from typing import Any
+
+    from trader.adapters.finviz.scraper import FinvizScraper
+    from trader.adapters.questrade.auth import QuestradeAuth
+    from trader.adapters.questrade.client import QuestradeClient
+    from trader.bootstrap import build_core
+    from trader.jobs.nightly import NightlyDeps, run_nightly, target_session
+    from trader.jobs.runner import run_job
+
+    core = build_core()
+    settings = core.settings.load()
+    session_date = date_cls.fromisoformat(date_) if date_ else target_session(core.calendar, core.clock)
+    auth = QuestradeAuth(core.factory, core.crypto, core.clock)
+    # A private per-user cache (the scraper creates it 0o700 and refuses one it doesn't own), never a
+    # shared /tmp path.
+    cache_dir = Path.home() / ".cache" / "trader" / "finviz"
+
+    with FinvizScraper(
+        min_interval_s=settings.finviz_min_interval_seconds,
+        cache_dir=cache_dir,
+        cache_ttl_s=settings.finviz_cache_hours * 3600,
+    ) as finviz:
+
+        def job() -> dict[str, Any]:
+            async def go() -> dict[str, Any]:
+                async with QuestradeClient(auth, core.clock) as qt:
+                    return await run_nightly(
+                        NightlyDeps(core.factory, core.clock, core.calendar, finviz, qt, settings),
+                        session_date,
+                    )
+
+            return asyncio.run(go())
+
+        out = run_job(core.factory, core.clock, "nightly", session_date, job, force=force)
+    typer.echo(f"nightly {session_date}: {out.status} {out.detail or out.error or ''}")
+    if out.status == "failed":
+        raise typer.Exit(1)
+
+
+@app.command()
+def notify(text: str) -> None:
+    """Send a Telegram message to Stephen through the configured bot."""
+    import httpx
+
+    from trader.config import get_env
+
+    env = get_env()
+    if env.telegram_bot_token is None or env.telegram_chat_id is None:
+        typer.echo("Telegram isn't configured", err=True)
+        raise typer.Exit(1)
+    try:
+        r = httpx.post(
+            f"https://api.telegram.org/bot{env.telegram_bot_token.get_secret_value()}/sendMessage",
+            data={"chat_id": env.telegram_chat_id, "text": text},
+            timeout=15,
+        )
+    except httpx.HTTPError as exc:
+        # Only the exception type: its message or traceback could carry the URL, which holds the token.
+        typer.echo(f"failed: {type(exc).__name__}", err=True)
+        raise typer.Exit(1) from None
+    if r.status_code != 200:
+        typer.echo(f"failed: HTTP {r.status_code}", err=True)
+        raise typer.Exit(1)
+    typer.echo("sent")

@@ -3557,7 +3557,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 git pull --rebase && git push
 ```
 
-- [ ] **Step 5: Write the failing nightly tests**
+- [x] **Step 5: Write the failing nightly tests**
 
 `Trader/app/tests/jobs/test_nightly.py`:
 ```python
@@ -3707,12 +3707,12 @@ async def test_unknown_and_failing_symbols_are_reported_not_fatal(db_factory: se
     assert detail["universe"] == 3  # AAPL, MSFT, SPY resolved
 ```
 
-- [ ] **Step 6: Run to see them fail**
+- [x] **Step 6: Run to see them fail**
 
 Run: `uv run pytest tests/jobs/test_nightly.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.jobs.nightly'`.
 
-- [ ] **Step 7: Implement `trader/market/repository.py`**
+- [x] **Step 7: Implement `trader/market/repository.py`**
 
 ```python
 """Idempotent writes of market data (every write is an upsert)."""
@@ -3824,7 +3824,7 @@ def latest_universe_tickers(session: Session, before: date) -> tuple[date, list[
     return last, list(tickers)
 ```
 
-- [ ] **Step 8: Implement `trader/jobs/nightly.py`**
+- [x] **Step 8: Implement `trader/jobs/nightly.py`**
 
 ```python
 """Nightly job (SPEC §9, 20:00 ET Sun–Thu): FinViz universe → symbol IDs → daily candles and ATR14 →
@@ -3950,12 +3950,12 @@ async def run_nightly(deps: NightlyDeps, session_date: date) -> dict[str, Any]:
     return detail
 ```
 
-- [ ] **Step 9: Run the nightly tests**
+- [x] **Step 9: Run the nightly tests**
 
 Run: `uv run pytest tests/jobs -q`
 Expected: `10 passed`. If `test_nightly_builds_universe_stats_and_candles` shows a different `atr14`, check the fake: every daily bar has high−low = 1 and close = open = 10, so every true range is 1 and ATR must be exactly `1.0000`.
 
-- [ ] **Step 10: Add `nightly` and `notify` to the CLI**
+- [x] **Step 10: Add `nightly` and `notify` to the CLI**
 
 Add to `Trader/app/trader/cli.py`:
 ```python
@@ -4016,7 +4016,7 @@ def notify(text: str) -> None:
 
 (`job()` returns `dict[str, object]`; if mypy wants `dict[str, Any]` to match `run_job`, change both annotations to `dict[str, Any]` and import `Any`.)
 
-- [ ] **Step 11: Run the gate, commit and push**
+- [x] **Step 11: Run the gate, commit and push**
 
 Run: `uv run ruff format . && bash scripts/check.sh` → all pass.
 ```bash

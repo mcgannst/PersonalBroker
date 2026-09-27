@@ -590,16 +590,24 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - The commentary is untrusted text: it is stored as is and escaped by the renderer and by React.
 
 **Acceptance tests (fake Anthropic client as in the P2 catalyst tests; real DB):**
-- [ ] 1. `week_window` of Wednesday 2026-11-25, and of Saturday 2026-11-28, → 2026-11-23..2026-11-27 with 4 sessions (Thanksgiving) and `week_ending` 2026-11-27; `last_completed_week` on Saturday 2026-11-28 → that week; on Monday 2026-11-30 → the same week; a week with no sessions (a test calendar whose `is_session` is False for that week) → `week_ending` None.
-- [ ] 2. `build_facts` on a seeded week: the week and run-to-date metrics equal `compute_metrics` over those ranges, the days list has every session with its trades and answer, best and worst trades by R, the week's kill-switch trips.
-- [ ] 3. `check_numbers` passes a text quoting "4 trades", "a 50% win rate" (0.5000), "+0.13R" (0.1250 → 0.13 at 2 dp), "$5.00", "November 27"; flags "7 trades", "a 51% win rate" and "$12.34" (not in the facts).
-- [ ] 4. A commentary with a made-up number, then a clean one on the retry → status `ok`, two calls, the second listing the offending number; two bad ones → `rejected`, commentary null, the error lists the tokens, and the report is still stored and sent with the "quoted numbers" note.
-- [ ] 5. **Budget:** spent 0.97 with a 1.00 budget and a 0.05 weekly cap → no call, status `budget`, the report sent with its note; spent 0.90 → one call, its cost stored and counted by `claude_spent` the same day; a first call costing 0.03 that quotes a made-up number gets no retry (0.06 > 0.05) and ends `rejected`.
-- [ ] 6. `reports.weekly_commentary = false` → no call, status `disabled`; no Anthropic client → `disabled` with "ANTHROPIC_API_KEY not set".
-- [ ] 7. The SDK raising, and `stop_reason = "max_tokens"` → status `error`, a one-line error without the API key.
-- [ ] 8. **Once:** `run_weekly` twice for the same week sends one Telegram message (dedupe `weekly:2026-11-27`), keeps one row, and accumulates the second call's cost.
-- [ ] 9. The prompt sent to Claude contains the facts JSON and the "only numbers in the facts" rule, and the call uses `claude.model` and `max_tokens` 900.
-- [ ] 10. Gate and commit `P5-T9: ...`.
+- [x] 1. `week_window` of Wednesday 2026-11-25, and of Saturday 2026-11-28, → 2026-11-23..2026-11-27 with 4 sessions (Thanksgiving) and `week_ending` 2026-11-27; `last_completed_week` on Saturday 2026-11-28 → that week; on Monday 2026-11-30 → the same week; a week with no sessions (a test calendar whose `is_session` is False for that week) → `week_ending` None.
+- [x] 2. `build_facts` on a seeded week: the week and run-to-date metrics equal `compute_metrics` over those ranges, the days list has every session with its trades and answer, best and worst trades by R, the week's kill-switch trips.
+- [x] 3. `check_numbers` passes a text quoting "4 trades", "a 50% win rate" (0.5000), "+0.13R" (0.1250 → 0.13 at 2 dp), "$5.00", "November 27"; flags "7 trades", "a 51% win rate" and "$12.34" (not in the facts).
+- [x] 4. A commentary with a made-up number, then a clean one on the retry → status `ok`, two calls, the second listing the offending number; two bad ones → `rejected`, commentary null, the error lists the tokens, and the report is still stored and sent with the "quoted numbers" note.
+- [x] 5. **Budget:** spent 0.97 with a 1.00 budget and a 0.05 weekly cap → no call, status `budget`, the report sent with its note; spent 0.90 → one call, its cost stored and counted by `claude_spent` the same day; a first call costing 0.03 that quotes a made-up number gets no retry (0.06 > 0.05) and ends `rejected`.
+- [x] 6. `reports.weekly_commentary = false` → no call, status `disabled`; no Anthropic client → `disabled` with "ANTHROPIC_API_KEY not set".
+- [x] 7. The SDK raising, and `stop_reason = "max_tokens"` → status `error`, a one-line error without the API key.
+- [x] 8. **Once:** `run_weekly` twice for the same week sends one Telegram message (dedupe `weekly:2026-11-27`), keeps one row, and accumulates the second call's cost.
+- [x] 9. The prompt sent to Claude contains the facts JSON and the "only numbers in the facts" rule, and the call uses `claude.model` and `max_tokens` 900.
+- [x] 10. Gate and commit `P5-T9: ...`.
+
+**Build notes (P5-T9 builder, 2026-09-27):**
+- `build_facts` gains a keyword `settings: RuntimeSettings | None = None` (for `expectancy_switch.min_trades`; read from the database when omitted); `run_weekly` passes `deps.settings()`.
+- Extra public helpers in `trader.reports.weekly`: `check_length(text)` (the 50–400 word rule, kept out of `check_numbers` so test 3's short texts are only number-checked), `allowed_values(facts)`, `METRIC_KEYS`; in `trader.adapters.claude.reports`: `build_prompt(facts, avoid)` (facts as sorted JSON inside `<facts>`).
+- A length failure is `rejected` and also gets the one retry (budget permitting); its note is "Commentary unavailable: it was not the expected length." `reports.weekly_commentary = false` has its own note ("... it is turned off in Settings."). A failed retry is `error` (its cost counted). A rejected report's error lists every offending number of both attempts.
+- `expectancy_switch.closed_trades` counts trades with an R up to the week's end since the switch's last reset, as `KillSwitches` does. Kill-switch trip `value`/`threshold` are not treated as ratios by the number check (the rule names `win_rate` and `*_pct` keys only).
+- Detail `sent` follows the postclose pattern: `sent`, `handed_off` (no `notifications` row, e.g. a fake), `duplicate` (the key existed before this run), `failed`, `error`.
+- Tests monkeypatch `trader.reports.weekly.compute_metrics` (T2 was a stub); T18's weekly-day test exercises the real one.
 
 ---
 

@@ -23,12 +23,12 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | ID | Title | Depends on | Status | Attempt | Stage results | Last commit |
 |---|---|---|---|---|---|---|
 | P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | accepted | 2 | V✅ B✅ S✅ C✅ (fix review ✅) | 3a3a50f |
-| P1-T2 | Database models, migration 0001, test database fixture | T1 | fixing | 2 | V✅ B❌ S✅(should-fix) C✅(should-fix) | 50fe0e6 |
+| P1-T2 | Database models, migration 0001, test database fixture | T1 | gauntlet | 2 | V✅ B❌ S✅ C✅ → fix 5e8a594 (verify+review running) | 5e8a594 |
 | P1-T3 | Crypto and runtime settings store | T2 | fixing | 2 | V✅ B❌ S✅ C✅(should-fix) | f5ad3a4 |
 | P1-T4 | Market types, clock and session calendar | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 4af1355 |
 | P1-T5 | FinViz parser and scraper | T1 | gauntlet | 2 | V✅ B❌ S❌ C❌ → fix b1d45e5 (verify+review running) | b1d45e5 |
-| P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | gauntlet | 1 |  | d922a9c |
-| P1-T7 | Questrade data client and `questrade-check` CLI | T6 | todo | 0 | | |
+| P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | gauntlet | 1 | V✅ | d922a9c |
+| P1-T7 | Questrade data client and `questrade-check` CLI | T6 | building | 1 |  |  |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | todo | 0 | | |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | todo | 0 | | |
@@ -423,3 +423,29 @@ None open.
 - Commits: 5e8a594
 - Gate: check.sh 101 passed, 8 failed (only the known P1-T5 x7 and P1-T8 x1 breaker tests)
 - Notes: env.py also pins search_path=public. The trader_dev owner's search_path is "trader, public", and with that alembic check reported phantom add_table/FK diffs. It is now clean on trader_dev. LIVE (read-only): alembic current = 0001 (head). No corrective migration needed.
+
+### 2026-09-27T04:40:58Z · P1-T6 · Verifier · attempt 1 · started
+- Result: in progress
+- Notes: verifying from worktree agent-a3ce04b91f7f2b2e9
+
+### 2026-09-27T04:41:24Z · P1-T2 · Verifier + fix reviewer · attempt 2 · started
+- Notes: verifying trunk after fix commit 5e8a594 and reviewing the fix against the attempt-1 findings
+
+### 2026-09-27T04:42:30Z · P1-T6 · Verifier · attempt 1 · finished
+- Result: PASS
+- Commits: verified trunk at 5e8a594 (P1-T6 commits 0f4e1f7, d922a9c)
+- Gate: check.sh 172 passed, 2 failed, both known P1-T3 breaker tests (test_list_values_round_trip_order_and_duplicates, test_corrupt_stored_value_fails_closed_and_is_repairable), which belong to another task's fix round. ruff, format, mypy clean.
+- Findings: Steps 1-7 all ticked. Task files on trunk. LIVE health (read-only, no exchange): seeded=True, last_error=None, last_refresh_at 2026-09-27T04:39:34Z. .env.dev has 0 QUESTRADE_REFRESH_TOKEN lines.
+- Notes: git status clean
+
+### 2026-09-27T04:42:33Z · P1-T5 · Verifier+fix reviewer · attempt 2 · finished
+- Result: PASS (0 must-fix, 0 should-fix, 3 nits)
+- Commits: none. Verified trunk b130ab3, reviewed d510910, addd66e, b1d45e5
+- Gate: ruff, format, mypy clean. pytest 164 passed, 4 failed, all 4 in the allowed test_p1_t2_breaker.py (2) and test_p1_t3_breaker.py (2). All 68 P1-T5 tests pass (12/12 breaker cases, 16 parser, 40 scraper). Breaker file not edited by the fix. Tree clean, all 11 P1-T5 steps ticked
+- Findings: must-fix fixed (layout, count, header, bad rows, short/dup pages, page cap, empty universe, HTTP and transport errors all raise FinvizError subclasses. Nothing is cached until the whole screen validates). All should-fixes done with tests. Declared deviations match the plan Interfaces. P1-T9 Step 8 _universe and Step 10 CLI (context manager, private cache dir) match the new interfaces. Nits: (1) near the 12 h TTL edge one screen can mix cached and fresh pages. The dedupe/total check catches almost every mix. (2) an existing cache dir we own is used without checking or tightening its mode. (3) the ignored-filter baseline total can come from a 12 h old cache. The 2000-row page cap still catches a whole-market result
+
+### 2026-09-27T04:42:49Z · P1-T2 · Verifier + fix reviewer · attempt 2 · finished
+- Result: PASS (trunk at 409f6c0, fix commit 5e8a594)
+- Gate: check.sh ruff, format and mypy clean. pytest 172 passed, 2 failed, both in tests/gauntlet/test_p1_t3_breaker.py (known, P1-T3 fix round). No P1-T5 or P1-T8 breaker failures. P1-T2 breaker 8/8 and test_migration 10/10 pass
+- LIVE (read-only): alembic current shows 0001 (head). alembic check finds no new operations. All 31 monthly partition bounds on trader_dev are midnight UTC, plus the default
+- Findings: every attempt-1 finding is fixed with a regression test. The search_path=public deviation is safe because every op in 0001 names schema trader and make_engine only pins TimeZone. Nits only: the plan's test_migration.py code block doesn't include the six new tests, which are named in prose, and the partition filter is duplicated between env.py and the test

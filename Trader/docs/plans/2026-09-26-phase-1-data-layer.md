@@ -1250,7 +1250,7 @@ git pull --rebase && git push
   - `trader.market.clock`: `ET = ZoneInfo("America/New_York")`; `Clock` protocol with `now() -> datetime` (UTC-aware); `RealClock`; `FixedClock(at: datetime)` with `advance(delta: timedelta) -> None` and `set(at: datetime) -> None` (naive datetimes raise `ValueError`); `et_date(at: datetime) -> date`.
   - `trader.market.calendar.SessionCalendar(exchange: str = "XNYS")`: `is_session(d: date) -> bool`; `session_open(d: date) -> datetime` and `session_close(d: date) -> datetime` (UTC-aware; `ValueError` if `d` isn't a session); `next_session(d: date) -> date` (first session strictly after `d`); `previous_session(d: date) -> date` (last session strictly before `d`); `sessions_before(d: date, n: int) -> list[date]` (the `n` sessions strictly before `d`, oldest first).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `Trader/app/tests/market/__init__.py`: empty file.
 
@@ -1349,12 +1349,12 @@ def test_no_direct_wall_clock_reads() -> None:
     assert offenders == []
 ```
 
-- [ ] **Step 2: Run to see them fail**
+- [x] **Step 2: Run to see them fail**
 
 Run: `uv run pytest tests/market tests/test_no_wall_clock.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.market'`.
 
-- [ ] **Step 3: Implement `trader/market/types.py`, `clock.py`, `calendar.py`**
+- [x] **Step 3: Implement `trader/market/types.py`, `clock.py`, `calendar.py`**
 
 `Trader/app/trader/market/__init__.py`: empty file.
 
@@ -1475,12 +1475,12 @@ class SessionCalendar:
         return [ts.date() for ts in window]
 ```
 
-- [ ] **Step 4: Run the tests, then the gate**
+- [x] **Step 4: Run the tests, then the gate**
 
 Run: `uv run pytest tests/market tests/test_no_wall_clock.py -q` → `11 passed`.
 Run: `uv run ruff format . && bash scripts/check.sh` → all pass. If mypy complains about pandas return types in `calendar.py`, add a precise `# type: ignore[<code>]` on that line only; do not loosen the global config.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 cd "/Users/stephen/Documents/Code/Claude Code/Trader"

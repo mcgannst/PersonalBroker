@@ -28,7 +28,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T4 | Market types, clock and session calendar | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 4af1355 |
 | P1-T5 | FinViz parser and scraper | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | b1d45e5 |
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | fixing | 2 | V✅ B❌ S+C✅(3 should-fix) | 0e2cf5e |
-| P1-T7 | Questrade data client and `questrade-check` CLI | T6 | gauntlet | 1 | V✅ | a51e0fb |
+| P1-T7 | Questrade data client and `questrade-check` CLI | T6 | fixing | 2 | V✅ B❌ S+C❌ | 879520e |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | building | 1 |  |  |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | todo | 0 | | |
@@ -509,3 +509,28 @@ None open.
 - Commits: verified at trunk 89c735a (P1-T7 commits 1dd3f8e, a51e0fb)
 - Gate: check.sh ruff/format/mypy clean, 224 passed, 4 failed - all 4 in tests/gauntlet/test_p1_t6_breaker.py (P1-T6 fix round, excluded)
 - Findings: steps 1-8 ticked, models.py, client.py, test_questrade_client.py and questrade-check CLI on trunk, all HTTP tests use respx.mock with FakeTokens (no real network)
+
+### 2026-09-27T05:05:07Z · P1-T7 · Spec+Code reviewer · attempt 1 · started
+- Result: reviewing commits 1dd3f8e, a51e0fb
+
+### 2026-09-27T05:05:08Z · P1-T9 · Builder · attempt 1 · started
+- Notes: worktree agent-ab1a2b4664a67248f, synced to trunk 0b3d0f8
+
+### 2026-09-27T05:05:09Z · P1-T7 · Breaker · attempt 1 · started
+- Notes: writing tests/gauntlet/test_p1_t7_breaker.py against trader/adapters/questrade/client.py
+
+### 2026-09-27T05:05:30Z · P2-T0 · Planner · attempt 1 · started
+- Result: reading master plan, SPEC, BRD, Phase 1 plan and the real Phase 1 code
+
+### 2026-09-27T05:12:00Z · P1-T7 · Breaker · attempt 1 · finished
+- Result: FAIL (2 of 9 new tests fail, 7 pass)
+- Commits: 879520e
+- Gate: pytest tests/gauntlet/test_p1_t7_breaker.py -> 2 failed, 7 passed
+- Findings: (1) test_candles_many_isolates_transport_errors - httpx.ReadTimeout/ConnectError escape _get, so one timed-out symbol aborts the whole candles_many gather (Review Focus 4). (2) test_5xx_every_attempt_raises_after_max_attempts_without_trailing_sleep - _get sleeps the 8 s backoff after the final 5xx attempt before raising, delaying the error at a decision point.
+- Notes: 401 loop, 429 missing/past reset, 500 in symbols chunk, 700-request rate test, shared bucket spacing, odd payloads, no token in errors all pass
+
+### 2026-09-27T05:07:33Z · P1-T7 · Spec+Code reviewer · attempt 1 · finished
+- Result: FAIL (1 must-fix, 4 should-fix, several nits)
+- Commits: reviewed 1dd3f8e, a51e0fb (code matches the plan verbatim, Interfaces all present)
+- Findings: MUST - client.py _get/candles_many: httpx.TransportError (timeout, reset) is neither retried nor captured per request, so one network error aborts the whole candles_many scan (Review Focus 4, SPEC 4.1 backoff). SHOULD - 429 wait is not shared across the bucket (a 429 storm under candles_many) and is not exponential. SHOULD - candles_many lets parse errors (KeyError, JSONDecodeError, ValueError on a bad X-RateLimit-Reset) escape. SHOULD - clamped startTime carries microseconds and +00:00, a format the spikes never tested (spikes used timespec=seconds, ET offset). SHOULD - questrade-check prints tracebacks on unknown symbol or auth failure instead of the err plus Exit(1) pattern of token-refresh.
+- Notes: tokens are never logged. to_thread use with the sync auth and the TokenBucket under concurrency are correct

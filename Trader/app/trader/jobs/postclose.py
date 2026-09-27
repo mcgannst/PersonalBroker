@@ -36,8 +36,10 @@ from trader.notify.types import (
     Notifier,
     PositionLine,
     Renderer,
+    RunToDateView,
     TradeLine,
 )
+from trader.reports.metrics import compute_metrics
 from trader.settings_store import OVERLAY_SYMBOL, RuntimeSettings
 from trader.worker import WorkerEngine
 
@@ -49,6 +51,7 @@ MINUTE_CODE: Literal["1m"] = "1m"  # INTERVAL_CODES["OneMinute"]
 MAX_MISSING_OPEN_FRACTION = Decimal("0.05")  # more opening bars missing than this is an error event
 MAX_REASON_CHARS = 200
 JOURNAL_ACTIONS = ("y", "n")
+EXPECTANCY_SWITCH = "expectancy"
 # The realized P&L view (migration 0002): one row per (run, session) with trades.
 V_DAILY_PNL = table(
     "v_daily_pnl",
@@ -180,7 +183,14 @@ async def _send_summary(deps: PostcloseDeps, session_date: date, counts: Mapping
             # A forced re-run: the notifier would drop the message, so issue no journal nonce for it.
             log.info("postclose.summary_already_recorded", dedupe_key=dedupe_key)
             return "duplicate"
-        view = daily_summary_view(deps.factory, deps.run_id, session_date, deps.clock.now(), counts)
+        view = daily_summary_view(
+            deps.factory,
+            deps.run_id,
+            session_date,
+            deps.clock.now(),
+            counts,
+            expectancy_min_trades=_expectancy_min_trades(deps),
+        )
         buttons: Buttons = ()
         try:
             _nonce, data = deps.issuer.issue(
@@ -202,6 +212,15 @@ async def _send_summary(deps: PostcloseDeps, session_date: date, counts: Mapping
     if status is None:
         return "handed_off"
     return "sent" if status == "sent" else "failed"
+
+
+def _expectancy_min_trades(deps: PostcloseDeps) -> int | None:
+    """killswitch.expectancy_min_trades for the run-to-date line; None (no line) if the settings fail."""
+    try:
+        return deps.settings().killswitch_expectancy_min_trades
+    except Exception as exc:
+        log.warning("postclose.run_to_date_failed", error=type(exc).__name__)
+        return None
 
 
 def _count_cancelled(deps: PostcloseDeps, since: datetime) -> int:
@@ -386,10 +405,16 @@ def daily_summary_view(
     session_date: date,
     now: datetime,
     archive: Mapping[str, int],
+    *,
+    expectancy_min_trades: int | None = None,
 ) -> DailySummaryView:
     """The day in numbers: trades, realized P&L and fees (v_daily_pnl), the latest equity snapshot, open
     positions, human decisions and their average time (BR-33; auto approvals take no decision time and are
-    not counted), unprotected time of the day's positions (BR-33), blocking kill switches, archive counts."""
+    not counted), unprotected time of the day's positions (BR-33), blocking kill switches, archive counts.
+
+    With `expectancy_min_trades` (killswitch.expectancy_min_trades) it also fills `run_to_date` (P5-T10):
+    the run's metrics up to the session. Any failure there leaves it None and the summary goes out as
+    before (BR-60)."""
     day_start, day_end = _et_day(session_date)
     with factory() as s:
         trades = tuple(
@@ -447,6 +472,50 @@ def daily_summary_view(
         unprotected_seconds=unprotected,
         blocking_switches=tuple(dict.fromkeys(a.switch for a in blocking)),
         archive=dict(archive),
+        run_to_date=(
+            _run_to_date(factory, run_id, session_date, expectancy_min_trades)
+            if expectancy_min_trades is not None
+            else None
+        ),
+    )
+
+
+def _run_to_date(
+    factory: sessionmaker[Session], run_id: int, session_date: date, expectancy_min_trades: int
+) -> RunToDateView | None:
+    """The run's metrics up to `session_date` for the daily summary, or None when they can't be computed
+    (logged at warning; the summary never depends on them). `expectancy_trades` counts as the expectancy
+    switch does: closed trades with an R multiple, only those closed after its last reset if it was reset."""
+    try:
+        metrics = compute_metrics(factory, run_id, None, session_date)
+        with factory() as s:
+            reset_at = s.execute(
+                select(func.max(m.KillSwitchEvent.reset_at)).where(
+                    m.KillSwitchEvent.run_id == run_id,
+                    m.KillSwitchEvent.switch == EXPECTANCY_SWITCH,
+                    m.KillSwitchEvent.reset_at.is_not(None),
+                )
+            ).scalar_one()
+            if reset_at is None:
+                counted = metrics.trades - metrics.trades_without_r
+            else:
+                counted = s.execute(
+                    select(func.count(m.Trade.pnl_r)).where(
+                        m.Trade.run_id == run_id,
+                        m.Trade.closed_at > reset_at,
+                        m.Trade.session_date <= session_date,
+                    )
+                ).scalar_one()
+    except Exception as exc:
+        log.warning("postclose.run_to_date_failed", error=type(exc).__name__)
+        return None
+    return RunToDateView(
+        trades=metrics.trades,
+        win_rate=metrics.win_rate,
+        expectancy_r=metrics.expectancy_r,
+        total_pnl=metrics.total_pnl,
+        expectancy_trades=int(counted),
+        expectancy_min_trades=expectancy_min_trades,
     )
 
 

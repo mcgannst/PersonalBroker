@@ -585,14 +585,28 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - All other P3 relay behaviour (cursors, dedupe keys, retries, backlog cap) is unchanged.
 
 **Acceptance tests:**
-- [ ] 1. `weekly_report` of a full view: every headline number appears once in the text, the commentary is escaped (a `<b>` in it shows literally), the link is `/reports?week=2026-11-27`, kind `weekly_report`.
-- [ ] 2. A view with `commentary None` and a note shows the note; a 5,000-character commentary is cut to fit 4,096 with the web pointer, never splitting an HTML entity or tag.
-- [ ] 3. Win rate 0.4167, expectancy 0.1800, P&L 23.40 render as "41.7%", "+0.18R", "+$23.40" (the same numbers `compute_metrics` gives; the daily line and the weekly message use one formatter).
-- [ ] 4. `daily_summary_view` with a monkeypatched `compute_metrics` fills `run_to_date` and the "12 of 50" line; with `compute_metrics` raising, `run_to_date` is None and the P3 postclose tests pass unchanged.
-- [ ] 5. **Reset relay:** after `KillSwitches.reset(run, "max_drawdown_pct", "reviewed", "web:stephen")` on the live run, one pump sends one `kill_switch` message with "KILL SWITCH RESET: max_drawdown_pct" and "Reason: reviewed" (dedupe `event:<id>`); a second pump sends nothing; a reset in a replay run is not sent.
-- [ ] 6. **Never relayed:** an `error` event with source `log.worker` (run_id null) is skipped and the cursor still advances past it; an `error` event with source `job.nightly` is still sent.
-- [ ] 7. The P3 relay and message tests pass unchanged.
-- [ ] 8. Gate and commit `P5-T10: ...`.
+- [x] 1. `weekly_report` of a full view: every headline number appears once in the text, the commentary is escaped (a `<b>` in it shows literally), the link is `/reports?week=2026-11-27`, kind `weekly_report`.
+- [x] 2. A view with `commentary None` and a note shows the note; a 5,000-character commentary is cut to fit 4,096 with the web pointer, never splitting an HTML entity or tag.
+- [x] 3. Win rate 0.4167, expectancy 0.1800, P&L 23.40 render as "41.7%", "+0.18R", "+$23.40" (the same numbers `compute_metrics` gives; the daily line and the weekly message use one formatter).
+- [x] 4. `daily_summary_view` with a monkeypatched `compute_metrics` fills `run_to_date` and the "12 of 50" line; with `compute_metrics` raising, `run_to_date` is None and the P3 postclose tests pass unchanged.
+- [x] 5. **Reset relay:** after `KillSwitches.reset(run, "max_drawdown_pct", "reviewed", "web:stephen")` on the live run, one pump sends one `kill_switch` message with "KILL SWITCH RESET: max_drawdown_pct" and "Reason: reviewed" (dedupe `event:<id>`); a second pump sends nothing; a reset in a replay run is not sent.
+- [x] 6. **Never relayed:** an `error` event with source `log.worker` (run_id null) is skipped and the cursor still advances past it; an `error` event with source `job.nightly` is still sent.
+- [x] 7. The P3 relay and message tests pass unchanged.
+- [x] 8. Gate and commit `P5-T10: ...`.
+
+**Build notes (P5-T10 builder, 2026-09-27; trunk 8ddff8e):**
+- Shared formatters in `trader.notify.messages`: `fmt_rate` (one decimal, `41.7%`, win rate and adherence),
+  `fmt_signed_r`, `fmt_signed_money` (zero shows `+$0.00`, as the P3 realized P&L line) and
+  `run_to_date_lines(v)`; the weekly max drawdown uses the daily summary's two-decimal percentage.
+  `WEB_POINTER` and `RESET_MESSAGE` (the regex of `kill switch <switch> reset`) are module constants.
+- The weekly message's link label is "Weekly report <week_ending>"; with neither commentary nor note the body
+  is left out. The reset confirmation's reason is masked and capped like other alert text.
+- `daily_summary_view(..., *, expectancy_min_trades: int | None = None)`: None (the P3 callers) computes no
+  metrics; `run_postclose` passes `killswitch.expectancy_min_trades`. `expectancy_trades` counts as the switch
+  does: `trades - trades_without_r` of the run-to-date metrics, or, after an expectancy reset, the trades with
+  an R multiple closed since the last reset (queried directly).
+- Relay: `log.*` sources are excluded in SQL (`startswith` with autoescape), so the cursor still passes them;
+  reset rows are taken with `source = 'killswitch'` and `message LIKE 'kill switch % reset'` at any level.
 
 ---
 

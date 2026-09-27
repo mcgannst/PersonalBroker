@@ -30,12 +30,16 @@ from trader.notify.types import (
     PreopenView,
     ProposalView,
     Renderer,
+    RunToDateView,
     StatusView,
     WeeklyReportView,
 )
 
 TELEGRAM_LIMIT = 4096
 TRUNCATED_LINE = "… (truncated, see the web app)"
+WEB_POINTER = "… (full text on the web)"  # where an over-long weekly commentary was cut
+# The event KillSwitches.reset writes (`kill switch <switch> reset`): rendered as the reset confirmation.
+RESET_MESSAGE = re.compile(r"kill switch (\S+) reset")
 EMPTY_TEXT = "(empty)"
 ERROR_CHARS = 300  # a job failure shows the first 300 characters of its error
 TAIL_ERROR_CHARS = 500  # a closed proposal's or token failure's error text (then "…")
@@ -43,6 +47,7 @@ VIA_CHARS = 100
 TAIL_LIMIT = 2048  # a final line kept whole by _fit is itself cut (tag-safe) beyond this
 
 _CENT = Decimal("0.01")
+_TENTH = Decimal("0.1")
 _PRICE_Q = Decimal("0.0001")
 _MOUNTAIN_ZONES = frozenset(
     {"America/Edmonton", "America/Denver", "America/Boise", "Canada/Mountain", "US/Mountain", "MST7MDT"}
@@ -175,6 +180,31 @@ def _fmt_r(value: Decimal) -> str:
     return f"{'-' if q < 0 else '+'}{abs(q):.2f}R"
 
 
+# The metrics formatters (P5-T10): the daily run-to-date line and the weekly report use these, so the same
+# trader.reports.metrics value always reads the same on the phone.
+fmt_signed_money = _signed_money  # `+$23.40`, `-$2.50`
+fmt_signed_r = _fmt_r  # `+0.18R`
+
+
+def fmt_rate(value: Decimal) -> str:
+    """A ratio (win rate, adherence) as a percentage with one decimal: `0.4167` → `41.7%`."""
+    return f"{(value * 100).quantize(_TENTH, ROUND_HALF_UP):.1f}%"
+
+
+def run_to_date_lines(v: RunToDateView) -> list[str]:
+    """The daily summary's run-to-date line(s) (BR-60); None values are left out."""
+    parts = [f"{v.trades} trades"]
+    if v.win_rate is not None:
+        parts.append(f"win rate {fmt_rate(v.win_rate)}")
+    if v.expectancy_r is not None:
+        parts.append(f"expectancy {fmt_signed_r(v.expectancy_r)}")
+    parts.append(f"P&amp;L {fmt_signed_money(v.total_pnl)}")
+    lines = ["Run to date: " + ", ".join(parts)]
+    if v.expectancy_trades < v.expectancy_min_trades:
+        lines.append(f"Expectancy switch: {v.expectancy_trades} of {v.expectancy_min_trades} trades")
+    return lines
+
+
 def _pnl(pnl: Decimal, pnl_r: Decimal | None) -> str:
     return _signed_money(pnl) + (f" ({_fmt_r(pnl_r)})" if pnl_r is not None else "")
 
@@ -236,6 +266,22 @@ def _fit(text: str, tail: str = "") -> str:
     cut = text.rfind("\n", 0, room + 1)
     head = _hard_cut(text[:cut] if cut > 0 else text, room)
     return f"{head.rstrip()}\n{TRUNCATED_LINE}{suffix}"
+
+
+def _cut_words(text: str, room: int) -> str:
+    """At most `room` characters of the escaped plain `text` (entities, no tags): cut at the last word
+    boundary that fits, then WEB_POINTER. An entity has no whitespace, so a word cut never splits one; a
+    single word longer than the room is cut hard, entity-safe."""
+    if len(text) <= room:
+        return text
+    keep = max(0, room - len(WEB_POINTER) - 1)  # one space before the pointer
+    head = _safe_cut(text[:keep])
+    if len(head) < len(text) and not text[len(head)].isspace():
+        space = max(head.rfind(" "), head.rfind("\n"))
+        if space > 0:
+            head = head[:space]
+    head = head.rstrip()
+    return f"{head} {WEB_POINTER}" if head else WEB_POINTER
 
 
 def _position_line(p: PositionLine) -> str:
@@ -453,6 +499,15 @@ class MessageRenderer:
         return next((s for s in _KNOWN_SWITCHES if s in v.message), "unknown")
 
     def _kill_switch_lines(self, v: AlertView, at: str) -> list[str]:
+        reset = RESET_MESSAGE.fullmatch(v.message.strip())
+        if reset is not None:  # an automatic switch reset in the web app (P5-T10)
+            switch = str(v.data.get("switch") or reset.group(1))
+            lines = [f"<b>KILL SWITCH RESET: {_e(switch)}</b> at {at}"]
+            reason = v.data.get("reason")
+            if reason:
+                lines.append(f"Reason: {_e(_clip(reason, TAIL_ERROR_CHARS))}")
+            lines.append("Entries allowed again unless another switch is tripped.")
+            return lines
         switch = self._switch_name(v)
         lines = [f"<b>KILL SWITCH: {_e(switch)}</b> at {at}"]
         if v.message.strip():
@@ -495,6 +550,8 @@ class MessageRenderer:
             f"Equity: {fmt_money(v.equity)}",
             f"Drawdown: {_pct_plain(v.drawdown_pct)}",
         ]
+        if v.run_to_date is not None:
+            lines += run_to_date_lines(v.run_to_date)
         if v.open_positions:
             lines.append(f"<b>⚠️ STILL OPEN: {len(v.open_positions)} position(s) after the close</b>")
             lines += [_position_line(p) for p in v.open_positions]
@@ -607,8 +664,34 @@ class MessageRenderer:
         )
 
     def weekly_report(self, v: WeeklyReportView) -> OutboundMessage:
-        """The self-contained Saturday weekly report (headline numbers, commentary, link)."""
-        raise NotImplementedError("P5-T10")
+        """The self-contained Saturday weekly report (BR-61): headline numbers, the commentary (untrusted
+        Claude text, masked and escaped) or the note saying why there is none, and the link. An over-long
+        commentary is cut at a word boundary with WEB_POINTER, so the headline and the link always fit."""
+        d = v.week_ending.isoformat()
+        trades = f"Trades: {v.trades}"
+        if v.win_rate is not None:
+            trades += f" ({v.wins} wins, win rate {fmt_rate(v.win_rate)})"
+        elif v.trades:
+            trades += f" ({v.wins} wins)"
+        head = [f"<b>Weekly report</b> {v.week_start.isoformat()} to {d}", trades]
+        if v.expectancy_r is not None:
+            head.append(f"Expectancy: {fmt_signed_r(v.expectancy_r)}")
+        head.append(f"P&amp;L: {fmt_signed_money(v.total_pnl)}")
+        if v.max_drawdown_pct is not None:
+            head.append(f"Max drawdown: {_pct_plain(v.max_drawdown_pct)}")
+        if v.adherence_pct is not None:
+            head.append(f"Rules followed: {fmt_rate(v.adherence_pct)} of answered days")
+        tail = self._link(f"/reports?week={d}", f"Weekly report {d}")
+        top = "\n".join(head) + "\n"  # the blank line before the commentary
+        if v.commentary is not None and v.commentary.strip():
+            room = TELEGRAM_LIMIT - len(top) - len(tail) - 2  # two line breaks around the body
+            body = _cut_words(_e(v.commentary.strip()), room)
+        elif v.commentary_note:
+            body = f"<i>{_e(v.commentary_note)}</i>"
+        else:
+            body = ""
+        lines = [top, body, tail] if body else [top, tail]
+        return self._msg("weekly_report", lines)
 
 
 if TYPE_CHECKING:  # mypy verifies that MessageRenderer satisfies the Renderer protocol

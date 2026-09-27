@@ -73,7 +73,9 @@ from trader.adapters.telegram.types import ProposalMessenger
 from trader.db import models as m
 from trader.db.session import session_scope
 from trader.events import log_event
+from trader.logging_mirror import MIRROR_SOURCE_PREFIX
 from trader.market.clock import Clock
+from trader.notify.messages import RESET_MESSAGE
 from trader.notify.notifier import MAX_SEND_ATTEMPTS
 from trader.notify.types import (
     AlertView,
@@ -92,8 +94,13 @@ STREAMS = ("proposals", "fills", "events")
 OVERLAY_SOURCE = "strategy.spy_overlay"
 ALERT_LEVELS = ("error", "critical")
 RELAY_ERROR_SOURCE = "notify.relay"
-# The notifier's own failure events and the relay's own row failures: relaying them could loop.
+# The notifier's own failure events and the relay's own row failures: relaying them could loop. Sources
+# starting with MIRROR_SOURCE_PREFIX (`log.`, the error-log mirror's rows) are never relayed either: the
+# events that should alert are already written with log_event (P5-T10).
 NEVER_RELAYED = ("telegram", RELAY_ERROR_SOURCE)
+# A kill-switch reset (KillSwitches.reset, level warning) is relayed as a `kill_switch` confirmation (P5-T10).
+KILLSWITCH_SOURCE = "killswitch"
+RESET_LIKE = "kill switch % reset"  # SQL twin of messages.RESET_MESSAGE
 SUMMARY_SOURCE = "relay"
 SKIPPED_NOUN = {"proposals": "auto-mode proposals", "fills": "fills", "events": "alerts"}
 DEDUPE_PREFIX = {"proposals": "proposal", "fills": "fill", "events": "event"}
@@ -461,7 +468,12 @@ class NotificationRelay:
         return [
             or_(e.run_id.is_(None), e.run_id == self.run_id),
             e.source.not_in(NEVER_RELAYED),
-            or_(e.level.in_(ALERT_LEVELS), and_(e.source == OVERLAY_SOURCE, e.data.has_key("decision"))),
+            ~e.source.startswith(MIRROR_SOURCE_PREFIX, autoescape=True),  # mirrored log lines (P5-T14)
+            or_(
+                e.level.in_(ALERT_LEVELS),
+                and_(e.source == OVERLAY_SOURCE, e.data.has_key("decision")),
+                and_(e.source == KILLSWITCH_SOURCE, e.message.like(RESET_LIKE)),  # reset confirmation
+            ),
         ]
 
     def _render_all(
@@ -491,7 +503,8 @@ class NotificationRelay:
         data = row.data if isinstance(row.data, dict) else {}
         if row.source == OVERLAY_SOURCE and "decision" in data:
             return self.render.overlay(_overlay_view(row, data))
-        if row.level in ALERT_LEVELS:
+        is_reset = row.source == KILLSWITCH_SOURCE and RESET_MESSAGE.fullmatch(row.message) is not None
+        if row.level in ALERT_LEVELS or is_reset:
             return self.render.alert(
                 AlertView(
                     kind=alert_kind(row.source, row.level, row.message),

@@ -10,12 +10,12 @@ callback data, a URL or an exception's repr (the token travels in PTB's URLs).
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import structlog
-from sqlalchemy import String, cast, delete, select, update
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -48,6 +48,16 @@ CLAIM_ANSWERS: dict[ClaimResult, str] = {
     "wrong_message": "Old message",
 }
 DECISIONS: dict[str, Decision] = {"a": "approve", "r": "reject"}
+PROPOSAL_ACTIONS = ("a", "r")
+# How a proposal status reads after "Already ..." (anything else is shown as is).
+STATUS_LABELS = {"auto_approved": "auto-approved"}
+# A proposal message that could not be sent even on its one re-send. The relay never forwards source
+# "telegram" (its own failures could loop), so this alert uses a source it does forward.
+LOST_SEND_SOURCE = "telegram.proposal"
+# Updates from another chat (or another sender in a private chat): at most this many warning events per
+# foreign id per window; the rest are only logged.
+FOREIGN_EVENT_BURST = 5
+FOREIGN_EVENT_WINDOW = timedelta(minutes=10)
 
 log = structlog.get_logger("telegram.bot")
 
@@ -87,6 +97,18 @@ def _error_text(exc: BaseException) -> dict[str, Any]:
     return {"error_type": type(exc).__name__}
 
 
+def _refused(exc: BaseException) -> bool:
+    """Telegram answered with a 4xx (429 included): the request was not carried out."""
+    return isinstance(exc, TelegramApiError) and exc.status is not None and exc.status < 500
+
+
+def _retry_after(exc: BaseException) -> float | None:
+    """Telegram's retry_after of a 429, else None."""
+    if isinstance(exc, TelegramApiError) and exc.status == 429 and exc.retry_after:
+        return max(float(exc.retry_after), 0.0)
+    return None
+
+
 class TelegramBot:
     """Implements trader.adapters.telegram.types.ProposalMessenger. `decide` has
     ProposalService.decide's signature: (proposal_id, decision, via, actor)."""
@@ -120,11 +142,18 @@ class TelegramBot:
         self.settings = settings
         self.sleep = sleep
         self._offset: int | None = None
+        # Unbound proposal nonces whose one re-send also failed (in memory: a restart allows one more try).
+        self._lost_sends: set[str] = set()
+        # sync_closed waits until then after a 429 on an edit.
+        self._edits_paused_until: datetime | None = None
+        # Foreign id -> times of its recent warning events (the rate limit).
+        self._foreign_events: dict[int, list[datetime]] = {}
 
     # --- polling loop ----------
     async def run(self, stop: asyncio.Event) -> None:
-        """Long-poll until `stop` is set (checked after each call). One bad update never stops the loop.
-        The offset is kept on the bot, so a restarted loop in the same process confirms what was handled."""
+        """Long-poll until `stop` is set (checked after each call; a back-off sleep ends early when it is
+        set). One bad update never stops the loop. The offset is kept on the bot, so a restarted loop in
+        the same process confirms what was handled."""
         backoff = 1.0
         conflict_logged = False
         while not stop.is_set():
@@ -135,6 +164,7 @@ class TelegramBot:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                retry_after = _retry_after(exc)
                 if isinstance(exc, TelegramApiError) and exc.status == 409:
                     if not conflict_logged:
                         self._event(
@@ -142,10 +172,13 @@ class TelegramBot:
                         )
                         conflict_logged = True
                     log.error("telegram.poll_conflict", **_error_text(exc))
-                    await self.sleep(CONFLICT_BACKOFF_SECONDS)
+                    await self._pause(CONFLICT_BACKOFF_SECONDS, stop)
+                elif retry_after is not None:
+                    log.warning("telegram.poll_rate_limited", retry_after=retry_after, **_error_text(exc))
+                    await self._pause(retry_after, stop)
                 else:
                     log.warning("telegram.poll_failed", backoff=backoff, **_error_text(exc))
-                    await self.sleep(backoff)
+                    await self._pause(backoff, stop)
                     backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
                 continue
             backoff, conflict_logged = 1.0, False
@@ -158,18 +191,39 @@ class TelegramBot:
                 except Exception as exc:
                     log.error("telegram.update_failed", update_id=u.update_id, **_error_text(exc))
 
+    async def _pause(self, seconds: float, stop: asyncio.Event) -> None:
+        """Sleep (through the injected `sleep`) for `seconds`, or until `stop` is set, whichever is first."""
+        sleeper = asyncio.ensure_future(self.sleep(seconds))
+        stopper = asyncio.ensure_future(stop.wait())
+        try:
+            await asyncio.wait({sleeper, stopper}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in (sleeper, stopper):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(sleeper, stopper, return_exceptions=True)
+
     # --- updates ----------
     async def handle_update(self, update: Update) -> None:
+        """Only the configured chat is served. When it is a private chat (a positive id) the sender must
+        also be that user; in a group chat (a negative id) any member's update is accepted."""
         cb = update.callback
         chats = {c for c in (update.chat_id, cb.chat_id if cb else None) if c is not None}
         kind = "callback" if cb is not None else "text" if update.text is not None else "other"
         if chats != {self.chat_id}:
             if chats:  # never the text or the data: only who and what kind
-                self._event(
-                    "warning",
-                    "update from another chat ignored",
-                    {"chat_id": max(chats - {self.chat_id}), "kind": kind},
+                foreign = max(chats - {self.chat_id})
+                self._foreign_event(
+                    "update from another chat ignored", foreign, {"chat_id": foreign, "kind": kind}
                 )
+            return
+        sender = cb.from_id if cb is not None else update.from_id
+        if self.chat_id > 0 and kind != "other" and sender != self.chat_id:
+            self._foreign_event(
+                "update from another sender ignored",
+                sender if sender is not None else 0,
+                {"chat_id": self.chat_id, "from_id": sender, "kind": kind},
+            )
             return
         if cb is not None:
             await self._callback(cb)
@@ -222,7 +276,7 @@ class TelegramBot:
             await self._answer(cb, "Error, try again")
             return
         if result.already_decided:
-            answer = f"Already {result.status}"
+            answer = f"Already {STATUS_LABELS.get(result.status, result.status)}"
         elif result.status == "failed":
             answer = "Approved, but the order failed"
         elif result.blocked is not None:
@@ -255,48 +309,84 @@ class TelegramBot:
 
     # --- proposal messages (ProposalMessenger) ----------
     async def send_proposal(self, proposal_id: int, *, resend: bool = False) -> bool:
+        """Send the approval message of a pending proposal (False when skipped or not sent).
+
+        A send refused by Telegram (4xx) delivered nothing: its nonce is discarded and the next call starts
+        afresh. A network error or a 5xx may have delivered it: the unbound nonce is kept and the next call
+        re-sends ONCE with the same nonce (a duplicate message is harmless: its buttons share the nonce, so
+        only one decision can happen), binding it on success. If that re-send fails too, an `error` event
+        with a source the relay forwards tells Stephen to decide on the web, and no further re-send is made.
+        """
         view = self._proposal_view(proposal_id)
         if view is None or view.status != "pending":
             return False
-        if not resend and self._has_proposal_nonce(proposal_id):
-            return False
-        # No TTL: the proposal's own expiry is enforced by ProposalService.decide ("Already expired").
-        nonce, data = self.issuer.issue("proposal", str(proposal_id), ["a", "r"], self.chat_id, None)
+        ref = str(proposal_id)
+        retry_nonce: str | None = None
+        if not resend:
+            if self.issuer.exists_for("proposal", ref, bound=True):
+                return False
+            retry_nonce = self.issuer.unbound_for("proposal", ref, self.chat_id)
+            if retry_nonce is not None and retry_nonce in self._lost_sends:
+                return False
+        if retry_nonce is None:
+            # No TTL: the proposal's own expiry is enforced by ProposalService.decide ("Already expired").
+            nonce, data = self.issuer.issue("proposal", ref, PROPOSAL_ACTIONS, self.chat_id, None)
+        else:
+            nonce, data = retry_nonce, self.issuer.data_for("proposal", ref, PROPOSAL_ACTIONS, retry_nonce)
         buttons: Buttons = ((Button(APPROVE_TEXT, data["a"]), Button(REJECT_TEXT, data["r"])),)
         msg = self.render.proposal(view, buttons)
         try:
             message_id = await self.api.send_message(self.chat_id, msg.text, msg.buttons, msg.silent)
         except Exception as exc:
-            log.warning("telegram.proposal_send_failed", proposal_id=proposal_id, **_error_text(exc))
-            self._event("warning", f"proposal {proposal_id} message not sent", _error_text(exc))
-            if isinstance(exc, TelegramApiError) and exc.status is not None:
-                # Telegram refused it, so nothing was delivered: forget the nonce and allow a retry.
-                # A network error (status None) may have delivered it; keep the nonce (at most once).
-                with session_scope(self.factory) as s:
-                    s.execute(delete(m.TelegramCallback).where(m.TelegramCallback.nonce == nonce))
+            err = _error_text(exc)
+            log.warning(
+                "telegram.proposal_send_failed", proposal_id=proposal_id, retry=retry_nonce is not None, **err
+            )
+            if retry_nonce is not None:
+                self._lost_sends.add(nonce)
+                self._event(
+                    "error",
+                    f"proposal {proposal_id} approval message could not be sent to Telegram; "
+                    "decide it on the web",
+                    {"proposal_id": proposal_id, **err},
+                    source=LOST_SEND_SOURCE,
+                )
+            else:
+                self._event("warning", f"proposal {proposal_id} message not sent", err)
+                if _refused(exc):
+                    self.issuer.discard(nonce)  # nothing was delivered: the next call starts afresh
             return False
         self.issuer.bind(nonce, message_id)
         return True
 
     async def sync_closed(self) -> int:
-        """Close every bound, unused proposal message whose proposal is no longer pending."""
+        """Close every bound, unused proposal message whose proposal is no longer pending. An edit that
+        fails transiently (network, 5xx, 429) reopens its nonce so a later call retries; after a 429 the
+        edits wait for Telegram's retry_after."""
+        now = self.clock.now()
+        if self._edits_paused_until is not None and now < self._edits_paused_until:
+            return 0
+        self._edits_paused_until = None
+        open_rows = self.issuer.open_messages("proposal", self.chat_id)
+        if not open_rows:
+            return 0
+        refs = {int(ref) for _, ref, _ in open_rows}
         with self.factory() as s:
-            rows = s.execute(
-                select(m.TelegramCallback.nonce, m.TelegramCallback.message_id, m.Proposal.id)
-                .join(m.Proposal, cast(m.Proposal.id, String) == m.TelegramCallback.ref)
-                .where(
-                    m.TelegramCallback.kind == "proposal",
-                    m.TelegramCallback.chat_id == self.chat_id,
-                    m.TelegramCallback.used_at.is_(None),
-                    m.TelegramCallback.message_id.is_not(None),
-                    m.Proposal.run_id == self.run_id,
-                    m.Proposal.status != "pending",
+            closed_ids = set(
+                s.scalars(
+                    select(m.Proposal.id).where(
+                        m.Proposal.id.in_(refs),
+                        m.Proposal.run_id == self.run_id,
+                        m.Proposal.status != "pending",
+                    )
                 )
-                .order_by(m.TelegramCallback.created_at)
-            ).all()
+            )
         edited = 0
-        for nonce, message_id, proposal_id in rows:
-            if not self._mark_closed(nonce):
+        for nonce, ref, message_id in open_rows:
+            proposal_id = int(ref)
+            if proposal_id not in closed_ids:
+                continue
+            if not self.issuer.close_if_unused(nonce):
                 continue  # a tap claimed it meanwhile
             view = self._proposal_view(proposal_id)
             if view is None:
@@ -306,30 +396,17 @@ class TelegramBot:
                 await self.api.edit_message(self.chat_id, message_id, text, ())
             except Exception as exc:
                 log.warning("telegram.edit_failed", proposal_id=proposal_id, **_error_text(exc))
-                if not isinstance(exc, TelegramApiError) or exc.status is None:
+                retry_after = _retry_after(exc)
+                is_429 = isinstance(exc, TelegramApiError) and exc.status == 429
+                if is_429 or not _refused(exc):
                     self.issuer.release(nonce)  # transient: try again next time
+                if is_429:  # rate limited: the other edits would fail too
+                    if retry_after is not None:
+                        self._edits_paused_until = self.clock.now() + timedelta(seconds=retry_after)
+                    break
                 continue
             edited += 1
         return edited
-
-    def _mark_closed(self, nonce: str) -> bool:
-        with session_scope(self.factory) as s:
-            claimed = s.execute(
-                update(m.TelegramCallback)
-                .where(m.TelegramCallback.nonce == nonce, m.TelegramCallback.used_at.is_(None))
-                .values(used_at=self.clock.now(), used_action="closed")
-                .returning(m.TelegramCallback.nonce)
-            ).first()
-            return claimed is not None
-
-    def _has_proposal_nonce(self, proposal_id: int) -> bool:
-        with self.factory() as s:
-            found = s.execute(
-                select(m.TelegramCallback.nonce)
-                .where(m.TelegramCallback.kind == "proposal", m.TelegramCallback.ref == str(proposal_id))
-                .limit(1)
-            ).first()
-            return found is not None
 
     def _proposal_view(self, proposal_id: int) -> ProposalView | None:
         with self.factory() as s:
@@ -389,9 +466,24 @@ class TelegramBot:
         except Exception as exc:
             log.warning("telegram.send_failed", kind=msg.kind, **_error_text(exc))
 
-    def _event(self, level: str, message: str, data: dict[str, Any]) -> None:
+    def _foreign_event(self, message: str, foreign_id: int, data: dict[str, Any]) -> None:
+        """A warning event about an ignored update, at most FOREIGN_EVENT_BURST per foreign id per
+        FOREIGN_EVENT_WINDOW (a stranger can't flood event_log); the rest are only logged."""
+        now = self.clock.now()
+        cutoff = now - FOREIGN_EVENT_WINDOW
+        for key in [k for k, times in self._foreign_events.items() if times[-1] <= cutoff]:
+            del self._foreign_events[key]  # forget ids that went quiet
+        recent = [t for t in self._foreign_events.get(foreign_id, []) if t > cutoff]
+        if len(recent) >= FOREIGN_EVENT_BURST:
+            log.warning("telegram.foreign_update_ignored", **data)
+            self._foreign_events[foreign_id] = recent
+            return
+        self._foreign_events[foreign_id] = [*recent, now]
+        self._event("warning", message, data)
+
+    def _event(self, level: str, message: str, data: dict[str, Any], *, source: str = SOURCE) -> None:
         try:
             with session_scope(self.factory) as s:
-                log_event(s, self.clock, level, SOURCE, message, data, run_id=self.run_id)
+                log_event(s, self.clock, level, source, message, data, run_id=self.run_id)
         except Exception as exc:
             log.error("telegram.event_log_failed", message=message, **_error_text(exc))

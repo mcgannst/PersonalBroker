@@ -145,3 +145,71 @@ def test_release_makes_the_nonce_usable_again(
     row = _row(db_factory, nonce)
     assert row.used_at is None and row.used_action is None
     assert issuer.claim(parsed, CHAT, None) == "ok"
+
+
+# --- fix round 1: the bot's table access goes through the issuer ----------
+@pytest.mark.db
+def test_data_for_re_signs_an_existing_nonce(issuer: DbCallbackIssuer) -> None:
+    nonce, data = issuer.issue("proposal", "12", ["a", "r"], CHAT, None)
+    assert issuer.data_for("proposal", "12", ["a", "r"], nonce) == data
+
+
+@pytest.mark.db
+def test_discard_deletes_the_nonce(issuer: DbCallbackIssuer, db_factory: sessionmaker[Session]) -> None:
+    nonce, _ = issuer.issue("proposal", "12", ["a", "r"], CHAT, None)
+    issuer.discard(nonce)
+    with db_factory() as s:
+        assert s.execute(select(m.TelegramCallback)).first() is None
+    assert issuer.claim(ParsedCallback("proposal", "12", "a", nonce), CHAT, None) == "unknown"
+
+
+@pytest.mark.db
+def test_close_if_unused_wins_once_and_loses_to_a_tap(
+    issuer: DbCallbackIssuer, db_factory: sessionmaker[Session]
+) -> None:
+    nonce, _ = issuer.issue("proposal", "12", ["a", "r"], CHAT, None)
+    assert issuer.close_if_unused(nonce) is True
+    assert issuer.close_if_unused(nonce) is False
+    row = _row(db_factory, nonce)
+    assert row.used_at == T and row.used_action == "closed"
+    tapped, _ = issuer.issue("proposal", "13", ["a", "r"], CHAT, None)
+    assert issuer.claim(ParsedCallback("proposal", "13", "a", tapped), CHAT, None) == "ok"
+    assert issuer.close_if_unused(tapped) is False
+    assert _row(db_factory, tapped).used_action == "a"
+
+
+@pytest.mark.db
+def test_exists_for_and_unbound_for(issuer: DbCallbackIssuer) -> None:
+    assert issuer.exists_for("proposal", "12") is False
+    nonce, _ = issuer.issue("proposal", "12", ["a", "r"], CHAT, None)
+    assert issuer.exists_for("proposal", "12") is True
+    assert issuer.exists_for("proposal", "12", bound=True) is False
+    assert issuer.exists_for("proposal", "12", bound=False) is True
+    assert issuer.exists_for("pause", "12") is False  # another kind
+    assert issuer.unbound_for("proposal", "12", CHAT) == nonce
+    assert issuer.unbound_for("proposal", "12", CHAT + 1) is None  # another chat
+    issuer.bind(nonce, 7)
+    assert issuer.exists_for("proposal", "12", bound=True) is True
+    assert issuer.unbound_for("proposal", "12", CHAT) is None
+    used, _ = issuer.issue("proposal", "14", ["a", "r"], CHAT, None)
+    issuer.claim(ParsedCallback("proposal", "14", "a", used), CHAT, None)
+    assert issuer.unbound_for("proposal", "14", CHAT) is None  # a used nonce is never re-sent
+
+
+@pytest.mark.db
+def test_open_messages_lists_bound_unused_nonces_oldest_first(db_factory: sessionmaker[Session]) -> None:
+    clock = FixedClock(T)
+    issuer = DbCallbackIssuer(db_factory, clock, SIGNER)
+    first, _ = issuer.issue("proposal", "12", ["a", "r"], CHAT, None)
+    issuer.bind(first, 7)
+    clock.advance(timedelta(seconds=1))
+    second, _ = issuer.issue("proposal", "13", ["a", "r"], CHAT, None)
+    issuer.bind(second, 8)
+    issuer.issue("proposal", "14", ["a", "r"], CHAT, None)  # unbound: not open
+    other_chat, _ = issuer.issue("proposal", "15", ["a", "r"], CHAT + 1, None)
+    issuer.bind(other_chat, 9)
+    pause, _ = issuer.issue("pause", "1", ["y", "n"], CHAT, 60)
+    issuer.bind(pause, 10)
+    assert issuer.open_messages("proposal", CHAT) == [(first, "12", 7), (second, "13", 8)]
+    issuer.close_if_unused(first)
+    assert issuer.open_messages("proposal", CHAT) == [(second, "13", 8)]

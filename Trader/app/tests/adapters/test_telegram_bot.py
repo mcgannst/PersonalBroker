@@ -13,8 +13,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.factories import add_strategy_config, add_symbol
-from tests.fakes_telegram import FakeRenderer, FakeTelegramApi
-from trader.adapters.telegram.bot import TelegramBot
+from tests.fakes_telegram import FakeMessenger, FakeRenderer, FakeTelegramApi, RecordingNotifier
+from trader.adapters.telegram.bot import (
+    FOREIGN_EVENT_BURST,
+    FOREIGN_EVENT_WINDOW,
+    LOST_SEND_SOURCE,
+    TelegramBot,
+)
 from trader.adapters.telegram.callbacks import CallbackSigner, DbCallbackIssuer
 from trader.adapters.telegram.types import ProposalMessenger, TelegramApiError, Update
 from trader.broker.fill_model import FillParams, QuoteFillModel
@@ -27,6 +32,7 @@ from trader.engine.risk import SizedOrder
 from trader.engine.runs import get_live_run
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import FixedClock
+from trader.notify.relay import NotificationRelay
 from trader.notify.types import OutboundMessage, ProposalView
 from trader.settings_store import RuntimeSettings, SettingsStore
 from trader.strategies.base import EnterLong
@@ -35,7 +41,9 @@ pytestmark = pytest.mark.db
 CAL = SessionCalendar()
 T = datetime(2026, 10, 6, 13, 40, tzinfo=UTC)
 CHAT = 4242
-FROM = 777
+FROM = CHAT  # a private chat: the sender is the chat's user
+GROUP = -100_555  # a group chat
+MEMBER = 31_337  # a member of the group, or a stranger in the private chat
 SIGNER = CallbackSigner.derive("test-session-secret")
 
 
@@ -89,13 +97,15 @@ class Env:
     sleeps: list[float] = field(default_factory=list)
 
 
-def _make_bot(env: Env, decide: Callable[[int, Decision, Via, str], DecisionResult]) -> TelegramBot:
+def _make_bot(
+    env: Env, decide: Callable[[int, Decision, Via, str], DecisionResult], chat_id: int = CHAT
+) -> TelegramBot:
     async def fake_sleep(seconds: float) -> None:
         env.sleeps.append(seconds)
 
     return TelegramBot(
         env.api,
-        CHAT,
+        chat_id,
         env.factory,
         env.clock,
         env.issuer,
@@ -193,8 +203,8 @@ def events(env: Env, level: str | None = None) -> list[m.EventLog]:
         return list(s.execute(q).scalars())
 
 
-def tap(env: Env, data: str, message_id: int | None, chat_id: int = CHAT) -> Update:
-    return env.api.callback_update(data, chat_id=chat_id, message_id=message_id, from_id=FROM)
+def tap(env: Env, data: str, message_id: int | None, chat_id: int = CHAT, from_id: int = FROM) -> Update:
+    return env.api.callback_update(data, chat_id=chat_id, message_id=message_id, from_id=from_id)
 
 
 # --- 1. Approve ----------
@@ -552,3 +562,184 @@ async def test_a_failing_pause_confirmation_releases_the_nonce(env: Env) -> None
     await env.bot.handle_update(tap(env, data["y"], 5))
     assert calls == ["y", "y"]
     assert answers(env) == ["Error, try again", "Paused: new entries are blocked."]
+
+
+# --- Fix round 1 (review should-fix items and nits) ----------
+def _last_data(env: Env) -> dict[str, str]:
+    """The button data of the latest send_message attempt (failed attempts are recorded too)."""
+    (row,) = env.api.last_sent()["buttons"]
+    return {"a": row[0].callback_data, "r": row[1].callback_data}
+
+
+def _callback_rows(env: Env) -> list[m.TelegramCallback]:
+    with env.factory() as s:
+        return list(s.execute(select(m.TelegramCallback)).scalars())
+
+
+async def test_sync_closed_after_a_429_waits_retry_after_then_retries(env: Env) -> None:
+    pid, mid, _ = await sent_proposal(env)
+    pid2, mid2, _ = await sent_proposal(env)
+    env.svc.decide(pid, "reject", "web", "web:stephen")
+    env.svc.decide(pid2, "reject", "web", "web:stephen")
+    env.api.fail("edit_message", TelegramApiError(429, "Too Many Requests: retry after 30", retry_after=30))
+    assert await env.bot.sync_closed() == 0
+    assert len(env.api.calls_of("edit_message")) == 1  # stopped at the 429: the next edit would fail too
+    env.clock.advance(timedelta(seconds=29))
+    assert await env.bot.sync_closed() == 0
+    assert len(env.api.calls_of("edit_message")) == 1  # still inside retry_after
+    env.clock.advance(timedelta(seconds=1))
+    assert await env.bot.sync_closed() == 2
+    assert [e["message_id"] for e in env.api.calls_of("edit_message")] == [mid, mid, mid2]
+    assert await env.bot.sync_closed() == 0
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TelegramApiError(429, "Too Many Requests"),
+        TelegramApiError(502, "Bad Gateway"),
+        TelegramApiError(None, "timed out"),
+    ],
+)
+async def test_a_transient_sync_closed_failure_is_retried_next_time(
+    env: Env, error: TelegramApiError
+) -> None:
+    pid, _, _ = await sent_proposal(env)
+    env.svc.decide(pid, "reject", "web", "web:stephen")
+    env.api.fail("edit_message", error)
+    assert await env.bot.sync_closed() == 0
+    assert await env.bot.sync_closed() == 1
+    assert len(env.api.calls_of("edit_message")) == 2
+
+
+async def test_a_network_error_send_is_resent_once_with_the_same_nonce(env: Env) -> None:
+    pid = new_entry(env)
+    env.api.fail("send_message", TelegramApiError(None, "timed out"))
+    assert await env.bot.send_proposal(pid) is False
+    first = _last_data(env)
+    assert await env.bot.send_proposal(pid) is True
+    assert _last_data(env) == first  # the same nonce, so a delivered first copy can't double-decide
+    assert await env.bot.send_proposal(pid) is False  # bound now: sent
+    assert len(env.api.calls_of("send_message")) == 2
+    (row,) = _callback_rows(env)
+    assert row.ref == str(pid) and row.message_id is not None
+    await env.bot.handle_update(tap(env, first["a"], row.message_id))
+    assert answers(env) == ["Approved"] and len(env.decide.calls) == 1
+
+
+async def test_a_lost_send_that_fails_again_raises_an_error_the_relay_forwards(env: Env) -> None:
+    notifier = RecordingNotifier()
+    relay = NotificationRelay(
+        env.factory,
+        env.clock,
+        notifier,
+        FakeRenderer(),
+        FakeMessenger(),
+        env.run_id,
+        settings=RuntimeSettings,
+    )
+    await relay.pump()  # creates the cursors at the current ends
+    pid = new_entry(env)
+    env.api.fail("send_message", TelegramApiError(502, "Bad Gateway"), times=2)
+    assert await env.bot.send_proposal(pid) is False
+    first = _last_data(env)
+    assert await env.bot.send_proposal(pid) is False
+    assert _last_data(env) == first  # the one re-send used the same nonce
+    assert await env.bot.send_proposal(pid) is False  # no third attempt
+    assert len(env.api.calls_of("send_message")) == 2
+    with env.factory() as s:
+        (ev,) = s.execute(select(m.EventLog).where(m.EventLog.level == "error")).scalars()
+    assert ev.source == LOST_SEND_SOURCE and ev.run_id == env.run_id and ev.data["proposal_id"] == pid
+    assert first["a"] not in ev.message + repr(ev.data)
+    await relay.pump()
+    alerts = [msg for msg in notifier.sent if LOST_SEND_SOURCE in msg.text]
+    assert len(alerts) == 1 and alerts[0].kind == "alert"
+    assert await env.bot.send_proposal(pid, resend=True) is True  # an explicit resend still works
+
+
+async def test_a_refused_retry_of_an_uncertain_send_also_gives_up(env: Env) -> None:
+    pid = new_entry(env)
+    env.api.fail("send_message", TelegramApiError(None, "timed out"))
+    env.api.fail("send_message", TelegramApiError(429, "Too Many Requests", retry_after=3))
+    assert await env.bot.send_proposal(pid) is False
+    assert await env.bot.send_proposal(pid) is False
+    (row,) = _callback_rows(env)  # kept: the first attempt may have been delivered
+    assert row.message_id is None and row.used_at is None
+    with env.factory() as s:
+        assert s.scalar(select(func.count()).select_from(m.EventLog).where(m.EventLog.level == "error")) == 1
+
+
+async def test_in_a_private_chat_a_tap_or_text_from_another_sender_is_ignored(env: Env) -> None:
+    pid, mid, data = await sent_proposal(env)
+    await env.bot.handle_update(tap(env, data["a"], mid, from_id=MEMBER))
+    await env.bot.handle_update(env.api.text_update("/pause secret words", chat_id=CHAT, from_id=MEMBER))
+    assert env.decide.calls == [] and answers(env) == [] and env.commands.handled == []
+    evs = sorted(events(env, "warning"), key=lambda e: e.id)
+    assert [(e.data["from_id"], e.data["kind"]) for e in evs] == [(MEMBER, "callback"), (MEMBER, "text")]
+    assert all("secret" not in e.message + repr(e.data) and data["a"] not in repr(e.data) for e in evs)
+    await env.bot.handle_update(tap(env, data["a"], mid))  # Stephen's own tap still works
+    assert answers(env) == ["Approved"] and env.decide.calls[0][0] == pid
+
+
+async def test_in_a_group_chat_any_member_is_served(env: Env) -> None:
+    bot = _make_bot(env, env.decide, chat_id=GROUP)
+    pid, mid, data = await sent_proposal(env, bot)
+    await bot.handle_update(tap(env, data["a"], mid, chat_id=GROUP, from_id=MEMBER))
+    await bot.handle_update(env.api.text_update("/status", chat_id=GROUP, from_id=MEMBER))
+    assert env.decide.calls == [(pid, "approve", "telegram", f"telegram:{MEMBER}")]
+    assert env.commands.handled == ["/status"]
+
+
+async def test_an_auto_approved_proposal_gets_a_friendly_label(env: Env) -> None:
+    _, mid, data = await sent_proposal(env)
+    env.decide.result = DecisionResult("auto_approved", True)
+    await env.bot.handle_update(tap(env, data["a"], mid))
+    assert answers(env) == ["Already auto-approved"]
+
+
+async def test_any_text_goes_to_the_command_handler(env: Env) -> None:
+    await env.bot.handle_update(env.api.text_update("hello", chat_id=CHAT))
+    assert env.commands.handled == ["hello"]
+
+
+async def test_a_429_while_polling_waits_retry_after(env: Env) -> None:
+    stop = asyncio.Event()
+    env.api.fail("get_updates", TelegramApiError(429, "Too Many Requests", retry_after=7))
+    env.api.fail("get_updates", TelegramApiError(None, "timed out"))
+
+    async def fake_sleep(seconds: float) -> None:
+        env.sleeps.append(seconds)
+        if len(env.sleeps) == 2:
+            stop.set()
+
+    env.bot.sleep = fake_sleep
+    await asyncio.wait_for(env.bot.run(stop), timeout=5)
+    assert env.sleeps == [7, 1]  # retry_after, and the back-off did not grow
+
+
+async def test_stop_interrupts_a_backoff_sleep(env: Env) -> None:
+    stop = asyncio.Event()
+    started = asyncio.Event()
+    env.api.fail("get_updates", TelegramApiError(409, "Conflict: terminated by other getUpdates request"))
+
+    async def endless_sleep(seconds: float) -> None:
+        env.sleeps.append(seconds)
+        started.set()
+        await asyncio.Event().wait()
+
+    env.bot.sleep = endless_sleep
+    task = asyncio.create_task(env.bot.run(stop))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    stop.set()
+    await asyncio.wait_for(task, timeout=5)
+    assert env.sleeps == [30]
+
+
+async def test_foreign_chat_events_are_rate_limited_per_chat(env: Env) -> None:
+    for _ in range(FOREIGN_EVENT_BURST + 3):
+        await env.bot.handle_update(env.api.text_update("hi", chat_id=999))
+    await env.bot.handle_update(env.api.text_update("hi", chat_id=998))  # another chat has its own budget
+    assert len(events(env, "warning")) == FOREIGN_EVENT_BURST + 1
+    env.clock.advance(FOREIGN_EVENT_WINDOW)
+    await env.bot.handle_update(env.api.text_update("hi", chat_id=999))
+    assert len(events(env, "warning")) == FOREIGN_EVENT_BURST + 2

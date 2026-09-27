@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Literal, Self
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from trader.adapters.telegram.types import CallbackKind
@@ -114,10 +114,9 @@ class DbCallbackIssuer:
         chat_id: int,
         ttl_seconds: int | None,
     ) -> tuple[str, dict[str, str]]:
-        code = KIND_CODES[kind]
         now = self.clock.now()
         nonce = secrets.token_urlsafe(NONCE_BYTES)
-        data = {action: self.signer.data(code, ref, action, nonce) for action in actions}
+        data = self.data_for(kind, ref, actions, nonce)
         with session_scope(self.factory) as s:
             s.add(
                 m.TelegramCallback(
@@ -168,3 +167,70 @@ class DbCallbackIssuer:
                 .where(m.TelegramCallback.nonce == nonce)
                 .values(used_at=None, used_action=None)
             )
+
+    # --- additive helpers (P3-T6 fix round 1): the bot reaches `telegram_callbacks` only through these ---
+    def data_for(self, kind: CallbackKind, ref: str, actions: Sequence[str], nonce: str) -> dict[str, str]:
+        """The signed callback data of an existing nonce's buttons (used to re-send the same message)."""
+        code = KIND_CODES[kind]
+        return {action: self.signer.data(code, ref, action, nonce) for action in actions}
+
+    def discard(self, nonce: str) -> None:
+        """Delete a nonce whose message was never delivered (Telegram refused the send)."""
+        with session_scope(self.factory) as s:
+            s.execute(delete(m.TelegramCallback).where(m.TelegramCallback.nonce == nonce))
+
+    def close_if_unused(self, nonce: str, action: str = "closed") -> bool:
+        """Use up an unused nonce without a tap (its message is being closed); False when a tap (or another
+        closer) already used it."""
+        with session_scope(self.factory) as s:
+            claimed = s.execute(
+                update(m.TelegramCallback)
+                .where(m.TelegramCallback.nonce == nonce, m.TelegramCallback.used_at.is_(None))
+                .values(used_at=self.clock.now(), used_action=action)
+                .returning(m.TelegramCallback.nonce)
+            ).first()
+            return claimed is not None
+
+    def exists_for(self, kind: CallbackKind, ref: str, *, bound: bool | None = None) -> bool:
+        """Whether any nonce exists for (kind, ref); `bound=True` counts only nonces bound to a message,
+        `bound=False` only unbound ones."""
+        cb = m.TelegramCallback
+        q = select(cb.nonce).where(cb.kind == kind, cb.ref == ref)
+        if bound is not None:
+            q = q.where(cb.message_id.is_not(None) if bound else cb.message_id.is_(None))
+        with self.factory() as s:
+            return s.execute(q.limit(1)).first() is not None
+
+    def unbound_for(self, kind: CallbackKind, ref: str, chat_id: int) -> str | None:
+        """The newest unused nonce for (kind, ref, chat) that was never bound to a message: a send whose
+        outcome is unknown (network error or 5xx), or one interrupted by a crash."""
+        cb = m.TelegramCallback
+        with self.factory() as s:
+            return s.execute(
+                select(cb.nonce)
+                .where(
+                    cb.kind == kind,
+                    cb.ref == ref,
+                    cb.chat_id == chat_id,
+                    cb.message_id.is_(None),
+                    cb.used_at.is_(None),
+                )
+                .order_by(cb.created_at.desc(), cb.nonce)
+                .limit(1)
+            ).scalar_one_or_none()
+
+    def open_messages(self, kind: CallbackKind, chat_id: int) -> list[tuple[str, str, int]]:
+        """(nonce, ref, message_id) of every bound, unused nonce of `kind` in the chat, oldest first."""
+        cb = m.TelegramCallback
+        with self.factory() as s:
+            rows = s.execute(
+                select(cb.nonce, cb.ref, cb.message_id)
+                .where(
+                    cb.kind == kind,
+                    cb.chat_id == chat_id,
+                    cb.used_at.is_(None),
+                    cb.message_id.is_not(None),
+                )
+                .order_by(cb.created_at, cb.message_id)  # message ids grow within a chat
+            ).all()
+        return [(nonce, ref, message_id) for nonce, ref, message_id in rows if message_id is not None]

@@ -9,6 +9,10 @@ transaction as the upserts).
 is NULL unless at least MIN_OPENING_BARS opening bars were found (or every lookback session, when
 `open_bar.lookback_sessions` is below that), so a thin history never passes for a real average.
 
+When `manual_watchlists` holds a list for `session_date` (uploaded on the web, P4-T10), its tickers ARE the
+universe (source `manual`) and FinViz is not called; SPY and `universe.extra_symbols` are still added and
+the degenerate rules below still apply.
+
 When FinViz fails, the previous stored universe is used as a fallback, EXCEPT when `session_date`
 already has a universe from FinViz (a forced re-run of a good day): then an error event is logged,
 the FinvizError is re-raised (run_job marks the job failed) and nothing is written.
@@ -40,6 +44,7 @@ from trader.market.calendar import SessionCalendar
 from trader.market.clock import ET, Clock, et_date
 from trader.market.indicators import atr, average_volume, opening_bar
 from trader.market.types import INTERVAL_CODES, Candle
+from trader.market.watchlist import get_watchlist
 from trader.settings_store import RuntimeSettings
 
 DAILY_LOOKBACK = timedelta(days=30)
@@ -106,7 +111,19 @@ class _Universe:
     fallback: dict[str, Any] = field(default_factory=dict)  # detail keys, only for a fallback
 
 
+def _manual_universe(deps: NightlyDeps, session_date: date) -> _Universe | None:
+    """The session's uploaded watchlist (P4-T10, SPEC §4.2 manual fallback), when there is one. It replaces
+    FinViz for that session: no FinViz call, no merge."""
+    row = get_watchlist(deps.factory, session_date)
+    if row is None:
+        return None
+    tickers = [t for t in row.tickers if isinstance(t, str)]
+    return _Universe([UniverseRow(t, "", "", "", None, None) for t in tickers], "manual")
+
+
 async def _universe(deps: NightlyDeps, session_date: date) -> _Universe:
+    if (manual := await asyncio.to_thread(_manual_universe, deps, session_date)) is not None:
+        return manual
     # FinvizError covers every scraper failure: FinvizBlocked, FinvizHttpError, FinvizParseError and
     # FinvizFilterIgnored (P1-T5). The scraper never returns an empty or partial universe.
     try:

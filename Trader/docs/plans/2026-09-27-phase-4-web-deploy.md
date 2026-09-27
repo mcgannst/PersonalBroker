@@ -523,12 +523,12 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - The manual list is used for that session only; SPY and `universe.extra_symbols` are still added by the nightly job as today. An explicit upload wins over FinViz for its session (Stephen asked for it).
 
 **Acceptance tests:**
-- [ ] 1. `parse_watchlist_csv` with a header `Symbol,Name` and rows `aapl`, `BF-B`, `aapl`, `$$$`, blank → tickers (`AAPL`, `BF.B`), rejected rows 4 (`duplicate`) and 5 (`invalid ticker`).
-- [ ] 2. A headerless single column works; a 300 KB file, 1,001 tickers and a file with no valid ticker → errors.
-- [ ] 3. Upload for the next session → stored with filename, uploader `web:stephen`, audit row; a second upload replaces it; `GET` returns it; `DELETE` removes it (audit); a past date → 422.
-- [ ] 4. `run_nightly=true` calls the fake launcher with `nightly`, the date and `force=True`.
-- [ ] 5. `run_nightly` (fakes as in the P1 nightly tests) for a session with a manual watchlist never calls FinViz, stores `universe_snapshots` with `source = "manual"` for exactly those tickers plus SPY, and reports `source: manual`; without a watchlist it behaves as before (the existing nightly tests pass).
-- [ ] 6. Gate and commit `P4-T10: ...`.
+- [x] 1. `parse_watchlist_csv` with a header `Symbol,Name` and rows `aapl`, `BF-B`, `aapl`, `$$$`, blank → tickers (`AAPL`, `BF.B`), rejected rows 4 (`duplicate`) and 5 (`invalid ticker`).
+- [x] 2. A headerless single column works; a 300 KB file, 1,001 tickers and a file with no valid ticker → errors.
+- [x] 3. Upload for the next session → stored with filename, uploader `web:stephen`, audit row; a second upload replaces it; `GET` returns it; `DELETE` removes it (audit); a past date → 422.
+- [x] 4. `run_nightly=true` calls the fake launcher with `nightly`, the date and `force=True`.
+- [x] 5. `run_nightly` (fakes as in the P1 nightly tests) for a session with a manual watchlist never calls FinViz, stores `universe_snapshots` with `source = "manual"` for exactly those tickers plus SPY, and reports `source: manual`; without a watchlist it behaves as before (the existing nightly tests pass).
+- [x] 6. Gate and commit `P4-T10: ...`.
 
 ---
 

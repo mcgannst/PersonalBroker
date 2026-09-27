@@ -26,7 +26,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T2 | Database models, migration 0001, test database fixture | T1 | gauntlet | 2 | V✅ B❌ S✅ C✅ → fix 5e8a594 (verify+review running) | 5e8a594 |
 | P1-T3 | Crypto and runtime settings store | T2 | fixing | 2 | V✅ B❌ S✅ C✅(should-fix) | f5ad3a4 |
 | P1-T4 | Market types, clock and session calendar | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 4af1355 |
-| P1-T5 | FinViz parser and scraper | T1 | gauntlet | 2 | V✅ B❌ S❌ C❌ → fix b1d45e5 (verify+review running) | b1d45e5 |
+| P1-T5 | FinViz parser and scraper | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | b1d45e5 |
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | gauntlet | 1 | V✅ | d922a9c |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | building | 1 |  |  |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |

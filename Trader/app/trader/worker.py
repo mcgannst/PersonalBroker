@@ -421,7 +421,9 @@ class Worker:
             return {}
         try:
             extra = dict(extra_fn())
-            json.dumps(extra)  # the detail column is jsonb: an unserialisable value would lose the beat
+            # the detail column is jsonb: an unserialisable value, or a NaN/Infinity (which json.dumps
+            # accepts by default and PostgreSQL refuses), would lose the beat
+            json.dumps(extra, allow_nan=False)
         except Exception as exc:
             if not self._extra_failing:
                 self._extra_failing = True

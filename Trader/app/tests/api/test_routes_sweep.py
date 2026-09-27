@@ -12,6 +12,7 @@ fakes, entered through the monkeypatched `trader.runtime` builders, so nothing t
 """
 
 import ast
+import asyncio
 import re
 import socket
 import threading
@@ -22,6 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -30,6 +32,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from sqlalchemy import String, select
 from sqlalchemy.orm import Session, sessionmaker
+from structlog.testing import capture_logs
 
 import trader.runtime as rt
 from tests.factories import add_strategy_config, add_symbol
@@ -45,7 +48,7 @@ from trader.api.main import create_app
 from trader.api.quotes import CachedQuotes
 from trader.api.routers import meta, performance
 from trader.api.schemas import MetricsOut
-from trader.api.services import build_services
+from trader.api.services import QuietSettings, build_services
 from trader.bootstrap import Core
 from trader.broker.types import OrderSpec
 from trader.db import models as m
@@ -370,19 +373,101 @@ def test_the_services_decider_is_the_guarded_runtime_decider(
     assert built == [7]
 
 
+def test_a_bad_settings_row_makes_a_web_decision_503_with_no_alert_and_no_stored_value(wired: Wired) -> None:
+    """Fix round 1: the decider shares the API's quiet guard (no relayed `settings` event per click), and the
+    fail-closed decision is a 503 `settings_unreadable`, never an unhandled 500 that logs pydantic's
+    `input_value`."""
+    auth.ensure_admin(wired.factory, wired.clock, USER, SecretStr(PASSWORD))
+    _, (first, second) = seed_entries(wired.core, ("AAA", "BBB"))
+    with wired.factory() as s:
+        s.add(m.Setting(key="web.sse_poll_seconds", value=987654, updated_by="test"))
+        s.commit()
+    app = wired.app()
+    with capture_logs() as logs, TestClient(app, base_url=BASE, raise_server_exceptions=False) as client:
+        csrf = login(client)
+        for pid in (first, second, first):
+            r = client.post(f"/api/proposals/{pid}/approve", headers={"X-CSRF-Token": csrf})
+            assert r.status_code == 503, r.text
+            assert r.json()["error"]["code"] == "settings_unreadable"
+            assert "987654" not in r.text
+    text = repr(logs)
+    assert "api.unhandled" not in text
+    assert "987654" not in text and "input_value" not in text
+    assert "web.sse_poll_seconds" in text  # the key is named, the value never
+    with wired.factory() as s:
+        alerts = s.execute(select(m.EventLog).where(m.EventLog.source == rt.SETTINGS_SOURCE)).scalars().all()
+        statuses = {p.status for p in s.execute(select(m.Proposal)).scalars()}
+    assert alerts == []
+    assert statuses == {"pending"}  # nothing was decided
+
+
+class _Store:
+    def __init__(self) -> None:
+        self.threads: list[int] = []
+        self.fail = False
+        self.value = RuntimeSettings()
+
+    def load(self) -> RuntimeSettings:
+        self.threads.append(threading.get_ident())
+        if self.fail:
+            raise ValueError("bad row")
+        return self.value
+
+
+async def test_quiet_settings_never_reads_the_store_on_the_event_loop() -> None:
+    store = _Store()
+    now = [0.0]
+    quiet = QuietSettings(SimpleNamespace(settings=store), max_age=5.0, monotonic=lambda: now[0])  # type: ignore[arg-type]
+    loop_thread = threading.get_ident()
+    assert quiet() == RuntimeSettings()  # stale at first: the defaults now, a refresh in a thread
+    for _ in range(3):
+        quiet()  # one refresh in flight at a time
+    await asyncio.sleep(0.05)
+    assert len(store.threads) == 1 and loop_thread not in store.threads
+
+    store.value = RuntimeSettings(web_quote_cache_seconds=7)
+    now[0] = 4.9
+    assert quiet().web_quote_cache_seconds != 7  # still fresh: no read at all
+    now[0] = 5.0
+    quiet()
+    await asyncio.sleep(0.05)
+    assert quiet().web_quote_cache_seconds == 7
+    assert loop_thread not in store.threads
+
+    store.fail = True  # a bad row: the last good value, one log line per streak, off the loop too
+    now[0] = 20.0
+    with capture_logs() as logs:
+        assert (await asyncio.to_thread(quiet)).web_quote_cache_seconds == 7
+        now[0] = 30.0
+        assert (await asyncio.to_thread(quiet)).web_quote_cache_seconds == 7
+    assert [e["event"] for e in logs] == ["api.settings_unusable"]
+    assert loop_thread not in store.threads
+
+
 # --- the grep checks ----------------------------------------------------------------------------------------
 
 
 def test_no_proposal_service_is_constructed_in_the_api() -> None:
-    """Every ProposalService of the API comes from `runtime.build_decider` (the kill-switch entry guard)."""
+    """Every ProposalService of the API comes from `runtime.build_decider` (the kill-switch entry guard).
+    Flags a textual `ProposalService(`, any `from ... import ProposalService` (under any alias: the API has
+    no reason to import the class at all), and any call through the name, an attribute or an alias."""
     offenders: list[str] = []
     for path in sorted(API_DIR.rglob("*.py")):
         source = path.read_text(encoding="utf-8")
         if "ProposalService(" in source:
             offenders.append(str(path.relative_to(API_DIR)))
-        for node in ast.walk(ast.parse(source)):
-            if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", "")) == (
-                "ProposalService"
+        tree = ast.parse(source)
+        names = {"ProposalService"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name == "ProposalService":
+                        names.add(alias.asname or alias.name)
+                        offenders.append(f"{path.name}:{node.lineno} imports ProposalService")
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and getattr(node.func, "id", getattr(node.func, "attr", "")) in names
             ):
                 offenders.append(f"{path.name}:{node.lineno}")
     assert not offenders, offenders

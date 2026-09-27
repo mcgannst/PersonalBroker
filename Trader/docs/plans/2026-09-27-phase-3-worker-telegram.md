@@ -378,16 +378,16 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 - The relay never waits on Telegram beyond `Notifier.send` (which never raises).
 
 **Acceptance tests (real DB, RecordingNotifier, FakeRenderer, FakeMessenger):**
-- [ ] 1. A new pending proposal is passed to the messenger; an auto-mode one (`decided_by = "auto"`, status `submitted`) is not, and instead produces one silent message without buttons; an expired flatten auto-submitted by `auto_flatten_on_expiry` produces no proposal message.
-- [ ] 2. An entry fill, a stop fill and a flatten fill each produce one message with the right view (purpose, reason, P&L on the closing fill).
-- [ ] 3. A kill-switch `error` event → `kill_switch`; a `job.nightly` error → `job_failure`; a `proposals` error (unprotected position) → `escalation`; an `info` event → nothing; a `telegram` warning → nothing.
-- [ ] 4. The spy_overlay decision note (info level, `data.decision = "hold"`) → one overlay message; the `error`-level "benchmark unknown, holding" note → one overlay message (not an alert as well) with no prices.
-- [ ] 5. With no cursor rows, existing fills and events are not sent; only rows added afterwards are.
-- [ ] 6. Running `pump()` twice, and running it from two relay instances, sends each row once.
-- [ ] 7. A notifier that fails for one message still lets the cursor and the other streams advance (the failure is the notifier's to log).
-- [ ] 8. After 50 events accumulate with `relay_catchup_max = 20`, one pump sends 20 plus one summary, and the next pump sends nothing old.
-- [ ] 9. A messenger that raises in `send_proposal` does not stop fills and events from being relayed in the same pump.
-- [ ] 10. Gate and commit `P3-T8: ...`.
+- [x] 1. A new pending proposal is passed to the messenger; an auto-mode one (`decided_by = "auto"`, status `submitted`) is not, and instead produces one silent message without buttons; an expired flatten auto-submitted by `auto_flatten_on_expiry` produces no proposal message.
+- [x] 2. An entry fill, a stop fill and a flatten fill each produce one message with the right view (purpose, reason, P&L on the closing fill).
+- [x] 3. A kill-switch `error` event → `kill_switch`; a `job.nightly` error → `job_failure`; a `proposals` error (unprotected position) → `escalation`; an `info` event → nothing; a `telegram` warning → nothing.
+- [x] 4. The spy_overlay decision note (info level, `data.decision = "hold"`) → one overlay message; the `error`-level "benchmark unknown, holding" note → one overlay message (not an alert as well) with no prices.
+- [x] 5. With no cursor rows, existing fills and events are not sent; only rows added afterwards are.
+- [x] 6. Running `pump()` twice, and running it from two relay instances, sends each row once.
+- [x] 7. A notifier that fails for one message still lets the cursor and the other streams advance (the failure is the notifier's to log).
+- [x] 8. After 50 events accumulate with `relay_catchup_max = 20`, one pump sends 20 plus one summary, and the next pump sends nothing old.
+- [x] 9. A messenger that raises in `send_proposal` does not stop fills and events from being relayed in the same pump.
+- [x] 10. Gate and commit `P3-T8: ...`.
 
 ---
 

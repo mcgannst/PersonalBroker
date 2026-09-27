@@ -1,0 +1,539 @@
+"""P3-T8: the notification relay (DB rows to Telegram), against a real database with the Phase 3 fakes."""
+
+import asyncio
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from typing import Any
+
+import pytest
+from sqlalchemy.orm import Session, sessionmaker
+
+from tests.factories import add_run, add_strategy_config, add_symbol
+from tests.fakes_telegram import FakeMessenger, FakeRenderer, RecordingNotifier
+from trader.db import models as m
+from trader.db.session import session_scope
+from trader.market.clock import FixedClock
+from trader.notify.relay import STREAMS, NotificationRelay, RelayReport, alert_kind
+from trader.notify.types import AlertView, FillView, OutboundMessage, OverlayView, ProposalView
+from trader.settings_store import RuntimeSettings
+
+pytestmark = pytest.mark.db
+
+NOW = datetime(2026, 10, 6, 14, 0, tzinfo=UTC)  # 10:00 ET
+SESSION = date(2026, 10, 6)
+
+
+@dataclass
+class World:
+    factory: sessionmaker[Session]
+    clock: FixedClock
+    run_id: int
+    symbol_id: int
+    config_id: int
+    notifier: RecordingNotifier
+    render: FakeRenderer
+    messenger: FakeMessenger
+    settings: RuntimeSettings
+
+    def relay(self, notifier: Any = None) -> NotificationRelay:
+        return NotificationRelay(
+            self.factory,
+            self.clock,
+            notifier if notifier is not None else self.notifier,
+            self.render,
+            self.messenger,
+            self.run_id,
+            settings=lambda: self.settings,
+        )
+
+
+@pytest.fixture
+def world(db_factory: sessionmaker[Session]) -> World:
+    with session_scope(db_factory) as s:
+        run_id = add_run(s)
+        symbol_id = add_symbol(s, "AAA")
+        config_id = add_strategy_config(s, "orb_sip")
+    return World(
+        db_factory,
+        FixedClock(NOW),
+        run_id,
+        symbol_id,
+        config_id,
+        RecordingNotifier(),
+        FakeRenderer(),
+        FakeMessenger(),
+        RuntimeSettings(),
+    )
+
+
+# --- seeding --------------------------------------------------------------------------------------------
+def add_proposal(
+    w: World,
+    *,
+    kind: str = "entry",
+    status: str = "pending",
+    decided_via: str | None = None,
+    decided_by: str | None = None,
+    position_id: int | None = None,
+) -> int:
+    with session_scope(w.factory) as s:
+        sig = m.Signal(
+            run_id=w.run_id,
+            strategy_config_id=w.config_id,
+            symbol_id=w.symbol_id,
+            session_date=SESSION,
+            event_key="orb_open",
+            ts=NOW,
+            intent={"type": "enter_long", "reason": "orb breakout"},
+            evidence={},
+        )
+        s.add(sig)
+        s.flush()
+        spec = {
+            "symbol_id": w.symbol_id,
+            "side": "buy" if kind == "entry" else "sell",
+            "order_type": "stop" if kind in ("entry", "stop") else "market",
+            "qty": 33,
+            "stop": "21.55" if kind in ("entry", "stop") else None,
+            "limit": None,
+            "tif": "day",
+            "purpose": kind,
+            "position_id": position_id,
+            "proposal_id": None,
+            "strategy_config_id": w.config_id,
+            "stop_loss": "21.41",
+            "reason": "orb breakout" if kind == "entry" else "flatten_close",
+        }
+        p = m.Proposal(
+            run_id=w.run_id,
+            signal_id=sig.id,
+            kind=kind,
+            order_spec=spec,
+            qty=33,
+            status=status,
+            created_at=NOW,
+            expires_at=NOW + timedelta(seconds=90),
+            decided_via=decided_via,
+            decided_by=decided_by,
+            decided_at=NOW if decided_by else None,
+            position_id=position_id,
+            sizing={"risk_dollars": "5.00"} if kind == "entry" else None,
+            escalations=0,
+        )
+        s.add(p)
+        s.flush()
+        return p.id
+
+
+def add_order(
+    s: Session,
+    w: World,
+    *,
+    purpose: str,
+    reason: str,
+    position_id: int | None,
+    order_type: str = "market",
+) -> int:
+    o = m.Order(
+        run_id=w.run_id,
+        symbol_id=w.symbol_id,
+        strategy_config_id=w.config_id,
+        position_id=position_id,
+        side="buy" if purpose == "entry" else "sell",
+        order_type=order_type,
+        purpose=purpose,
+        qty=33,
+        stop_price=Decimal("21.41") if purpose == "stop" else None,
+        stop_loss=Decimal("21.41"),
+        tif="day",
+        status="filled",
+        reason=reason,
+        session_date=SESSION,
+        submitted_at=NOW,
+        closed_at=NOW,
+        stale_alerted=False,
+    )
+    s.add(o)
+    s.flush()
+    return o.id
+
+
+def add_fill(s: Session, w: World, order_id: int, price: str) -> int:
+    f = m.Fill(
+        run_id=w.run_id,
+        order_id=order_id,
+        ts=NOW,
+        qty=33,
+        price=Decimal(price),
+        fees={"commission": "0", "ecn": "0", "sec": "0", "total": "0"},
+        quote_snapshot={},
+        slippage=Decimal("0"),
+    )
+    s.add(f)
+    s.flush()
+    return f.id
+
+
+def add_position(s: Session, w: World, entry_order_id: int, *, closed: bool) -> int:
+    pos = m.Position(
+        run_id=w.run_id,
+        symbol_id=w.symbol_id,
+        strategy_config_id=w.config_id,
+        qty=0 if closed else 33,
+        avg_price=Decimal("21.5608"),
+        stop_loss=Decimal("21.41"),
+        planned_risk=Decimal("4.97"),
+        session_date=SESSION,
+        opened_at=NOW,
+        closed_at=NOW if closed else None,
+        entry_order_id=entry_order_id,
+        unprotected_seconds=0,
+    )
+    s.add(pos)
+    s.flush()
+    return pos.id
+
+
+def add_trade(s: Session, w: World, position_id: int, exit_price: str, pnl: str, pnl_r: str) -> None:
+    s.add(
+        m.Trade(
+            run_id=w.run_id,
+            position_id=position_id,
+            symbol_id=w.symbol_id,
+            session_date=SESSION,
+            entry_price=Decimal("21.5608"),
+            exit_price=Decimal(exit_price),
+            qty=33,
+            pnl=Decimal(pnl),
+            pnl_r=Decimal(pnl_r),
+            planned_risk=Decimal("4.97"),
+            exit_reason="x",
+            slippage_total=Decimal("0"),
+            fees_total=Decimal("0"),
+            opened_at=NOW,
+            closed_at=NOW,
+        )
+    )
+    s.flush()
+
+
+def add_round_trip(w: World, *, exit_purpose: str, exit_reason: str, exit_price: str) -> tuple[int, int, int]:
+    """An entry fill and a closing fill with its trade. Returns (entry fill, exit fill, position)."""
+    with session_scope(w.factory) as s:
+        entry_order = add_order(
+            s, w, purpose="entry", reason="orb breakout", position_id=None, order_type="stop"
+        )
+        pos_id = add_position(s, w, entry_order, closed=True)
+        s.get_one(m.Order, entry_order).position_id = pos_id
+        entry_fill = add_fill(s, w, entry_order, "21.5608")
+        exit_order = add_order(s, w, purpose=exit_purpose, reason=exit_reason, position_id=pos_id)
+        exit_fill = add_fill(s, w, exit_order, exit_price)
+        add_trade(s, w, pos_id, exit_price, "10.8200", "2.1700")
+    return entry_fill, exit_fill, pos_id
+
+
+def add_event(
+    w: World,
+    level: str,
+    source: str,
+    message: str = "something happened",
+    data: dict[str, Any] | None = None,
+    run_id: int | None | str = "run",
+) -> int:
+    with session_scope(w.factory) as s:
+        e = m.EventLog(
+            ts=NOW,
+            level=level,
+            source=source,
+            run_id=w.run_id if run_id == "run" else run_id,
+            message=message,
+            data=data,
+        )
+        s.add(e)
+        s.flush()
+        return e.id
+
+
+def rendered(w: World, method: str) -> list[Any]:
+    return [args[0] for name, args in w.render.calls if name == method]
+
+
+def cursor(w: World, stream: str) -> int | None:
+    with session_scope(w.factory) as s:
+        c = s.get(m.NotifyCursor, stream)
+        return None if c is None else c.last_id
+
+
+async def started(w: World) -> NotificationRelay:
+    """A relay that has pumped once on an empty database, so its cursors exist at the current maximum."""
+    relay = w.relay()
+    await relay.pump()
+    w.render.calls.clear()
+    w.notifier.sent.clear()
+    w.messenger.sent.clear()
+    return relay
+
+
+# --- alert_kind -------------------------------------------------------------------------------------------
+def test_alert_kind_mapping() -> None:
+    assert alert_kind("killswitch", "error", "max_drawdown_pct tripped") == "kill_switch"
+    assert alert_kind("job.nightly", "error", "boom") == "job_failure"
+    assert alert_kind("job.event:orb_open", "error", "missed: 295s late") == "job_failure"
+    assert alert_kind("questrade.token", "error", "refresh failed") == "token_failure"
+    assert alert_kind("proposals", "error", "position 3 is still unprotected") == "escalation"
+    assert alert_kind("engine", "critical", "position still open at the close") == "escalation"
+    assert alert_kind("engine", "error", "strategy failed") == "alert"
+    assert alert_kind("broker", "error", "anything") == "alert"
+    assert alert_kind("jobs", "error", "not a job source") == "alert"
+
+
+# --- 1. proposals -----------------------------------------------------------------------------------------
+async def test_pending_proposal_goes_to_messenger_and_auto_one_is_relayed_silently(world: World) -> None:
+    relay = await started(world)
+    pending = add_proposal(world)
+    auto = add_proposal(world, status="submitted", decided_via="auto", decided_by="auto")
+    flatten = add_proposal(
+        world, kind="exit", status="submitted", decided_via="auto", decided_by="auto_flatten_on_expiry"
+    )
+
+    report = await relay.pump()
+
+    assert world.messenger.sent == [pending]
+    assert report.proposals == 2  # one messenger send + one auto message
+    views = rendered(world, "proposal")
+    assert [v.proposal_id for v in views] == [auto]
+    view = views[0]
+    assert isinstance(view, ProposalView)
+    assert (view.ticker, view.kind, view.side, view.qty) == ("AAA", "entry", "buy", 33)
+    assert view.stop == Decimal("21.55") and view.stop_loss == Decimal("21.41")
+    assert view.risk_usd == Decimal("5.00") and view.strategy_key == "orb_sip"
+    assert view.decided_via == "auto" and view.reason == "orb breakout"
+    [msg] = world.notifier.sent
+    assert msg.silent is True and msg.buttons == () and msg.dedupe_key == f"proposal:{auto}"
+    assert all(args[1] == () for name, args in world.render.calls if name == "proposal")
+    assert flatten not in [v.proposal_id for v in views]
+    assert cursor(world, "proposals") == flatten
+
+
+# --- 2. fills ---------------------------------------------------------------------------------------------
+async def test_entry_stop_and_flatten_fills_each_produce_one_message(world: World) -> None:
+    relay = await started(world)
+    entry_fill, stop_fill, pos = add_round_trip(
+        world, exit_purpose="stop", exit_reason="stop_loss", exit_price="21.40"
+    )
+    _, flatten_fill, pos2 = add_round_trip(
+        world, exit_purpose="exit", exit_reason="flatten_close", exit_price="21.89"
+    )
+
+    report = await relay.pump()
+
+    views: list[FillView] = rendered(world, "fill")
+    assert report.fills == 4
+    by_id = {v.fill_id: v for v in views}
+    assert len(by_id) == 4
+    e = by_id[entry_fill]
+    assert (e.purpose, e.side, e.ticker, e.qty, e.price) == ("entry", "buy", "AAA", 33, Decimal("21.5608"))
+    assert e.reason == "orb breakout" and e.position_id == pos and e.stop_loss == Decimal("21.41")
+    assert e.pnl is None and e.pnl_r is None
+    st = by_id[stop_fill]
+    assert (st.purpose, st.reason, st.position_id) == ("stop", "stop_loss", pos)
+    assert st.pnl == Decimal("10.8200") and st.pnl_r == Decimal("2.1700")
+    fl = by_id[flatten_fill]
+    assert (fl.purpose, fl.reason, fl.position_id) == ("exit", "flatten_close", pos2)
+    assert fl.pnl == Decimal("10.8200")
+    keys = [msg.dedupe_key for msg in world.notifier.sent]
+    assert sorted(keys) == sorted(f"fill:{v.fill_id}" for v in views)
+    assert [v.fill_id for v in views] == sorted(v.fill_id for v in views)  # id order
+    assert cursor(world, "fills") == max(by_id)
+
+
+# --- 3. alerts --------------------------------------------------------------------------------------------
+async def test_error_events_become_alerts_by_kind(world: World) -> None:
+    relay = await started(world)
+    add_event(world, "error", "killswitch", "max_drawdown_pct tripped", {"switch": "max_drawdown_pct"})
+    add_event(world, "error", "job.nightly", "job nightly failed", run_id=None)
+    add_event(world, "error", "proposals", "position 3 is still unprotected (alert 2)")
+    add_event(world, "info", "engine", "proposal 1 approved")
+    add_event(world, "warning", "telegram", "telegram send failed")
+    add_event(world, "error", "telegram", "telegram broke")
+
+    report = await relay.pump()
+
+    views: list[AlertView] = rendered(world, "alert")
+    assert [v.kind for v in views] == ["kill_switch", "job_failure", "escalation"]
+    assert views[0].data == {"switch": "max_drawdown_pct"} and views[0].source == "killswitch"
+    assert views[1].data == {}
+    assert report.events == 3
+    assert [msg.kind for msg in world.notifier.sent] == ["kill_switch", "job_failure", "escalation"]
+    assert all(msg.dedupe_key and msg.dedupe_key.startswith("event:") for msg in world.notifier.sent)
+
+
+async def test_events_of_another_run_are_not_relayed(world: World) -> None:
+    relay = await started(world)
+    with session_scope(world.factory) as s:
+        other = add_run(s, mode="replay")
+    add_event(world, "error", "engine", "replay went wrong", run_id=other)
+    await relay.pump()
+    assert world.notifier.sent == []
+
+
+# --- 4. overlay -------------------------------------------------------------------------------------------
+async def test_overlay_decision_notes_render_as_overlay_messages(world: World) -> None:
+    relay = await started(world)
+    add_event(
+        world,
+        "info",
+        "strategy.spy_overlay",
+        "overlay: decision",
+        {
+            "decision": "hold",
+            "spy_return": "0.001234",
+            "prior_close": "570.10",
+            "price": "570.80",
+            "position_ids": [4, 5],
+        },
+    )
+    add_event(
+        world,
+        "error",
+        "strategy.spy_overlay",
+        "overlay: benchmark unknown, holding",
+        {"decision": "hold", "benchmark": "SPY", "position_ids": []},
+    )
+    add_event(world, "info", "strategy.spy_overlay", "overlay: something else", {"note": 1})
+
+    await relay.pump()
+
+    views: list[OverlayView] = rendered(world, "overlay")
+    assert rendered(world, "alert") == []
+    assert len(views) == 2
+    hold, unknown = views
+    assert hold.decision == "hold" and hold.spy_return == Decimal("0.001234")
+    assert hold.prior_close == Decimal("570.10") and hold.price == Decimal("570.80")
+    assert hold.position_ids == (4, 5) and hold.note == "overlay: decision"
+    assert unknown.spy_return is None and unknown.prior_close is None and unknown.price is None
+    assert unknown.note == "overlay: benchmark unknown, holding"
+    assert [msg.kind for msg in world.notifier.sent] == ["overlay", "overlay"]
+
+
+# --- 5. cursors start at the current maximum --------------------------------------------------------------
+async def test_missing_cursor_starts_at_current_maximum(world: World) -> None:
+    add_round_trip(world, exit_purpose="stop", exit_reason="stop_loss", exit_price="21.40")
+    add_event(world, "error", "engine", "old error")
+    add_proposal(world, status="submitted", decided_via="auto", decided_by="auto")
+    relay = world.relay()
+
+    await relay.pump()
+    assert world.notifier.sent == []
+    assert all(cursor(world, s) is not None for s in STREAMS)
+
+    new_event = add_event(world, "error", "engine", "new error")
+    await relay.pump()
+    assert [msg.dedupe_key for msg in world.notifier.sent] == [f"event:{new_event}"]
+
+
+# --- 6. exactly once --------------------------------------------------------------------------------------
+async def test_pump_twice_and_two_instances_send_each_row_once(world: World) -> None:
+    relay_a = await started(world)
+    relay_b = world.relay()
+    add_round_trip(world, exit_purpose="exit", exit_reason="flatten_close", exit_price="21.89")
+    add_event(world, "critical", "engine", "position still open at the close")
+    add_proposal(world, status="submitted", decided_via="auto", decided_by="auto")
+
+    await relay_a.pump()
+    await relay_a.pump()
+    await relay_b.pump()
+
+    keys = [msg.dedupe_key for msg in world.notifier.sent]
+    assert len(keys) == 4 and len(set(keys)) == 4
+    assert len(world.render.calls) == 4  # nothing was even rendered twice
+
+
+async def test_two_instances_racing_over_the_same_rows_send_once(world: World) -> None:
+    """Two relays that both read the same cursor (a crash between send and advance looks the same)."""
+    await started(world)
+    add_event(world, "error", "engine", "e1")
+    add_event(world, "error", "engine", "e2")
+    relay_a, relay_b = world.relay(), world.relay()
+    await asyncio.gather(relay_a.pump(), relay_b.pump())
+    keys = [msg.dedupe_key for msg in world.notifier.sent]
+    assert len(keys) == 2 and len(set(keys)) == 2
+
+
+# --- 7. a failing notifier --------------------------------------------------------------------------------
+class FlakyNotifier(RecordingNotifier):
+    """Raises for the first message whose text contains `poison` (a notifier bug), sends the rest."""
+
+    def __init__(self, poison: str) -> None:
+        super().__init__()
+        self.poison = poison
+        self.failed = 0
+
+    async def send(self, msg: OutboundMessage) -> None:
+        if self.poison in msg.text and not self.failed:
+            self.failed += 1
+            raise RuntimeError("notifier bug")
+        await super().send(msg)
+
+
+async def test_failing_notifier_does_not_stop_cursor_or_other_streams(world: World) -> None:
+    await started(world)
+    flaky = FlakyNotifier(poison="first error")
+    relay = world.relay(notifier=flaky)
+    first = add_event(world, "error", "engine", "first error")
+    second = add_event(world, "error", "engine", "second error")
+    entry_fill, exit_fill, _ = add_round_trip(
+        world, exit_purpose="stop", exit_reason="stop_loss", exit_price="21.40"
+    )
+
+    await relay.pump()
+
+    assert flaky.failed == 1
+    keys = {msg.dedupe_key for msg in flaky.sent}
+    assert f"event:{second}" in keys and f"event:{first}" not in keys
+    assert {f"fill:{entry_fill}", f"fill:{exit_fill}"} <= keys
+    assert cursor(world, "events") == second
+    assert cursor(world, "fills") == exit_fill
+
+    await relay.pump()  # the failed row is the notifier's to log; the relay does not retry it
+    assert f"event:{first}" not in {msg.dedupe_key for msg in flaky.sent}
+
+
+# --- 8. catch-up cap --------------------------------------------------------------------------------------
+async def test_catch_up_sends_at_most_the_cap_plus_one_summary(world: World) -> None:
+    relay = await started(world)
+    ids = [add_event(world, "error", "engine", f"error {i}") for i in range(50)]
+    world.settings = RuntimeSettings(telegram_relay_catchup_max=20)
+
+    report = await relay.pump()
+
+    sent = world.notifier.sent
+    assert len(sent) == 21
+    event_keys = [msg.dedupe_key for msg in sent if msg.dedupe_key and msg.dedupe_key.startswith("event:")]
+    assert event_keys == [f"event:{i}" for i in ids[-20:]]  # the newest 20, in order
+    summaries = [v for v in rendered(world, "alert") if v.source == "relay"]
+    assert len(summaries) == 1
+    assert "30 older alerts not sent; see the System page" in summaries[0].message
+    assert report.events == 20 and report.skipped == 30
+    assert cursor(world, "events") == ids[-1]
+
+    world.notifier.sent.clear()
+    again = await relay.pump()
+    assert world.notifier.sent == [] and again == RelayReport(0, 0, 0, 0, 0)
+
+
+# --- 9. a broken messenger --------------------------------------------------------------------------------
+async def test_messenger_raising_does_not_stop_fills_and_events(world: World) -> None:
+    relay = await started(world)
+    add_proposal(world)
+    world.messenger.raise_on_send = RuntimeError("bot down")
+    add_round_trip(world, exit_purpose="stop", exit_reason="stop_loss", exit_price="21.40")
+    add_event(world, "error", "killswitch", "daily loss tripped")
+    world.messenger.closed = 2
+
+    report = await relay.pump()
+
+    assert report.fills == 2 and report.events == 1 and report.closed == 2
+    assert world.messenger.sync_calls == 2  # once in started(), once here
+    assert len(world.notifier.sent) == 3

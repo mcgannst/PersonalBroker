@@ -132,8 +132,8 @@ Every task, including each phase's planning task `Pn-T0`, must pass every stage 
 | # | Stage | Pass condition |
 |---|---|---|
 | 1 | **Verifier** | `check.sh` passes on a fresh `git pull` of trunk; the task's plan steps are all ticked; there are no uncommitted changes |
-| 2 | **Breaker** | Writes 3–8 new tests aimed at the task's weak points (Review Focus items it owns, bad input, boundaries, time zones, concurrency, idempotency). **Passes** if all its new tests pass against the Builder's code. Failing tests are committed and go back to the Builder |
-| 3 | **Spec reviewer** and **Code reviewer** (run in parallel; both read-only) | No findings rated **must-fix**. Findings rated **should-fix** go back to the Builder once; **nit** findings are logged only |
+| 2 | **Breaker**, run in parallel with stage 3 | Writes 3–8 new tests aimed at the task's weak points (Review Focus items it owns, bad input, boundaries, time zones, concurrency, idempotency). **Passes** if all its new tests pass against the Builder's code. Failing tests are committed and go back to the Builder |
+| 3 | **Spec reviewer** and **Code reviewer** (run in parallel with each other and with the Breaker; both read-only) | No findings rated **must-fix**. Findings rated **should-fix** go back to the Builder once; **nit** findings are logged only |
 
 - **Planning tasks (`Pn-T0`)** skip the Breaker. Their Verifier checks the plan has no placeholders ("TBD", "similar to Task N", steps without code) and that every task has Files, Interfaces, tests and a commit step. Their Spec reviewer checks coverage of the BRD/SPEC items assigned to the phase.
 - **Attempts:** a task may go round the loop 3 times. On the 4th failure, set it to `blocked` and escalate.
@@ -164,8 +164,8 @@ Never print or commit secrets. Stage files by explicit path.
 Shell rules (a hook enforces them): one command per Bash call. No `&&`, `;` or `||` chaining, no `cd`
 at all (even on its own), and no `git -C`. Use absolute paths, and `uv --directory
 "/Users/stephen/Documents/Code/Claude Code/Trader/Trader/app" run ...` wherever a plan says "run from
-Trader/app". Git commands run from the repo root, the Bash tool's default working directory. So
-"git pull --rebase && git push" means two separate calls, and a plan's `cd ... && git add ...` block
+Trader/app". Git commands run from the repo root, the Bash tool's default working directory. Always pull with `git pull --rebase --autostash` (other agents' log entries leave
+BUILD_STATE.md modified). So "git pull --rebase && git push" means two separate calls, and a plan's `cd ... && git add ...` block
 becomes separate `git add` / `git commit` calls with absolute or repo-relative paths. Avoid semicolons
 even inside heredoc bodies (the hook sees them). If `uv sync` ran before `trader/` existed, run
 `uv sync --reinstall-package trader` once.

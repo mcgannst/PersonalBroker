@@ -28,7 +28,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T4 | Market types, clock and session calendar | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 4af1355 |
 | P1-T5 | FinViz parser and scraper | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | b1d45e5 |
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 0607f11 |
-| P1-T7 | Questrade data client and `questrade-check` CLI | T6 | gauntlet | 2 | V✅ B❌ S+C❌ → fix f14f4fa (verify+review running) | f14f4fa |
+| P1-T7 | Questrade data client and `questrade-check` CLI | T6 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | f14f4fa |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | gauntlet | 1 | V✅ | f9d089f |
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | todo | 0 | | |
@@ -589,3 +589,9 @@ None open.
 - Commits: reviewed f14f4fa (trunk HEAD 27eb29d)
 - Gate: check.sh clean (ruff, format, mypy), 281 passed. All 9 test_p1_t7_breaker.py tests pass, and so do all 22 client and 5 CLI tests. test_p1_t9_breaker.py is not on trunk yet. Steps 1-8 ticked, tree clean
 - Findings: all 10 findings fixed, each with a test. pause_until is sound: waits are time-based only, so no wake-up can be lost. Slots only move forward, and a caller whose slot falls inside a pause re-queues after it. A 60-caller stress run with random pauses had 0 dispatches inside a pause and every caller finished. Nightly peak is 30 OneDay bars and at most about 13k FiveMinutes bars (lookback le=30), so it stays under the 20k guard. The clamp test change to FifteenMinutes is justified. Nits only: (1) httpx.DecodingError and TooManyRedirects are not TransportError, so they escape candles_many. (2) A non-JSON 200 from quotes, symbols or time raises ValueError, not QuestradeApiError, and questrade-check shows a traceback for it. (3) The clamped startTime is still +00:00, which is safe because httpx encodes it as %2B. (4) Redaction covers the token and api_base but not the bare host. (5) Scheduler jitter can bring real dispatches closer than 1/rate even though the slots are spaced correctly (this predates the fix)
+
+### 2026-09-27T05:28:34Z · P1-T9 · Spec+Code reviewer · attempt 1 · finished
+- Result: FAIL (2 must-fix, 6 should-fix, 9 nits)
+- Commits: reviewed 348ac1e, 4adc532, f9d089f
+- Findings: must-fix: forced re-run unions universe_snapshots (stale fallback rows survive), upsert_symbols ignores the UNIQUE(ticker, exchange) conflict (a new Questrade id for a known ticker aborts every nightly). should-fix: run_job check-then-insert race, fallback rows get NULL price, fallback is only a warning, 5m fetch holds about 1.4M candles in memory, no guard against a daytime or non-session run, avg_open_vol over fewer than 14 bars is not flagged
+- Notes: the NULL atr14 on ETRA and OIG is correct (new listings with 6 daily bars since 2026-09-18). The declared deviations are all accepted. Clock, Decimal, UTC and secrets are clean.

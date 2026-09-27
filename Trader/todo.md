@@ -15,7 +15,7 @@
 ## Setup tasks before Phase 0 (Stephen)
 
 - [x] Register a **Questrade API personal app "Trader-dev"** in the API Centre and generate a manual refresh token. Done 2026-09-26; the token is in `docker/.env.dev` (git-ignored) and hasn't been used yet. Use it in S1 before it expires.
-- [ ] Create an **Anthropic API key "trader-dev"** in the Anthropic Console. Don't use FinanceTracker's.
+- [x] Create an **Anthropic API key "trader-dev"** in the Anthropic Console. Don't use FinanceTracker's. Done 2026-09-26 in a separate "Trader" workspace; verified, and saved in `docker/.env.dev` (git-ignored). Optional: set a monthly spend limit on the workspace as a backstop.
 - [ ] Create a **Telegram bot for dev** with @BotFather, and get your chat ID.
 - [x] Create the **`trader_dev` database** and roles `trader_dev_owner` / `trader_dev_app` on `192.168.68.86`. Done 2026-09-26: schema `trader` owned by `trader_dev_owner`; the app role gets read/write on new tables through default privileges and can't create or drop tables. Connection URLs are in `docker/.env.dev` (git-ignored).
 - [x] Add a **Pi-hole v6 Local DNS record**: `trader-dev.sunspinner.ca` → `192.168.68.73`. Done 2026-09-26 on Pi-hole (Proxmox LXC 102, `192.168.68.84`); resolves correctly.

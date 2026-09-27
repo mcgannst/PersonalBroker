@@ -18,7 +18,7 @@
 - [ ] Create an **Anthropic API key "trader-dev"** in the Anthropic Console. Don't use FinanceTracker's.
 - [ ] Create a **Telegram bot for dev** with @BotFather, and get your chat ID.
 - [x] Create the **`trader_dev` database** and roles `trader_dev_owner` / `trader_dev_app` on `192.168.68.86`. Done 2026-09-26: schema `trader` owned by `trader_dev_owner`; the app role gets read/write on new tables through default privileges and can't create or drop tables. Connection URLs are in `docker/.env.dev` (git-ignored).
-- [ ] Add a **Pi-hole v6 Local DNS record**: `trader-dev.sunspinner.ca` → `192.168.68.73`.
+- [x] Add a **Pi-hole v6 Local DNS record**: `trader-dev.sunspinner.ca` → `192.168.68.73`. Done 2026-09-26 on Pi-hole (Proxmox LXC 102, `192.168.68.84`); resolves correctly.
 - [ ] Add an **NPM proxy host** for `trader-dev.sunspinner.ca`, with an Access List allowing only `192.168.68.0/22` (the home LAN is a /22, not a /24).
 - [x] Confirm the existing Postgres **backup** will include the new `trader_dev` database. Yes: the Postgres host is backed up as a whole Proxmox VM (per Stephen, 2026-08-31, recorded in RetirementPlanner's TODO), so every database on it is included.
 

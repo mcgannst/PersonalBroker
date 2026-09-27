@@ -3,6 +3,7 @@
 Assumption: staleness uses QtQuote.last_trade_time, because a Questrade quote carries no separate quote
 timestamp (P1-T7). This may over-flag quiet stocks as stale; it is re-checked live in Phase 6 (S2 recheck).
 QuoteFillModel implements the FillModel protocol; candle fills for replay are a separate model (P5-T2).
+A crossed quote (bid > ask) is unusable, like a one-sided one: NoFill("crossed_quote") (P2-B1 fix round).
 """
 
 from dataclasses import dataclass
@@ -97,6 +98,8 @@ class QuoteFillModel:
         if age > self._p.stale_quote_seconds:
             return NoFill("stale_quote", f"the quote is {age:.1f}s old")
         bid, ask, last = _positive(quote.bid), _positive(quote.ask), _positive(quote.last)
+        if bid is not None and ask is not None and bid > ask:  # a broken book: no price in it is real
+            return NoFill("crossed_quote", f"bid {bid} > ask {ask}")
         priced: Priced | NoFill
         if order.side == "buy":
             if ask is None:
@@ -110,6 +113,8 @@ class QuoteFillModel:
             return priced
         price, slippage, trigger = priced
         price = price.quantize(Q4, ROUND_HALF_UP)
+        if price <= 0:  # a sub-penny bid minus slippage: nothing real to sell into (fills.price > 0)
+            return NoFill("no_bid", f"fill price {price} is not positive")
         return FillDecision(
             price=price,
             qty=order.qty,

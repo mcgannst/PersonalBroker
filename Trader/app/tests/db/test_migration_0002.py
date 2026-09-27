@@ -192,7 +192,7 @@ def test_cash_ledger_trigger_exists(migrated_engine: Engine) -> None:
                 "WHERE tgrelid = 'trader.cash_ledger'::regclass AND NOT tgisinternal"
             )
         ).scalars()
-        assert set(names) == {"cash_ledger_append_only"}
+        assert set(names) == {"cash_ledger_append_only", "cash_ledger_no_truncate"}  # the second: 0003
 
 
 def test_timestamps_are_timestamptz(migrated_engine: Engine) -> None:

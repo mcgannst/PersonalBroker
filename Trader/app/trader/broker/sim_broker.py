@@ -5,6 +5,16 @@ locked FOR UPDATE SKIP LOCKED while quotes are applied, so two callers never fil
 An entry met at or after the no-entry cutoff (close - no_entry_before_close_minutes) is cancelled, never
 filled (BR-42). The broker depends on the FillModel protocol only; P5-T2 adds on_candles() for replay,
 running the same per-order loop with a CandleFillModel.
+
+Hardening (P2-B1 fix round):
+- Each order in a quote batch runs in its own savepoint: an exception rolls back that order only, logs an
+  error event (order id, exception type) and the batch carries on.
+- Nothing fills outside regular hours [session_open, session_close); such an order stays working.
+- Lock order is always POSITION rows, then ORDER rows (submit, cancel, on_quotes, end_of_session), so two
+  callers can't deadlock.
+- A sell is re-checked against its locked position (open, same qty) and cancelled if it no longer fits.
+- An entry whose cost (price x qty + fees) exceeds buying power is cancelled at fill time.
+- account_state reads cash and positions in one REPEATABLE READ transaction.
 """
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -13,7 +23,7 @@ from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -40,10 +50,14 @@ from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock, et_date
 from trader.settings_store import RuntimeSettings
 
-UNUSABLE_QUOTE = frozenset({"stale_quote", "halted", "delayed_quote", "no_ask", "no_bid"})
+UNUSABLE_QUOTE = frozenset({"stale_quote", "halted", "delayed_quote", "no_ask", "no_bid", "crossed_quote"})
 STALE_ALERT_AFTER = timedelta(seconds=60)
 ENTRY_CUTOFF = "entry cutoff"
+POSITION_GONE = "position no longer open"
+NO_BUYING_POWER = "insufficient buying power"
 SOURCE = "broker"
+# Serialises the entry fills of one run, so two quote batches can't both spend the same buying power.
+_CASH_LOCK = text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))")
 
 
 def position_view(p: m.Position) -> PositionView:
@@ -102,6 +116,30 @@ def _end_unprotected(pos: m.Position, now: datetime) -> None:
     if pos.unprotected_since is not None:
         pos.unprotected_seconds += int((now - pos.unprotected_since).total_seconds())
         pos.unprotected_since = None
+
+
+class _Batch:
+    """One on_quotes batch: its time, the positions it locked, and settings read at most once."""
+
+    def __init__(self, broker: "SimBroker", now: datetime) -> None:
+        self.now = now
+        self.today = et_date(now)
+        self.in_hours = broker.in_regular_hours(now)
+        self.positions: dict[int, m.Position] = {}
+        self._broker = broker
+        self._cutoff: datetime | None = None
+        self._cutoff_read = False
+        self._settings: RuntimeSettings | None = None
+
+    def settings(self) -> RuntimeSettings:
+        if self._settings is None:
+            self._settings = self._broker.read_settings()
+        return self._settings
+
+    def cutoff(self) -> datetime | None:
+        if not self._cutoff_read:  # read once per batch, and only when an entry is working
+            self._cutoff, self._cutoff_read = self._broker.entry_cutoff(self.today), True
+        return self._cutoff
 
 
 class SimBroker:
@@ -198,12 +236,19 @@ class SimBroker:
     def cancel(self, order_id: int, reason: str, session: Session | None = None) -> bool:
         now = self._clock.now()
         with self._session(session) as s:
+            head = s.execute(
+                select(m.Order.run_id, m.Order.status, m.Order.position_id).where(m.Order.id == order_id)
+            ).one_or_none()
+            if head is None or head.run_id != self.run_id or head.status != "working":
+                return False
+            pos: m.Position | None = None
+            if head.position_id is not None:  # lock order: the position row first, then the order row
+                pos = s.get(m.Position, head.position_id, with_for_update=True, populate_existing=True)
             order = s.get(m.Order, order_id, with_for_update=True, populate_existing=True)
-            if order is None or order.run_id != self.run_id or order.status != "working":
+            if order is None or order.status != "working":
                 return False
             self._close_order(order, now, reason)
             if order.purpose == "stop" and order.position_id is not None:
-                pos = s.get(m.Position, order.position_id, with_for_update=True)
                 if pos is not None and pos.closed_at is None and pos.stop_order_id == order.id:
                     pos.stop_order_id = None
                     pos.unprotected_since = now
@@ -217,17 +262,14 @@ class SimBroker:
     def end_of_session(self, session_date: date) -> list[int]:
         now = self._clock.now()
         with session_scope(self._factory) as s:
+            working = (
+                m.Order.run_id == self.run_id,
+                m.Order.status == "working",
+                m.Order.session_date <= session_date,
+            )
+            self._lock_positions(s, select(m.Order.position_id).where(*working))
             orders = (
-                s.execute(
-                    select(m.Order)
-                    .where(
-                        m.Order.run_id == self.run_id,
-                        m.Order.status == "working",
-                        m.Order.session_date <= session_date,
-                    )
-                    .order_by(m.Order.id)
-                    .with_for_update()
-                )
+                s.execute(select(m.Order).where(*working).order_by(m.Order.id).with_for_update())
                 .scalars()
                 .all()
             )
@@ -249,39 +291,127 @@ class SimBroker:
         if not by_symbol:
             return []
         events: list[FillEvent] = []
+        batch = _Batch(self, now)
         with session_scope(self._factory) as s:
+            working = (
+                m.Order.run_id == self.run_id,
+                m.Order.status == "working",
+                m.Order.symbol_id.in_(list(by_symbol)),
+            )
+            # Lock order: every position a working sell here closes, then the orders themselves.
+            batch.positions = self._lock_positions(s, select(m.Order.position_id).where(*working))
             orders = (
                 s.execute(
-                    select(m.Order)
-                    .where(
-                        m.Order.run_id == self.run_id,
-                        m.Order.status == "working",
-                        m.Order.symbol_id.in_(list(by_symbol)),
-                    )
-                    .order_by(m.Order.id)
-                    .with_for_update(skip_locked=True)
+                    select(m.Order).where(*working).order_by(m.Order.id).with_for_update(skip_locked=True)
                 )
                 .scalars()
                 .all()
             )
-            today = et_date(now)
-            cutoff: datetime | None = None
-            cutoff_read = False
             for order in orders:
-                if order.status != "working":  # cancelled earlier in this batch (position closed)
+                order_id = order.id
+                try:
+                    with s.begin_nested():  # one savepoint per order: a failure costs this order only
+                        event = self._apply(s, order, by_symbol[order.symbol_id], batch)
+                except Exception as exc:
+                    self._log(
+                        s,
+                        "error",
+                        f"order {order_id}: fill failed ({type(exc).__name__}), rolled back and skipped",
+                        {"order_id": order_id, "error_type": type(exc).__name__, "error": str(exc)[:500]},
+                    )
                     continue
-                if order.purpose == "entry":
-                    if not cutoff_read:  # read the settings once per batch, and only when an entry is working
-                        cutoff, cutoff_read = self.entry_cutoff(today), True
-                    if cutoff is None or now >= cutoff or order.session_date != today:
-                        self._refuse_late_entry(s, order, now, cutoff)
-                        continue
-                outcome = self._fill_model.assess(_spec(order), by_symbol[order.symbol_id], now)
-                if isinstance(outcome, NoFill):
-                    self._no_fill(s, order, outcome, now)
-                    continue
-                events.append(self._fill(s, order, outcome, now))
+                if event is not None:
+                    events.append(event)
         return events
+
+    def _lock_positions(self, s: Session, position_ids: Any) -> dict[int, m.Position]:
+        """Lock (FOR UPDATE, by id) the positions named by `position_ids` (a select of ids)."""
+        ids = sorted({pid for pid in s.execute(position_ids).scalars() if pid is not None})
+        if not ids:
+            return {}
+        rows = s.execute(
+            select(m.Position)
+            .where(m.Position.id.in_(ids))
+            .order_by(m.Position.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalars()
+        return {p.id: p for p in rows}
+
+    def in_regular_hours(self, now: datetime) -> bool:
+        """True in [session_open, session_close) of a trading session (early closes included)."""
+        day = et_date(now)
+        return self._cal.is_session(day) and self._cal.session_open(day) <= now < self._cal.session_close(day)
+
+    def read_settings(self) -> RuntimeSettings:
+        return self._settings()
+
+    def _apply(self, s: Session, order: m.Order, quote: QtQuote, batch: "_Batch") -> FillEvent | None:
+        """Apply one quote to one locked working order. Runs inside the order's savepoint."""
+        now = batch.now
+        if order.status != "working":  # cancelled earlier in this batch (position closed)
+            return None
+        if order.purpose == "entry":
+            cutoff = batch.cutoff()
+            if cutoff is None or now >= cutoff or order.session_date != batch.today:
+                self._refuse_late_entry(s, order, now, cutoff)
+                return None
+        if not batch.in_hours:  # regular hours only: the order stays working until the open
+            return None
+        pos: m.Position | None = None
+        if order.side == "sell":
+            if order.position_id is not None and order.position_id not in batch.positions:
+                if s.get(m.Position, order.position_id) is not None:
+                    return None  # submitted after this batch locked its positions: the next batch
+            pos = batch.positions.get(order.position_id) if order.position_id is not None else None
+            if pos is None or pos.run_id != self.run_id or pos.closed_at is not None or pos.qty != order.qty:
+                self._refuse_orphan_sell(s, order, now, pos)
+                return None
+        outcome = self._fill_model.assess(_spec(order), quote, now)
+        if isinstance(outcome, NoFill):
+            self._no_fill(s, order, outcome, now)
+            return None
+        if order.side == "buy" and not self._affordable(s, order, outcome, batch):
+            return None
+        return self._fill(s, order, outcome, now, pos)
+
+    def _refuse_orphan_sell(self, s: Session, order: m.Order, now: datetime, pos: m.Position | None) -> None:
+        self._close_order(order, now, POSITION_GONE)
+        self._log(
+            s,
+            "warning",
+            f"order {order.id}: {POSITION_GONE}, cancelled instead of filled",
+            {
+                "order_id": order.id,
+                "position_id": order.position_id,
+                "order_qty": order.qty,
+                "position_qty": pos.qty if pos is not None else None,
+                "position_closed": pos is None or pos.closed_at is not None,
+            },
+        )
+
+    def _affordable(self, s: Session, order: m.Order, d: FillDecision, batch: "_Batch") -> bool:
+        """Buying-power backstop: an entry costing more than buying power is cancelled, never filled."""
+        s.execute(_CASH_LOCK, {"key": f"trader.sim_broker.cash:{self.run_id}"})
+        cost = (d.price * d.qty).quantize(Q4, ROUND_HALF_UP) + d.fees.total
+        power = self._ledger.balances(s, self.run_id, batch.today).buying_power(
+            batch.settings().cash_account_mode
+        )
+        if cost <= power:
+            return True
+        self._close_order(order, batch.now, NO_BUYING_POWER)
+        self._log(
+            s,
+            "warning",
+            f"order {order.id}: {NO_BUYING_POWER} ({cost} > {power}), cancelled instead of filled",
+            {
+                "order_id": order.id,
+                "reason": NO_BUYING_POWER,
+                "cost": str(cost),
+                "buying_power": str(power),
+            },
+        )
+        return False
 
     def _refuse_late_entry(self, s: Session, order: m.Order, now: datetime, cutoff: datetime | None) -> None:
         self._close_order(order, now, ENTRY_CUTOFF)
@@ -298,8 +428,8 @@ class SimBroker:
         )
 
     def _no_fill(self, s: Session, order: m.Order, outcome: NoFill, now: datetime) -> None:
-        if outcome.reason not in UNUSABLE_QUOTE:
-            order.stale_since = None
+        if outcome.reason not in UNUSABLE_QUOTE:  # a usable quote: the next outage alerts afresh
+            order.stale_since, order.stale_alerted = None, False
             return
         data = {"order_id": order.id, "reason": outcome.reason, "detail": outcome.detail}
         if order.stale_since is None:
@@ -309,7 +439,9 @@ class SimBroker:
             order.stale_alerted = True
             self._log(s, "error", f"order {order.id}: unusable quote for over 60 s ({outcome.reason})", data)
 
-    def _fill(self, s: Session, order: m.Order, d: FillDecision, now: datetime) -> FillEvent:
+    def _fill(
+        self, s: Session, order: m.Order, d: FillDecision, now: datetime, closing: m.Position | None
+    ) -> FillEvent:
         fill = m.Fill(
             run_id=self.run_id,
             order_id=order.id,
@@ -370,12 +502,9 @@ class SimBroker:
                 ref=ref,
                 currency=self._currency,
             )
-            found = s.get(m.Position, order.position_id, with_for_update=True) if order.position_id else None
-            if found is None:
-                raise BrokerRejected(
-                    f"order {order.id} sells position {order.position_id}, which doesn't exist"
-                )
-            pos = found
+            if closing is None:  # _apply checked it; the position row is locked by this batch
+                raise BrokerRejected(f"order {order.id} sells position {order.position_id}, which isn't open")
+            pos = closing
             trade = self._close_position(s, pos, order, d, now, trade_date)
         if d.fees.total > 0:
             self._ledger.record(
@@ -474,11 +603,34 @@ class SimBroker:
     def account_state(
         self, today: date, marks: Mapping[int, Decimal], cash_account_mode: bool
     ) -> AccountState:
-        with self._factory() as s:
+        with self._factory() as s:  # one snapshot: a fill can't land between the cash and position reads
+            s.connection(execution_options={"isolation_level": "REPEATABLE READ"})
             bal = self._ledger.balances(s, self.run_id, today)
-        value = sum(
-            ((marks.get(p.symbol_id) or p.avg_price) * p.qty for p in self.open_positions()), ZERO
-        ).quantize(Q4, ROUND_HALF_UP)
+            positions = [
+                position_view(p)
+                for p in s.execute(
+                    select(m.Position)
+                    .where(m.Position.run_id == self.run_id, m.Position.closed_at.is_(None))
+                    .order_by(m.Position.id)
+                ).scalars()
+            ]
+        value = ZERO
+        at_cost: list[dict[str, int]] = []
+        for p in positions:
+            mark = marks.get(p.symbol_id)
+            if mark is None or mark <= 0:
+                mark = p.avg_price
+                at_cost.append({"position_id": p.id, "symbol_id": p.symbol_id})
+            value += mark * p.qty
+        value = value.quantize(Q4, ROUND_HALF_UP)
+        if at_cost:
+            with session_scope(self._factory) as s:
+                self._log(
+                    s,
+                    "warning",
+                    f"no mark for {len(at_cost)} open position(s): valued at cost",
+                    {"positions": at_cost},
+                )
         total = bal.total.quantize(Q4, ROUND_HALF_UP)
         settled = bal.settled.quantize(Q4, ROUND_HALF_UP)
         return AccountState(

@@ -15,6 +15,7 @@ Purpose = Literal["entry", "stop", "exit"]
 TimeInForce = Literal["day", "gtc"]
 Q4 = Decimal("0.0001")
 ZERO = Decimal("0")
+MAX_REASON = 100  # orders.reason and trades.exit_reason are varchar(100)
 
 
 def dec_str(v: Decimal | None) -> str | None:
@@ -52,6 +53,10 @@ class OrderSpec:
             raise ValueError("long only: entries are buys; stops and exits are sells")
         if self.side == "sell" and self.position_id is None:
             raise ValueError("a sell must name the position it closes")
+        if self.side == "buy" and self.position_id is not None:
+            raise ValueError("a buy opens a new position, so it can't name a position_id")
+        if len(self.reason) > MAX_REASON:
+            raise ValueError(f"reason is {len(self.reason)} characters, over the {MAX_REASON} allowed")
 
     def to_json(self) -> dict[str, Any]:
         return {

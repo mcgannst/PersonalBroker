@@ -122,7 +122,9 @@ def test_buy_stop_limit_refused_above_the_limit() -> None:
 
 
 def test_buy_stop_limit_not_triggered() -> None:
-    out = MODEL.assess(buy("stop_limit", stop="10.00", limit="10.05"), q(ask="9.95", last="9.94"), NOW)
+    out = MODEL.assess(
+        buy("stop_limit", stop="10.00", limit="10.05"), q(bid="9.94", ask="9.95", last="9.94"), NOW
+    )
     assert out == NoFill("not_triggered")
 
 
@@ -132,10 +134,10 @@ def test_sell_stop_limit_refused_below_the_limit() -> None:
 
 
 def test_limit_orders_fill_at_the_limit_without_slippage() -> None:
-    d = filled(buy("limit", limit="10.00"), q(ask="9.98"))
+    d = filled(buy("limit", limit="10.00"), q(bid="9.97", ask="9.98"))
     assert (d.price, d.slippage) == (Decimal("10.00"), Decimal("0"))
     assert MODEL.evaluate(buy("limit", limit="10.00"), q(ask="10.01"), NOW) is None
-    assert filled(sell("limit", limit="10.00"), q(bid="10.02")).price == Decimal("10.00")
+    assert filled(sell("limit", limit="10.00"), q(bid="10.02", ask="10.03")).price == Decimal("10.00")
     assert MODEL.evaluate(sell("limit", limit="10.00"), q(bid="9.99"), NOW) is None
 
 

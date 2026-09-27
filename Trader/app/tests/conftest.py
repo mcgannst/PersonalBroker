@@ -43,4 +43,7 @@ def db_factory(migrated_engine: Engine) -> Iterator[sessionmaker[Session]]:
     yield make_session_factory(migrated_engine)
     names = ", ".join(t.fullname for t in Base.metadata.sorted_tables)
     with migrated_engine.begin() as conn:
+        # cash_ledger refuses TRUNCATE (trigger cash_ledger_no_truncate, migration 0003); replica mode
+        # skips triggers for this cleanup transaction only (the test container user is a superuser).
+        conn.execute(text("SET LOCAL session_replication_role = replica"))
         conn.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))

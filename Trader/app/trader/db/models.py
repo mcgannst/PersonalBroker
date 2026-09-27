@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -295,7 +296,10 @@ class Proposal(Base):
 
 class Order(Base):
     __tablename__ = "orders"
-    __table_args__ = (Index("ix_orders_run_status", "run_id", "status"),)
+    __table_args__ = (
+        Index("ix_orders_run_status", "run_id", "status"),
+        CheckConstraint("qty > 0", name="ck_orders_qty_positive"),  # migration 0003
+    )
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     run_id: Mapped[int] = mapped_column(ForeignKey(RUN_FK))
     proposal_id: Mapped[int | None] = mapped_column(ForeignKey("trader.proposals.id"))
@@ -322,6 +326,10 @@ class Order(Base):
 
 class Fill(Base):
     __tablename__ = "fills"
+    __table_args__ = (  # migration 0003
+        CheckConstraint("qty > 0", name="ck_fills_qty_positive"),
+        CheckConstraint("price > 0", name="ck_fills_price_positive"),
+    )
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     run_id: Mapped[int] = mapped_column(ForeignKey(RUN_FK))
     order_id: Mapped[int] = mapped_column(ForeignKey("trader.orders.id"), unique=True)
@@ -335,7 +343,10 @@ class Fill(Base):
 
 class Position(Base):
     __tablename__ = "positions"
-    __table_args__ = (Index("ix_positions_run_closed", "run_id", "closed_at"),)
+    __table_args__ = (
+        Index("ix_positions_run_closed", "run_id", "closed_at"),
+        CheckConstraint("qty >= 0", name="ck_positions_qty_nonnegative"),  # migration 0003
+    )
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     run_id: Mapped[int] = mapped_column(ForeignKey(RUN_FK))
     symbol_id: Mapped[int] = mapped_column(ForeignKey(SYMBOL_FK))
@@ -366,7 +377,7 @@ class Trade(Base):
     pnl: Mapped[Decimal] = mapped_column(Money)
     pnl_r: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
     planned_risk: Mapped[Decimal | None] = mapped_column(Money)
-    exit_reason: Mapped[str] = mapped_column(String(50))
+    exit_reason: Mapped[str] = mapped_column(String(100))  # = orders.reason (migration 0003)
     slippage_total: Mapped[Decimal] = mapped_column(Money)
     fees_total: Mapped[Decimal] = mapped_column(Money)
     opened_at: Mapped[datetime] = mapped_column(TS)

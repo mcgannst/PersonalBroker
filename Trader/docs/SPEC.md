@@ -348,7 +348,9 @@ The worker polls quotes for symbols with working orders every `quote_poll_second
 
 ### 7.3 Ledger
 - The `cash_ledger` records every movement with `trade_date`, `settle_date = next trading day` (T+1, based on the exchange calendar), currency and amount.
-- **Settled cash** = entries where `settle_date ≤ today`. **Buying power** = settled cash when `cash_account_mode`, otherwise total cash.
+- **Settled cash** = every debit (buys and fees) counted immediately, plus every credit (deposits and sale proceeds) from its `settle_date` (`settle_date ≤ today`). This is the conservative rule: money spent is gone at once, while sale proceeds can't be spent again until they settle, so settled cash is never spent twice. **Buying power** = settled cash when `cash_account_mode`, otherwise total cash.
+- The simulated broker checks buying power again when an entry fills: if `price × qty + fees` exceeds it, the entry is cancelled ("insufficient buying power"), never filled.
+- `cash_ledger` is append-only: the database refuses UPDATE, DELETE and TRUNCATE.
 - Account currency is USD by default. A one-time CAD→USD conversion at start uses a configurable FX rate and fee (default 1.5%).
 
 ### 7.4 Candle-based fill model (replay)

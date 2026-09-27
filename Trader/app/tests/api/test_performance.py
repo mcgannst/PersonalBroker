@@ -87,9 +87,12 @@ def test_metrics_range_and_empty_range(db_factory: sessionmaker[Session]) -> Non
         s.add(m.Journal(run_id=run_id, session_date=D1, rules_followed=False, answered_via="telegram"))
         s.add(m.Journal(run_id=run_id, session_date=D2, rules_followed=True, answered_via="telegram"))
         s.add(m.Journal(run_id=run_id, session_date=D3, rules_followed=None))
-        for day, dd in ((D1, "0.0100"), (D2, "0.0300"), (D4, "0.0200")):
+        # P5-T2: the ranged drawdown is computed from the equity in range (running peak from the first
+        # snapshot in range), so the snapshots carry consistent equity: in range 10000 then 9700 = 0.03, while
+        # the whole run (peak 12000 on D1, outside the range) would give 0.1917.
+        for day, equity, dd in ((D1, "12000", "0"), (D2, "10000", "0.1667"), (D4, "9700", "0.1917")):
             ts = datetime(day.year, day.month, day.day, 20, 30, tzinfo=UTC)
-            s.add(_snapshot(run_id, ts, "10000", dd))
+            s.add(_snapshot(run_id, ts, equity, dd))
         s.commit()
     client = _client(db_factory)
     body = client.get("/api/metrics", params={"from": "2026-10-06", "to": "2026-10-08"}).json()

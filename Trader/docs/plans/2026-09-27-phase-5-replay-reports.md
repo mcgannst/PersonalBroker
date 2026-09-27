@@ -247,14 +247,30 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - A run with no rows gives zeros and Nones, never a division error.
 
 **Acceptance tests:**
-- [ ] 1. Hand calculation: trades (+2R, P&L 20), (−1R, −10), (+0.5R, 5), (−1R, −10), (null R, −3) → trades 5, wins 2, losses 3, win rate 0.4000, expectancy 0.1250 (over four), avg win 1.2500, avg loss −1.0000, profit factor 25/23 = 1.0870, total P&L 2, `trades_without_r` 1.
-- [ ] 2. Equity 100, 110, 99, 105, 88 → max drawdown (110 − 88) / 110 = 0.2000; a single snapshot → 0; none → None.
-- [ ] 3. Journal answers Yes, No, Yes, not answered → adherence 0.6667; slippage totals 0.30, 0.10 with quantities 10 and 30 → average 0.2000 per trade and 0.0100 per share.
-- [ ] 4. `compute_metrics` over the whole run equals `v_trade_metrics` for trades, wins, win rate, expectancy, avg win and loss R, profit factor, average slippage, max drawdown and adherence on a seeded run (the view is read in the test).
-- [ ] 5. A date range that excludes the first trade gives the other trades' values; the range's drawdown uses only the snapshots in range; an empty range gives zero trades and None ratios.
-- [ ] 6. `r_histogram`: +2R in `[2.0, 2.5)`, −1R in `[−1.0, −0.5)`, −7R in the open first bin, exactly 5R in the open last bin; 18 bins always.
-- [ ] 7. The P4-T7 `/api/metrics` tests pass unchanged; `GET /api/metrics?run=<replay id>&from=&to=` returns the replay's numbers with the four new fields; the kill switch's expectancy (`KillSwitches.inputs(...).expectancy_r`) equals `expectancy_r` for the same trades.
-- [ ] 8. Gate and commit `P5-T2: ...`.
+- [x] 1. Hand calculation: trades (+2R, P&L 20), (−1R, −10), (+0.5R, 5), (−1R, −10), (null R, −3) → trades 5, wins 2, losses 3, win rate 0.4000, expectancy 0.1250 (over four), avg win 1.2500, avg loss −1.0000, profit factor 25/23 = 1.0870, total P&L 2, `trades_without_r` 1.
+- [x] 2. Equity 100, 110, 99, 105, 88 → max drawdown (110 − 88) / 110 = 0.2000; a single snapshot → 0; none → None.
+- [x] 3. Journal answers Yes, No, Yes, not answered → adherence 0.6667; slippage totals 0.30, 0.10 with quantities 10 and 30 → average 0.2000 per trade and 0.0100 per share.
+- [x] 4. `compute_metrics` over the whole run equals `v_trade_metrics` for trades, wins, win rate, expectancy, avg win and loss R, profit factor, average slippage, max drawdown and adherence on a seeded run (the view is read in the test).
+- [x] 5. A date range that excludes the first trade gives the other trades' values; the range's drawdown uses only the snapshots in range; an empty range gives zero trades and None ratios.
+- [x] 6. `r_histogram`: +2R in `[2.0, 2.5)`, −1R in `[−1.0, −0.5)`, −7R in the open first bin, exactly 5R in the open last bin; 18 bins always.
+- [x] 7. The P4-T7 `/api/metrics` tests pass unchanged; `GET /api/metrics?run=<replay id>&from=&to=` returns the replay's numbers with the four new fields; the kill switch's expectancy (`KillSwitches.inputs(...).expectancy_r`) equals `expectancy_r` for the same trades.
+- [x] 8. Gate and commit `P5-T2: ...`.
+
+**Build notes (P5-T2 builder, 2026-09-27; trunk 8ddff8e):**
+- Names P4-T18 left in use are kept in `trader/api/routers/performance.py`: `compute_metrics(factory, run_id,
+  date_from, date_to) -> MetricsOut` (now `metrics_out(trader.reports.metrics.compute_metrics(...))`, used by
+  `tests/api/test_routes_sweep.py`) and `histogram_bins(counts)` (now built from the new
+  `trader.reports.metrics.histogram_from_counts`, used by `tests/api/test_performance.py`); `check_range`,
+  `thin` and `close_when_done` are unchanged. `_VIEW_SQL`, `_RANGED_SQL`, `_HISTOGRAM_SQL` and `_METRIC_FIELDS`
+  are gone. Extra public names in the metrics module: `R_WIDTH`, `histogram_from_counts`.
+- Plan conflict (fixture only): P4-T7's `test_metrics_range_and_empty_range` seeded snapshots with a flat
+  equity of 10000 and hand-set `drawdown_pct` values, and asserted the ranged drawdown was the stored maximum
+  (0.03). The plan's definition computes the drawdown from the equity in range, so that fixture gave 0. The
+  fixture now carries consistent equity (12000, 10000, 9700) that gives the same asserted 0.03 in range (and
+  would give 0.1917 if the range leaked); the assertion is unchanged.
+- The whole-run equality with `v_trade_metrics` holds because `SimBroker.snapshot_equity` uses the same
+  running peak and rounds each point to 4 dp (rounding is monotonic, so the max of the rounded values is the
+  rounded max).
 
 ---
 

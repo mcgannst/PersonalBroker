@@ -7,7 +7,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 2 (P2-T0 planning finishing) |
-| Current task | fixes: B1, T12; gauntlets: T6/T7, T10/T11; building: T9, T14; P3-T0 planning |
+| Current task | fixes: B1, T12; gauntlets: T6/T7, T8/T9, T10/T11; building: T13, T14; P3-T0 planning |
 | Gauntlet stage | Breaker + reviewers |
 | Last updated (UTC) | 2026-09-27T04:44:00Z |
 | Last pushed commit | d64518b |
@@ -37,9 +37,9 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | accepted | 2 | review ❌ → fix ff0e1ce (plan code re-validated: 585 passed) | ff0e1ce |
 | P2-T1 | Migration 0002: trading tables, views, ledger trigger, factories | P1 | gauntlet | 1 | V✅ (Breaker+review folded into P2-B1 gauntlet) | 2cab471 |
 | P2-B1 | Batch 1: T2 runs/settings, T3 ledger, T4 fill model, T5 sim broker | P2-T1, plan fix | fixing | 2 | V✅ B❌(3/35) S+C❌(1 must, 6 should) | 1ef2f6d |
-| P2-B2 | Batch 2: T6 framework, T7 market data, T8 orb_sip, T9 spy_overlay | B1 V✅ | building | 1 | T6, T7 done; T8 + T9 building in parallel |  |
-| P2-B3 | Batch 3: T10 risk/kill switches, T11 proposals, T12 Claude catalysts | B2 V✅ | gauntlet | 1 | T10, T11 built (0dde785); B+review running; T12 fixing | 0dde785 |
-| P2-B4 | Batch 4: T13 orchestrator, T14 premarket (LIVE), T15 full day | B3 V✅ | building | 1 | T14 building; T13 starts when T9 lands |  |
+| P2-B2 | Batch 2: T6 framework, T7 market data, T8 orb_sip, T9 spy_overlay | B1 V✅ | fixing | 2 | T6/T7 fix a2 running; T8/T9 breaker FAIL 7/25 (held names, stop<=0, stale SPY, dup exit) -> fix a2 running | 10101f8 |
+| P2-B3 | Batch 3: T10 risk/kill switches, T11 proposals, T12 Claude catalysts | B2 V✅ | fixing | 2 | T10/T11 breaker PASS (97ee3d2), review PASS; fix round a2 for should-fix + reset-holds ruling + entry guard | 97ee3d2 |
+| P2-B4 | Batch 4: T13 orchestrator, T14 premarket (LIVE), T15 full day | B3 V✅ | fixing | 2 | T13 breaker FAIL 4/14 + review must-fix -> fix a2 running; T15 built 6bda4a0; T14 LIVE running | abf6273 |
 | P2-T2 | Runs, sim account, full runtime settings | T1 | todo | 0 | | |
 | P2-T3 | Ledger with T+1 settlement | T1, T2 | todo | 0 | | |
 | P2-T4 | Broker value types + quote fill model | T2 | todo | 0 | | |
@@ -50,12 +50,12 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P2-T9 | spy_overlay 1.0.0 | T6, T7 | todo | 0 | | |
 | P2-T10 | Risk manager + kill switches | T5 | todo | 0 | | |
 | P2-T11 | Proposal service | T5, T10 | todo | 0 | | |
-| P2-T12 | Claude catalyst classifier, store, service | T2 | fixing | 2 | V✅ B❌(2) S+C✅(3 should) | 17a37e6 |
+| P2-T12 | Claude catalyst classifier, store, service | T2 | accepted | 2 | fix round: breaker 100% pass, +6 regression tests | 2876de2 |
 | P2-T13 | Engine orchestrator | T8–T12 | todo | 0 | | |
 | P2-T14 | Pre-market job + premarket CLI | T7, T12 | todo | 0 | | |
 | P2-T15 | Integration: one full simulated day | T13, T14 | todo | 0 | | |
 | P2-REVIEW | Phase 2 whole-phase review | all P2 | todo | 0 | | |
-| P3-T0 | Write the Phase 3 plan | P2-REVIEW | building | 1 |  |  |
+| P3-T0 | Write the Phase 3 plan | P2-REVIEW | accepted | 1 | plan verify+fix PASS (migration renumbered 0004, event settle rule, approval actor) | 37bef3b |
 
 ## Escalations
 
@@ -823,3 +823,112 @@ None open.
 - Commits reviewed: 6dd8a25 (P2-T6), 8e7d8a1 (P2-T7), both match the plan code
 - Findings (should-fix): no failure isolation in the registry (one bad plug-in or stale params stops all strategies, overlay and flatten included). candles() caches the in-progress bar, and a later cache-complete read returns it as final. No deadline on the 9:35 opening_bars fetch (retries and a 30 s HTTP timeout are unbounded against the 60 s budget). StrategyContext is only read-only by convention (mutable dataclass, list fields, ctx.data exposes the DB factory and client). No test covers opening bars at universe scale against the rate limit
 - Notes: strategies can't size or place orders (intents only, no broker in ctx). The service uses the injected, token-caching QuestradeClient. 543 symbols at 20 req/s is about 28 s (S4: 694 in 35 s)
+
+### 2026-09-27 00:41 MT · P2-T10/T11 · Spec+Code reviewer · attempt 1 · started
+- Notes: reviewing 4755163 (risk + kill switches) and 0dde785 (proposal service)
+
+### 2026-09-27 00:41 MT · P2-T10T11 · Verifier+Breaker · attempt 1 · started
+- Notes: verifying T10/T11 on trunk, then writing tests/gauntlet/test_p2_t10t11_breaker.py
+
+### 2026-09-27 00:52 MT · P2-T6/T7 · Verifier+Breaker · attempt 1 · finished
+- Result: Verifier PASS, Breaker FAIL (4 of 8 new tests fail)
+- Commits: c2e4a1b (tests/gauntlet/test_p2_t6t7_breaker.py)
+- Gate: check.sh passed before the breaker tests (515 tests), git status clean, T6/T7 boxes ticked
+- Findings: SessionOffset.parse accepts a trailing newline, intents accept float prices, a duplicate entry point is silently shadowed and a broken one raises ModuleNotFoundError (not PluginError), candles() caches a still-forming bar, accepts naive datetimes and raises QuestradeApiError
+
+### 2026-09-27 00:58 MT · P3-T0 · Planner · attempt 1 · finished
+- Result: done. Phase 3 specification plan written (13 tasks P3-T1..T13, critical path 4, max width 10)
+- Commits: 9c5653a
+- Gate: n/a (plan only, no code)
+- Notes: contract refinements - Notifier.send is async with dedupe_key, fire_event is async with a late-firing policy, PTB used only as a low-level Bot behind a TelegramApi protocol, worker relay sends engine events from the DB, extra 12:55 flatten cron backup for early closes. Five open questions for Stephen listed in the plan
+
+### 2026-09-27 00:43 MT · P2-T13 · Builder · attempt 1 · started
+- Notes: engine orchestrator (batch B4), worktree agent-a642e198281037986
+
+### 2026-09-27 00:44 MT · P2-T8/T9 · Spec+Code reviewer · attempt 1 · started
+- Result: reviewing 898ce26 (orb_sip) and c3bcee4 (spy_overlay), read-only
+
+### 2026-09-27 00:43 MT · P2-T8T9 · Breaker · attempt 1 · started
+- Notes: verify + break orb_sip (898ce26) and spy_overlay (c3bcee4)
+
+### 2026-09-27 00:44 MT · P2-T6/T7 · Builder · attempt 2 · started
+- Notes: fix round for T6T7 breaker tests + reviewer should-fix items
+
+### 2026-09-27 00:44 MT · P2-T10/T11 · Spec+Code reviewer · attempt 1 · finished
+- Result: PASS (0 must-fix, 5 should-fix, 8 nits)
+- Findings: should-fix: approving a pending entry ignores a pause or trip that happened after proposal (proposals.py:131-137), kill-switch trip and pause can double-insert under concurrency (killswitch.py:123-151, 170-179), escalate_unprotected keeps re-scanning closed or protected rows forever (proposals.py:173-187), no savepoint around the broker call in _execute (proposals.py:203-217), create accepts spec None for entry/stop/exit (proposals.py:87)
+- Notes: decide uses SELECT FOR UPDATE on the proposal row, so first decision wins across processes. Decision and broker submit share one transaction. Code matches plan text exactly
+
+### 2026-09-27 00:44 MT · P3-T0 · Verifier+Spec reviewer · attempt 1 · started
+- Notes: combined verify+fix of the Phase 3 plan (renumber migration, check interfaces vs Phase 2 code)
+
+### 2026-09-27 00:52 MT · P2-T8/T9 · Spec+Code reviewer · attempt 1 · finished
+- Result: PASS (0 must-fix, 3 should-fix, 8 nits)
+- Commits: reviewed 898ce26, c3bcee4 (code identical to plan apart from ruff formatting)
+- Findings: should-fix (1) stop_loss can be zero or negative when stop_atr_fraction is large (bound is 5), which makes the protective-stop OrderSpec raise, (2) exit_at and entry_cancel_at accept offsets after the close or before the ORB event (BR-42 risk), (3) spy_overlay uses the SPY quote without a staleness or delay check and does not record the quote time
+- Notes: master plan 7.2 P2-T9 row says a zero SPY return holds, SPEC 5.3 says a signal at or below 0 exits. Code follows SPEC
+
+### 2026-09-27 00:50 MT · P2-T13 · Builder · attempt 1 · finished
+- Result: done, all 5 plan steps ticked. Code copied programmatically from the plan
+- Commits: 63a516a
+- Gate: lint, format and mypy clean. tests/engine 54 passed (9 new orchestrator tests). Full suite 640 passed, 9 failed, all in other batches' breaker files (b1, t6t7, t12)
+- Notes: added a build_engine docstring saying the caller passes ONE long-lived QuestradeClient per process. The ProposalService entry_blocked guard was not on trunk at the final rebase, so it is not wired. P2-REVIEW will wire it
+
+### 2026-09-27 00:58 MT · P2-T12 · Builder · attempt 2 · finished
+- Result: done. All fixes applied. test_p2_t12_breaker.py passes unedited. 6 regression tests added
+- Commits: 2876de2
+- Gate: check.sh 628 passed, 3 failed (all in tests/gauntlet/test_p2_b1_breaker.py, B1 fill model/broker, not T12)
+- Notes: P2-T14 already builds AsyncAnthropic(timeout=30, max_retries=1). The budget alert-once check reads event_log so it holds across processes
+
+### 2026-09-27 00:52 MT · P2-T13 · Spec+Code reviewer · attempt 1 · started
+- Notes: reviewing 63a516a (engine orchestrator), read-only
+
+### 2026-09-27 00:52 MT · P2-T13 · Verifier+Breaker · attempt 1 · started
+- Notes: verifying trunk at 10101f8, then writing tests/gauntlet/test_p2_t13_breaker.py
+
+### 2026-09-27 00:52 MT · P2-T15 · Builder · attempt 1 · started
+- Notes: full simulated trading-day integration test (batch 4)
+
+### 2026-09-27 00:52 MT · P2-T10T11 · Verifier+Breaker · attempt 1 · finished
+- Result: Verifier PASS for T10/T11 (clean tree, all T10/T11 boxes ticked, T10/T11 tests green). Breaker PASS (10 new tests, 24 cases, all pass)
+- Commits: 97ee3d2
+- Gate: ruff, format, mypy clean. pytest 620 passed, 5 failed, all in other tasks' breaker files (test_p2_b1_breaker x3, test_p2_t12_breaker x2)
+- Findings: none failing. Spec concern: a reset drawdown/expectancy switch re-trips at the next evaluate if nothing changed (see report)
+
+### 2026-09-27 00:52 MT · P2-T8T9 · Breaker · attempt 1 · finished
+- Result: Verify PASS for T8/T9 (tree clean, boxes ticked, ruff/format/mypy clean, no T8/T9 test failures). Breaker FAIL: 7 of 25 cases fail
+- Commits: 10101f8
+- Gate: check.sh pytest 9 failed / 624 passed, all 9 in other breaker files (p2_b1, p2_t12, p2_t6t7)
+- Findings: orb re-enters a held or working symbol. stop_loss can equal entry (ATR 0) or go negative (fraction 5). overlay rounds +2e-7 to 0 and exits. overlay acts on a prior-session SPY quote. overlay re-emits an exit for a position with a working exit
+
+### 2026-09-27 00:54 MT · P2-T10T11 · Builder · attempt 2 · started
+- Result: fix round for gauntlet findings (entry guard, kill-switch race, reset hold, escalation bound, savepoint, create validation, nits)
+
+### 2026-09-27 00:54 MT · P2-T8/T9 · Builder · attempt 2 · started
+- Result: fix round for gauntlet findings (breaker + reviewer should-fix + nits)
+
+### 2026-09-27 00:55 MT · P2-T13 · Spec+Code reviewer · attempt 1 · finished
+- Result: FAIL (1 must-fix, 6 should-fix, 6 nits). The code matches the plan text exactly
+- Findings: must-fix: on_quotes/_after_fill has no per-fill failure isolation (orchestrator.py:121-125, 156-174). One exception loses on_fill for the rest of the batch for good, because the fills are already committed and FillEvents are not replayed. The position then has no stop and no alert. should-fix: (1) per-strategy and per-intent isolation in run_event/_handle, with no error recorded on the signal (108-119, 296-331). (2) signal, amend and proposal are 3 separate transactions (336, 370, 329). (3) a rejected stop or exit is only a warning (322). (4) exits and cancels are not deduped on a re-fired event, and entries_today is read without a lock (205-221, 296). (5) an entry fill with no owning strategy returns silently (165). (6) entry_blocked wiring goes in build_engine (462-464)
+- Notes: on_fill uses the latest config revision, not the position's. Clock, Decimal and one-client-per-process rules are all met
+
+### 2026-09-27 01:00 MT · P2-T15 · Builder · attempt 1 · finished
+- Result: done, all 3 plan steps ticked, test copied verbatim from plan, no scenario changes needed
+- Commits: 6bda4a0
+- Gate: check.sh 668 passed, 14 failed, all failures are open breaker tests of other tasks (B1 x3, T6/T7 x4, T8/T9 x7). tests/integration 2 passed
+- Notes: no production code touched, no plan bugs found
+
+### 2026-09-27 01:05 MT · P2-T13 · Verifier+Breaker · attempt 1 · finished
+- Result: Verify PASS (clean tree, ruff/format/mypy ok, T13 boxes ticked, 14 pytest failures all in other tasks' breaker files b1/t6t7/t8t9). Breaker FAIL: 4 of 14 cases
+- Commits: abf6273 (tests/gauntlet/test_p2_t13_breaker.py)
+- Findings: (1) run_event lets one strategy's on_event exception abort the rest, with no error event. (2) on_quotes lets an on_fill exception abort follow-up of later fills in the batch, so the next position gets no stop. (3) a second EnterLong for a symbol with a pending entry proposal or an open position is accepted when max_positions > 1
+- Notes: passes: idempotent re-fire, max entries per day, fill routing to owner, exit with all switches tripped after hours, no strategy enabled, holiday/after-close/no-entry-window/pre-market rejections with check name, Decimal end to end
+
+### 2026-09-27 00:58 MT · P2-T13 · Builder · attempt 2 · started
+- Result: fix round (verify+fix) for gauntlet findings on the engine orchestrator
+
+### 2026-09-27 00:59 MT · P3-T0 · Verifier+Spec reviewer · attempt 1 · finished
+- Result: PASS after fixes (plan edited in place)
+- Commits: 37bef3b
+- Findings fixed: migration renumbered 0004 chained on the P2-B1 0003 with a build-time head check (must-fix). Missed or failing events re-fired every worker step, now settled keys (must-fix). T6 decide signature lacked actor, and nonce TTL contradicted test 6 (must-fix). Protocol names aligned to P2 Engine, auto-mode proposals relayed, overlay error notes, bot decider outside a session, LIVE worker smoke only outside the session, tests/notify init owned by T1, DST date (should-fix)
+- Notes: P2-T13 and P2-T15 not on trunk yet, names taken from the Phase 2 plan code

@@ -52,6 +52,12 @@ class RuntimeSettings(BaseModel):
     )
     finviz_cache_hours: float = Field(12.0, ge=0, le=168, allow_inf_nan=False, alias="finviz.cache_hours")
     open_bar_lookback_sessions: int = Field(14, ge=5, le=30, alias="open_bar.lookback_sessions")
+    # When FinViz fails, the nightly job reuses the last stored universe. If that universe's original
+    # FinViz date is more than this many sessions before the target session, the fallback is still
+    # used but flagged stale (an error event and `fallback_stale` in the job detail).
+    universe_fallback_stale_after_sessions: int = Field(
+        3, ge=1, le=10, alias="universe.fallback_stale_after_sessions"
+    )
 
     @field_validator("markets_enabled")
     @classmethod

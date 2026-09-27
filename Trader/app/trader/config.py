@@ -11,7 +11,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class EnvSettings(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore")
+    # A blank value (KEY= in an env template) means "unset", not an empty string or a parse error.
+    model_config = SettingsConfigDict(extra="ignore", env_ignore_empty=True)
 
     # The URLs embed the DB role passwords, so they are secrets too: use .get_secret_value().
     database_url: SecretStr

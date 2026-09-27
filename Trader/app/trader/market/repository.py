@@ -1,20 +1,26 @@
 """Idempotent writes of market data (every write is an upsert)."""
 
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
-from sqlalchemy import func, select
+import structlog
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from trader.adapters.questrade.models import QtSymbol
 from trader.db.models import DailyCandle, IntradayCandle, OpenBarStat, Symbol, UniverseSnapshot
-from trader.market.clock import et_date
+from trader.events import log_event
+from trader.market.clock import Clock, et_date
 from trader.market.types import Candle
 
+log = structlog.get_logger("market.repository")
+
 _OHLCV = ("open", "high", "low", "close", "volume", "vwap")
+_EXCHANGE_LEN = 20  # symbols.exchange is String(20)
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,10 +32,46 @@ class UniverseSnapshotRow:
     source: str
 
 
-def upsert_symbols(session: Session, symbols: Iterable[QtSymbol]) -> dict[str, int]:
-    """Questrade ticker -> symbols.id, keyed on the Questrade symbol id."""
+def _stale_exchange(old: Symbol) -> str:
+    tag = str(old.questrade_id) if old.questrade_id is not None else f"id{old.id}"
+    return f"STALE-{tag}"[:_EXCHANGE_LEN]
+
+
+def upsert_symbols(
+    session: Session, symbols: Iterable[QtSymbol], clock: Clock | None = None
+) -> dict[str, int]:
+    """Questrade ticker -> symbols.id, keyed on the Questrade symbol id.
+
+    Tickers get reused (FB became META, taking a ticker another security had held). If (ticker,
+    exchange) is held by a row with a DIFFERENT Questrade id, that old row is first moved out of the
+    way (its exchange becomes "STALE-<old questrade id>"), keeping its history and foreign keys, and
+    the move is logged (to event_log when `clock` is given)."""
     ids: dict[str, int] = {}
     for sym in symbols:
+        holder = session.execute(
+            select(Symbol).where(
+                Symbol.ticker == sym.symbol,
+                Symbol.exchange == sym.listing_exchange,
+                Symbol.questrade_id.is_distinct_from(sym.symbol_id),
+            )
+        ).scalar_one_or_none()
+        if holder is not None:
+            stale = _stale_exchange(holder)
+            data: dict[str, Any] = {
+                "ticker": sym.symbol,
+                "exchange": sym.listing_exchange,
+                "old_questrade_id": holder.questrade_id,
+                "new_questrade_id": sym.symbol_id,
+                "old_symbol_id": holder.id,
+                "moved_to_exchange": stale,
+            }
+            holder.exchange = stale
+            session.flush()
+            message = f"ticker {sym.symbol} reused; old symbol row marked stale"
+            if clock is not None:
+                log_event(session, clock, "warning", "market.symbols", message, data)
+            else:
+                log.warning("symbols.ticker_reused", **data)
         stmt = (
             insert(Symbol)
             .values(
@@ -106,7 +148,7 @@ def save_universe_snapshot(session: Session, session_date: date, rows: Iterable[
             "atr14": r.atr14,
             "source": r.source,
         }
-        for r in rows
+        for r in {r.symbol_id: r for r in rows}.values()  # ON CONFLICT can't touch one row twice
     ]
     if not values:
         return 0
@@ -125,7 +167,7 @@ def save_open_bar_stats(
 ) -> int:
     values = [
         {"symbol_id": sid, "session_date": session_date, "avg_open_vol_14d": avg, "atr14": a}
-        for sid, avg, a in stats
+        for sid, (avg, a) in {sid: (avg, a) for sid, avg, a in stats}.items()  # one row per symbol
     ]
     if not values:
         return 0
@@ -157,3 +199,37 @@ def latest_universe_tickers(session: Session, before: date) -> tuple[date, list[
         .all()
     )
     return last, list(tickers)
+
+
+def delete_session_rows_except(session: Session, session_date: date, keep: Collection[int]) -> int:
+    """Remove universe_snapshots and open_bar_stats rows of `session_date` whose symbol isn't in
+    `keep`, so a re-run replaces the day instead of leaving the previous run's extra symbols."""
+    ids = list(keep)
+    stmts = (
+        delete(UniverseSnapshot).where(
+            UniverseSnapshot.session_date == session_date, UniverseSnapshot.symbol_id.not_in(ids)
+        ),
+        delete(OpenBarStat).where(
+            OpenBarStat.session_date == session_date, OpenBarStat.symbol_id.not_in(ids)
+        ),
+    )
+    return sum(int(getattr(session.execute(stmt), "rowcount", 0) or 0) for stmt in stmts)
+
+
+def universe_origin(session: Session, snapshot_date: date) -> date:
+    """The FinViz date a stored universe really comes from. A fallback snapshot copies an older
+    universe, so its origin is the latest FinViz snapshot before it (itself if it isn't a fallback,
+    or if no FinViz snapshot exists)."""
+    is_fallback = session.execute(
+        select(UniverseSnapshot.symbol_id)
+        .where(UniverseSnapshot.session_date == snapshot_date, UniverseSnapshot.source == "fallback")
+        .limit(1)
+    ).scalar_one_or_none()
+    if is_fallback is None:
+        return snapshot_date
+    origin = session.execute(
+        select(func.max(UniverseSnapshot.session_date)).where(
+            UniverseSnapshot.session_date < snapshot_date, UniverseSnapshot.source == "finviz"
+        )
+    ).scalar_one_or_none()
+    return origin or snapshot_date

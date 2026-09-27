@@ -111,7 +111,9 @@ def questrade_check(symbol: str = "SPY") -> None:
 @app.command()
 def nightly(
     date_: str | None = typer.Option(None, "--date", help="Target session YYYY-MM-DD"),
-    force: bool = typer.Option(False, "--force"),
+    force: bool = typer.Option(
+        False, "--force", help="Re-run a succeeded session, and allow a run before the data has settled."
+    ),
 ) -> None:
     """Build the universe and caches for the next session (SPEC §9, 20:00 ET)."""
     import asyncio
@@ -123,12 +125,30 @@ def nightly(
     from trader.adapters.questrade.auth import QuestradeAuth
     from trader.adapters.questrade.client import QuestradeClient
     from trader.bootstrap import build_core
-    from trader.jobs.nightly import NightlyDeps, run_nightly, target_session
+    from trader.jobs.nightly import NightlyDeps, earliest_run_time, run_nightly, target_session
     from trader.jobs.runner import run_job
 
     core = build_core()
     settings = core.settings.load()
-    session_date = date_cls.fromisoformat(date_) if date_ else target_session(core.calendar, core.clock)
+    if date_:
+        try:
+            session_date = date_cls.fromisoformat(date_)
+            is_session = core.calendar.is_session(session_date)
+        except ValueError:  # not a date, or outside the calendar's range
+            is_session = False
+        if not is_session:
+            typer.echo(f"--date {date_} is not a trading session", err=True)
+            raise typer.Exit(1)
+    else:
+        session_date = target_session(core.calendar, core.clock)
+    not_before = earliest_run_time(core.calendar, session_date, settings.open_bar_lookback_sessions)
+    if core.clock.now() < not_before and not force:
+        typer.echo(
+            f"too early for {session_date}: the last lookback session's data settles at "
+            f"{not_before.isoformat()} (use --force to run anyway)",
+            err=True,
+        )
+        raise typer.Exit(1)
     auth = QuestradeAuth(core.factory, core.crypto, core.clock)
     # A private per-user cache (the scraper creates it 0o700 and refuses one it doesn't own), never a
     # shared /tmp path.
@@ -160,10 +180,17 @@ def nightly(
 def notify(text: str) -> None:
     """Send a Telegram message to Stephen through the configured bot."""
     import httpx
+    from pydantic import ValidationError
 
     from trader.config import get_env
 
-    env = get_env()
+    try:
+        env = get_env()
+    except ValidationError as exc:
+        # Field names only: the error text would echo the invalid values, which may be secrets.
+        fields = sorted({".".join(str(p) for p in e["loc"]) for e in exc.errors()})
+        typer.echo(f"invalid configuration: {', '.join(fields)}", err=True)
+        raise typer.Exit(1) from None
     if env.telegram_bot_token is None or env.telegram_chat_id is None:
         typer.echo("Telegram isn't configured", err=True)
         raise typer.Exit(1)
@@ -173,7 +200,7 @@ def notify(text: str) -> None:
             data={"chat_id": env.telegram_chat_id, "text": text},
             timeout=15,
         )
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         # Only the exception type: its message or traceback could carry the URL, which holds the token.
         typer.echo(f"failed: {type(exc).__name__}", err=True)
         raise typer.Exit(1) from None

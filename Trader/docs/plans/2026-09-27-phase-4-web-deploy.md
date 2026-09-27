@@ -543,16 +543,21 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - **Stream route:** needs a session (EventSource sends the cookie; no CSRF for GET). More than `MAX_STREAMS` open → 429. Headers `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `X-Accel-Buffering: no` (NPM/nginx must not buffer). It first sends `retry: 3000`, then `event: hello` (`StreamHello`) and `event: invalidate` with every topic (a reconnect always resyncs, so no `Last-Event-ID` handling is needed), then relays feed messages as `event: invalidate` / `event: events` with JSON data, a `: keepalive` comment every 15 s, and ends when the client disconnects, when the session is no longer valid (re-checked every 60 s), or when the app shuts down (the feed's stop event ends every stream at once, so uvicorn's graceful shutdown is not held up).
 
 **Acceptance tests (real DB, fake sleep driving the feed; the stream generator tested directly, and one test through a real uvicorn server on a random localhost port with httpx streaming):**
-- [ ] 1. With one subscriber, inserting a pending proposal between two polls produces exactly one `invalidate` containing `proposals` on the next poll (within one `web.sse_poll_seconds`).
-- [ ] 2. A decision (`decided_at` set), an expiry, a fill, a kill-switch reset, a journal update and a settings change each produce `invalidate` with their topic; a heartbeat update produces `system` only.
-- [ ] 3. Three new `info` events and one `debug` event → one `events` message with the three, oldest first.
-- [ ] 4. With no subscribers the feed runs no query (a counting factory); after the first subscribe the first poll sets the baseline and emits nothing.
-- [ ] 5. A subscriber that never reads: after 150 messages its queue holds at most `queue_size` and ends with one full `invalidate`; other subscribers get every message.
-- [ ] 6. The DB failing for three polls logs one failure line and the feed recovers on the fourth.
-- [ ] 7. The stream starts with `retry: 3000`, `hello` and a full `invalidate`, carries the `X-Accel-Buffering: no` header, sends `: keepalive` after 15 s of fake time, and unsubscribes when the client disconnects (`subscriber_count()` back to 0).
-- [ ] 8. The eleventh concurrent stream gets 429; a stream whose session is revoked ends within 60 s of fake time.
-- [ ] 9. Real server: a client streaming `/api/stream` sees `invalidate` with `proposals` less than 2 s (real time, poll 0.5 s) after a proposal row is inserted; stopping the server ends the stream within 5 s.
-- [ ] 10. Gate and commit `P4-T11: ...`.
+- [x] 1. With one subscriber, inserting a pending proposal between two polls produces exactly one `invalidate` containing `proposals` on the next poll (within one `web.sse_poll_seconds`).
+- [x] 2. A decision (`decided_at` set), an expiry, a fill, a kill-switch reset, a journal update and a settings change each produce `invalidate` with their topic; a heartbeat update produces `system` only.
+- [x] 3. Three new `info` events and one `debug` event → one `events` message with the three, oldest first.
+- [x] 4. With no subscribers the feed runs no query (a counting factory); after the first subscribe the first poll sets the baseline and emits nothing.
+- [x] 5. A subscriber that never reads: after 150 messages its queue holds at most `queue_size` and ends with one full `invalidate`; other subscribers get every message.
+- [x] 6. The DB failing for three polls logs one failure line and the feed recovers on the fourth.
+- [x] 7. The stream starts with `retry: 3000`, `hello` and a full `invalidate`, carries the `X-Accel-Buffering: no` header, sends `: keepalive` after 15 s of fake time, and unsubscribes when the client disconnects (`subscriber_count()` back to 0).
+- [x] 8. The eleventh concurrent stream gets 429; a stream whose session is revoked ends within 60 s of fake time.
+- [x] 9. Real server: a client streaming `/api/stream` sees `invalidate` with `proposals` less than 2 s (real time, poll 0.5 s) after a proposal row is inserted; stopping the server ends the stream within 5 s.
+- [x] 10. Gate and commit `P4-T11: ...`.
+
+**Build notes (T11, 2026-09-27):**
+- **Plan bug, fixed inside T11's files:** uvicorn waits for open connections to close *before* it runs the lifespan shutdown, so the feed's stop event (set in T3's lifespan shutdown) cannot end open streams in time: without help a graceful stop waits the full `timeout_graceful_shutdown` (10 s) and then cancels. `trader.api.routers.stream` therefore wraps `uvicorn.Server.handle_exit` once at import (what SIGTERM/SIGINT call; the approach sse-starlette uses) to mark that server's event loop as exiting, and every stream on it ends within a second (`server_exiting()`). The stop event still ends every stream too. T3 and T18 need nothing extra as long as uvicorn is started through `uvicorn.run`/`uvicorn.Server`.
+- The baseline is read when the first subscriber arrives (inside `subscribe()`, before the stream sends its full `invalidate`), not on the next loop poll, so a change made between the client's resync refetch and the next poll cannot be missed. Leaving the last subscription drops the baseline (idle again).
+- Additive names: `feed.full_invalidate()`, `PollingChangeFeed.publish(msg)` and `.poll()`, `feed.MAX_EVENTS = 50` (the newest 50, oldest first), `stream.event_stream(feed, *, hello, session_valid, sleep, exiting)`, `stream.session_valid(factory, clock, session_id, idle_hours)` (the same rules as `auth.authenticate`, read from `web_sessions` by `AuthUser.session_id`), `STREAM_HEADERS`, `TICK_SECONDS = 1`. After an overflow a subscriber keeps only the full `invalidate` and drops later messages until it reads it. The stream limit uses `feed.subscriber_count()` (nothing to leak if a response never starts).
 
 ---
 

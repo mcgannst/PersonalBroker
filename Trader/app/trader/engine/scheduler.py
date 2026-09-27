@@ -25,6 +25,10 @@ Fix round 1 (P3 gauntlet):
   characters) on `DayPlan.problems`; `report_plan_problems` writes each as ONE `error` event (source
   `scheduler`) per session. `fire_event` calls it, and the worker should call it each step.
 - The late-grace comparison is exact (120.9 s late with a 120 s grace is missed).
+
+P3-REVIEW: a failed attempt's event is `error` (relayed) only for the first MAX_EVENT_ATTEMPTS attempts; a
+safety event's later retries are recorded at `warning`, so a flatten or entry_cancel that keeps failing
+alerts three times and once more when the close records it missed, not every 120 s until the close.
 """
 
 import math
@@ -412,6 +416,7 @@ async def fire_event(deps: FireDeps, key: str, session_date: date, *, force: boo
     if event is None:
         return FireResult(key, session_date, "not_scheduled")
     now = deps.clock.now()
+    failures = 0
     if not force:
         if now < event.at:
             early = (event.at - now).total_seconds()
@@ -448,8 +453,17 @@ async def fire_event(deps: FireDeps, key: str, session_date: date, *, force: boo
         body,
         force=force,
         rerun_abandoned=force or event.always_fire_late,
+        failure_level=_failure_level(failures),
     )
     return _from_outcome(key, session_date, outcome)
+
+
+def _failure_level(failures: int) -> str:
+    """The level of the event a failed attempt writes: `error` (relayed as an alert) for the first
+    MAX_EVENT_ATTEMPTS attempts, `warning` for a safety event's later retries (P3-REVIEW: one that keeps
+    failing retries every 120 s until the close, and would otherwise alert on each; the close then records
+    it `missed`, which alerts once more)."""
+    return "error" if failures < MAX_EVENT_ATTEMPTS else "warning"
 
 
 def _late_seconds(event: PlannedEvent, now: datetime) -> int:

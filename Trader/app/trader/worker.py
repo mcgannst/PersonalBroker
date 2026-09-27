@@ -151,7 +151,8 @@ def still_holds_lock(conn: Connection) -> bool:
 
 
 def _describe(exc: BaseException) -> str:
-    return f"{type(exc).__name__}: {exc}"[:MAX_ERROR_CHARS]
+    """An exception as one masked, capped text (it goes into event_log, which the web app shows)."""
+    return logging_setup.redact_text(f"{type(exc).__name__}: {exc}")[:MAX_ERROR_CHARS]
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> list[Callable[[], object]]:

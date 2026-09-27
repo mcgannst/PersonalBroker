@@ -19,6 +19,7 @@ from trader.adapters.telegram.bot import (
     FOREIGN_EVENT_BURST,
     FOREIGN_EVENT_WINDOW,
     LOST_SEND_SOURCE,
+    POLL_CONFLICT_SOURCE,
     TelegramBot,
 )
 from trader.adapters.telegram.callbacks import CallbackSigner, DbCallbackIssuer
@@ -33,7 +34,7 @@ from trader.engine.risk import SizedOrder
 from trader.engine.runs import get_live_run
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import FixedClock
-from trader.notify.relay import NotificationRelay
+from trader.notify.relay import NEVER_RELAYED, NotificationRelay
 from trader.notify.types import OutboundMessage, ProposalView
 from trader.settings_store import RuntimeSettings, SettingsStore
 from trader.strategies.base import EnterLong
@@ -482,7 +483,17 @@ async def test_a_conflict_logs_one_critical_event_and_backs_off(env: Env) -> Non
     env.bot.sleep = fake_sleep
     await asyncio.wait_for(env.bot.run(stop), timeout=5)
     assert env.sleeps == [30, 30]
-    assert len(events(env, "critical")) == 1
+    # P3-REVIEW: under a source the relay forwards (it never forwards "telegram"), so Stephen hears of it.
+    with env.factory() as s:
+        conflicts = list(
+            s.execute(
+                select(m.EventLog).where(
+                    m.EventLog.source == POLL_CONFLICT_SOURCE, m.EventLog.level == "critical"
+                )
+            ).scalars()
+        )
+    assert len(conflicts) == 1
+    assert POLL_CONFLICT_SOURCE not in NEVER_RELAYED
 
 
 async def test_other_errors_back_off_exponentially(env: Env) -> None:

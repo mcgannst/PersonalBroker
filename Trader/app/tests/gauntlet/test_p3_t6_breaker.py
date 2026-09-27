@@ -636,7 +636,13 @@ async def test_409_conflicts_and_message_not_modified_never_break_the_bot(env: E
     env.api.queue_updates(env.api.text_update("/status", chat_id=CHAT))
     await asyncio.wait_for(bot.run(stop), timeout=10)
     assert env.sleeps == [30, 1, 30, 30, 30]
-    assert len(tg_events(env, "critical")) == 1
+    with env.factory() as s:  # P3-REVIEW: the conflict's source is telegram.poll (relayed)
+        n_critical = s.execute(
+            select(func.count())
+            .select_from(m.EventLog)
+            .where(m.EventLog.source == "telegram.poll", m.EventLog.level == "critical")
+        ).scalar_one()
+    assert n_critical == 1
     assert env.commands.handled == ["/status"]
 
     # (b) A 400 "message is not modified" on the edit after a tap: the decision stands, no retry storm.

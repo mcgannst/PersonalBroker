@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from trader.db import models as m
 from trader.engine.killswitch import KillSwitches
+from trader.logging_setup import redact_text
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock
 from trader.market.types import UniverseStatus
@@ -65,7 +66,8 @@ def _one_line(text: str) -> str:
 
 
 def _exc_text(exc: BaseException) -> str:
-    message = _one_line(str(exc))
+    """An exception as one masked line: the check detail is stored in job_runs and shown in the web app."""
+    message = _one_line(redact_text(str(exc)))
     return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
 
 

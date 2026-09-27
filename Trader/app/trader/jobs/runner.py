@@ -18,6 +18,10 @@ session) is written too, so the relay alerts Stephen (P3 fix round 1).
 `running` row means an earlier run's outcome is unknown (it may have placed orders). Instead of running
 the body again, that row is settled as failed (OUTCOME_UNKNOWN) with one `critical` event, and the body
 is not run. `force` still runs it.
+
+`failure_level` (P3-REVIEW): the level of the event a failed body writes, `error` by default (the relay
+alerts it). The scheduler passes `warning` for a safety event that keeps retrying past its alerted
+attempts, so a persistently failing event is not one phone alert every two minutes until the close.
 """
 
 import hashlib
@@ -34,6 +38,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from trader.db.models import JobRun
 from trader.db.session import session_scope
 from trader.events import log_event
+from trader.logging_setup import redact_text
 from trader.market.clock import Clock
 
 log = structlog.get_logger("jobs.runner")
@@ -65,8 +70,10 @@ def lock_key(job: str, session_date: date) -> int:
 
 
 def _describe(exc: BaseException) -> str:
+    """The stored error text: masked (job_runs.error and the event are shown in the web app and relayed;
+    an exception's text can quote a token URL), then capped."""
     text_ = str(exc) if isinstance(exc, JobFailure) else f"{type(exc).__name__}: {exc}"
-    return text_[:MAX_ERROR_CHARS]
+    return redact_text(text_)[:MAX_ERROR_CHARS]
 
 
 def _engine(factory: sessionmaker[Session]) -> Engine:
@@ -116,6 +123,7 @@ def run_job(
     force: bool = False,
     *,
     rerun_abandoned: bool = True,
+    failure_level: str = "error",
 ) -> JobOutcome:
     """Run `fn` for (job, session_date) unless it already succeeded (then `skipped`, unless `force`)
     or another process is running it right now (`skipped`, reason "already running").
@@ -136,7 +144,7 @@ def run_job(
         try:
             detail = fn()
         except BaseException as exc:
-            return _failed(factory, clock, job, session_date, started, exc)
+            return _failed(factory, clock, job, session_date, started, exc, failure_level)
         return _record_success(factory, clock, job, session_date, started, detail)
 
 
@@ -149,6 +157,7 @@ async def run_job_async(
     force: bool = False,
     *,
     rerun_abandoned: bool = True,
+    failure_level: str = "error",
 ) -> JobOutcome:
     """run_job for an async body, with exactly run_job's semantics. A cancellation of the awaiting task
     (CancelledError) is recorded as a failure and re-raised, and the lock is released."""
@@ -161,7 +170,7 @@ async def run_job_async(
         try:
             detail = await fn()
         except BaseException as exc:
-            return _failed(factory, clock, job, session_date, started, exc)
+            return _failed(factory, clock, job, session_date, started, exc, failure_level)
         return _record_success(factory, clock, job, session_date, started, detail)
 
 
@@ -227,10 +236,11 @@ def _failed(
     session_date: date,
     run_id: int,
     exc: BaseException,
+    level: str = "error",
 ) -> JobOutcome:
     """Record the body's failure; re-raise a non-Exception (interrupt, cancellation) once recorded."""
     error = _describe(exc)
-    _record_failure(factory, clock, job, session_date, run_id, error)
+    _record_failure(factory, clock, job, session_date, run_id, error, level)
     if not isinstance(exc, Exception):
         raise exc
     return JobOutcome("failed", error=error)
@@ -291,7 +301,13 @@ def _alert_unrecorded_success(
 
 
 def _record_failure(
-    factory: sessionmaker[Session], clock: Clock, job: str, session_date: date, run_id: int, error: str
+    factory: sessionmaker[Session],
+    clock: Clock,
+    job: str,
+    session_date: date,
+    run_id: int,
+    error: str,
+    level: str = "error",
 ) -> None:
     try:
         with session_scope(factory) as s:
@@ -299,7 +315,7 @@ def _record_failure(
             if row is None:
                 raise JobRunMissing(f"job_runs row {run_id} disappeared")
             row.status, row.finished_at, row.error = "failed", clock.now(), error
-            log_event(s, clock, "error", f"job.{job}", f"{job} failed for {session_date}", {"error": error})
+            log_event(s, clock, level, f"job.{job}", f"{job} failed for {session_date}", {"error": error})
     except Exception:
         log.exception(
             "job.record_failure_failed", job=job, session_date=session_date.isoformat(), run_id=run_id

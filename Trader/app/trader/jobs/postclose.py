@@ -23,6 +23,7 @@ from trader.db import models as m
 from trader.db.session import session_scope
 from trader.engine.killswitch import KillSwitches
 from trader.events import log_event
+from trader.logging_setup import redact_text
 from trader.market import repository as repo
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import ET, Clock, FixedClock
@@ -89,8 +90,8 @@ class PostcloseDeps:
 
 
 def _reason(exc: BaseException) -> str:
-    """An exception as one capped line (no traceback, no repr)."""
-    flat = " ".join(f"{type(exc).__name__}: {exc}".split())
+    """An exception as one masked, capped line (no traceback, no repr)."""
+    flat = " ".join(redact_text(f"{type(exc).__name__}: {exc}").split())
     return flat if len(flat) <= MAX_REASON_CHARS else flat[: MAX_REASON_CHARS - 1] + "…"
 
 

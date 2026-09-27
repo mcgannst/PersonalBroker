@@ -434,6 +434,29 @@ async def test_safety_key_keeps_retrying_with_backoff_until_the_close(
 
 
 @pytestdb
+async def test_safety_key_retries_alert_three_times_then_once_when_missed(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """P3-REVIEW: a flatten failing from 15:50 until the close writes an `error` event (a phone alert)
+    for its first three attempts only; the later retries are `warning`; the close's `missed` alerts once."""
+    h = harness(db_factory, et(TUE, 15, 50))
+    h.runner.fail = True
+    while h.clock.now() < et(TUE, 16, 0):
+        await h.worker_round(TUE)
+        h.clock.advance(timedelta(seconds=10))
+    with db_factory() as s:
+        levels = list(
+            s.execute(
+                select(EventLog.level).where(EventLog.source == "job.event:flatten").order_by(EventLog.id)
+            ).scalars()
+        )
+    assert levels == ["error"] * 3 + ["warning"] * 4
+    assert (await h.fire("flatten", TUE)).status == "missed"
+    alerts = [e for e in error_events(db_factory) if e.source == "job.event:flatten"]
+    assert len(alerts) == 4 and (alerts[-1].data or {}).get("error", "").startswith("missed:")
+
+
+@pytestdb
 async def test_leftover_running_entry_event_is_settled_as_outcome_unknown_not_rerun(
     db_factory: sessionmaker[Session],
 ) -> None:

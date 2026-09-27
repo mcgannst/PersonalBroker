@@ -232,3 +232,24 @@ async def test_run_job_async_db_failure_on_success_update_returns_failed(
 
 def test_runner_module_exposes_job_failure() -> None:
     assert issubclass(runner.JobFailure, Exception)
+
+
+# --- P3-REVIEW: masked error text and the failure event's level ------------------------------
+
+
+async def test_failure_text_is_masked_and_its_level_follows_failure_level(
+    db_factory: sessionmaker[Session],
+) -> None:
+    token = "123456789:" + "AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
+
+    async def leaky() -> dict[str, Any]:
+        raise RuntimeError(f"POST https://api.telegram.org/bot{token}/sendMessage failed")
+
+    out = await run_job_async(db_factory, CLOCK, "event:x", D, leaky, failure_level="warning")
+    assert out.status == "failed" and out.error is not None
+    assert token not in out.error and "[REDACTED]" in out.error
+    with db_factory() as s:
+        stored = s.execute(select(JobRun.error)).scalar_one()
+        ev = s.execute(select(EventLog).where(EventLog.source == "job.event:x")).scalar_one()
+    assert stored is not None and token not in stored
+    assert ev.level == "warning" and token not in str(ev.data)

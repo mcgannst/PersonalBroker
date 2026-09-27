@@ -54,6 +54,9 @@ STATUS_LABELS = {"auto_approved": "auto-approved"}
 # A proposal message that could not be sent even on its one re-send. The relay never forwards source
 # "telegram" (its own failures could loop), so this alert uses a source it does forward.
 LOST_SEND_SOURCE = "telegram.proposal"
+# The 409 Conflict (another poller uses this bot) is critical and must reach Stephen: sends still work
+# while getUpdates conflicts, so it goes out under a source the relay forwards (P3-REVIEW).
+POLL_CONFLICT_SOURCE = "telegram.poll"
 # Updates from another chat (or another sender in a private chat): at most this many warning events per
 # foreign id per window; the rest are only logged.
 FOREIGN_EVENT_BURST = 5
@@ -166,7 +169,10 @@ class TelegramBot:
                 if isinstance(exc, TelegramApiError) and exc.status == 409:
                     if not conflict_logged:
                         self._event(
-                            "critical", "another poller is using this bot (409 Conflict)", _error_text(exc)
+                            "critical",
+                            "another poller is using this bot (409 Conflict)",
+                            _error_text(exc),
+                            source=POLL_CONFLICT_SOURCE,
                         )
                         conflict_logged = True
                     log.error("telegram.poll_conflict", **_error_text(exc))

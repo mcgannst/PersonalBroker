@@ -261,3 +261,17 @@ async def test_a_check_that_raises_becomes_an_error_check(harness: Harness) -> N
     uni = _checks(detail)["universe"]
     assert uni["level"] == "error" and "RuntimeError" in uni["detail"]
     assert len(harness.notifier.sent) == 1
+
+
+async def test_a_token_url_in_a_check_error_is_masked_in_the_detail(harness: Harness) -> None:
+    """P3-REVIEW: the job detail (job_runs.detail, shown in the web app) never keeps a secret."""
+    with harness.factory() as s:
+        _seed_healthy(s)
+        s.commit()
+    secret = "0123456789abcdefREFRESHtoken"
+    harness.token_error = RuntimeError(
+        f"GET https://login.example/oauth2/token?refresh_token={secret} failed"
+    )
+    detail = await run_preopen(harness.deps(), DAY)
+    token = _checks(detail)["token"]
+    assert token["ok"] is False and secret not in token["detail"] and "[REDACTED]" in token["detail"]

@@ -419,15 +419,20 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - **Journal:** `GET` returns one row per session day in the range (default the last 30 sessions) that has a journal row or trades (`v_daily_pnl`), newest first. `PUT` upserts the live run's row for a date that is a session on or before today's session (else 422): only the fields sent change (`rules_followed` may be set to null to clear an answer), `answered_via = "web"` when `rules_followed` is sent, `updated_at = now`, and an `audit_log` row `journal.update` with before and after.
 
 **Acceptance tests:**
-- [ ] 1. With a hand-made set of trades (+2R, −1R, +0.5R, −1R; P&L 20, −10, 5, −10) metrics give trades 4, win rate 0.5, expectancy 0.125, profit factor 1.25, total P&L 5, matching `v_trade_metrics`.
-- [ ] 2. A date range that excludes the first trade gives the metrics of the other three; an empty range gives trades 0 and null ratios (no division error).
-- [ ] 3. The R histogram puts +2R in the [2.0, 2.5) bin and −1R in [−1.0, −0.5); a −7R trade lands in the open-ended first bin.
-- [ ] 4. `/equity` returns snapshots in order; 6,000 seeded points come back as at most 5,000 with the first and last kept.
-- [ ] 5. The CSV has the header `TRADE_CSV_COLUMNS`, one line per trade of the run in the range, `Content-Disposition` set, and an `exit_reason` of `=cmd()` is written as `'=cmd()`.
-- [ ] 6. `PUT /api/journal/2026-10-06` with `{"rules_followed": true}` then `{"notes": "late entry"}` keeps both, sets `answered_via = "web"`, and writes two audit rows; a future date or a holiday → 422; a note over 5,000 characters → 422.
-- [ ] 7. `GET /api/journal` lists days with trades even without a journal row (`rules_followed` null) and days answered on Telegram (`answered_via = "telegram"`).
-- [ ] 8. `run=<replay run id>` works for metrics; an unknown run → 404.
-- [ ] 9. Gate and commit `P4-T7: ...`.
+- [x] 1. With a hand-made set of trades (+2R, −1R, +0.5R, −1R; P&L 20, −10, 5, −10) metrics give trades 4, win rate 0.5, expectancy 0.125, profit factor 1.25, total P&L 5, matching `v_trade_metrics`.
+- [x] 2. A date range that excludes the first trade gives the metrics of the other three; an empty range gives trades 0 and null ratios (no division error).
+- [x] 3. The R histogram puts +2R in the [2.0, 2.5) bin and −1R in [−1.0, −0.5); a −7R trade lands in the open-ended first bin.
+- [x] 4. `/equity` returns snapshots in order; 6,000 seeded points come back as at most 5,000 with the first and last kept.
+- [x] 5. The CSV has the header `TRADE_CSV_COLUMNS`, one line per trade of the run in the range, `Content-Disposition` set, and an `exit_reason` of `=cmd()` is written as `'=cmd()`.
+- [x] 6. `PUT /api/journal/2026-10-06` with `{"rules_followed": true}` then `{"notes": "late entry"}` keeps both, sets `answered_via = "web"`, and writes two audit rows; a future date or a holiday → 422; a note over 5,000 characters → 422.
+- [x] 7. `GET /api/journal` lists days with trades even without a journal row (`rules_followed` null) and days answered on Telegram (`answered_via = "telegram"`).
+- [x] 8. `run=<replay run id>` works for metrics; an unknown run → 404.
+- [x] 9. Gate and commit `P4-T7: ...`.
+
+**Build notes (T7, 2026-09-27):**
+- **R histogram wire format:** always 18 bins in order: the open-ended first bin `{"lo": "-Infinity", "hi": "-3.0"}`, sixteen `[lo, hi)` bins of 0.5 R from `-3.0` to `5.0`, and the open-ended last bin `{"lo": "5.0", "hi": "Infinity"}` (5 R exactly lands there). The open ends are the Decimal sentinels `-Infinity`/`Infinity`, which the web's `histogramLabel` reads as `< -3` / `≥ 5`. `HistogramBinOut` (T1) refuses non-finite Decimals on validation, so `performance.histogram_bins` builds the two open bins with `model_construct` and `GET /api/metrics` returns its JSON itself (the response model stays `MetricsOut` in the OpenAPI). Anything that re-validates `MetricsOut` from JSON (a future Python client) needs `allow_inf_nan=True` on `HistogramBinOut.lo/hi` (T1's file; a one-line follow-up for T18).
+- Additive names: `trader.reports.export.safe_cell` and `FORMULA_STARTS` (the guard also covers a leading tab and carriage return); `trader.api.routers.performance.compute_metrics`, `histogram_bins`, `thin`, `check_range`, `MAX_EQUITY_POINTS`; `tests/reports.add_trade` (a closed position plus its trade).
+- The PUT path is declared `/journal/{session_date}` (same URL as `{date}`). A PUT with neither field → 422; a `from` after `to` → 422 on every T7 route. "On or before today's session" is read as on or before today's ET date (a Saturday cannot answer next Monday). The CSV file name uses `all` for an open bound: `trades-<run id>-<from|all>-<to|all>.csv`.
 
 ---
 

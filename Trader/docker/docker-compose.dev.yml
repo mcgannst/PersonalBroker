@@ -26,6 +26,29 @@ services:
     # its `stopped` heartbeat before Docker kills anything.
     stop_grace_period: 120s
     restart: unless-stopped
+    # Resource limits (P5-T16), so the container cannot exhaust the shared Docker host. They cover every
+    # process in the container: the API, the worker, cron jobs and a replay subprocess (`trader replay`
+    # runs inside this container and shares these limits with the live worker).
+    # Memory: 1 GiB, at least 4 x the 256 MB /tmp tmpfs (which counts against it); memswap_limit equal to
+    # mem_limit means no swap beyond the limit.
+    mem_limit: 1g
+    memswap_limit: 1g
+    # CPU: at most 2 cores' worth of time.
+    cpus: 2.0
+    # Processes: at most 256 processes and threads, which stops a fork or thread leak.
+    pids_limit: 256
+    # Open files per process.
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 8192
+    # Docker's stdout log: at most 5 files of 10 MB (50 MB). supervisord's own log in the logs volume is
+    # capped separately (10 MB x 3).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
 volumes:
   trader_dev_logs: {}

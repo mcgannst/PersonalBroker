@@ -815,10 +815,10 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - Every existing P4 compose setting is kept (read-only root, tmpfs, volume, networks, no ports, init, `stop_grace_period`, restart policy). P4-T19 or a P4-T4 fix round may add `TRADER_FORWARDED_ALLOW_IPS` (or other environment keys) to these files: pull trunk right before editing and again before committing, keep every such change, and never overwrite the files wholesale.
 
 **Acceptance tests (file level):**
-- [ ] 1. Both compose files parse (YAML) and have the limits and the logging options above for `trader`.
-- [ ] 2. The P4 file tests (`tests/test_docker_files.py`) pass unchanged: read-only, tmpfs, volume, networks, no ports, env file, init, stop grace period.
-- [ ] 3. The memory limit is at least 4 × the tmpfs size (256 MB), so `/tmp` can never take the container's whole budget.
-- [ ] 4. Gate and commit `P5-T16: ...`.
+- [x] 1. Both compose files parse (YAML) and have the limits and the logging options above for `trader`.
+- [x] 2. The P4 file tests (`tests/test_docker_files.py`) pass unchanged: read-only, tmpfs, volume, networks, no ports, env file, init, stop grace period.
+- [x] 3. The memory limit is at least 4 × the tmpfs size (256 MB), so `/tmp` can never take the container's whole budget.
+- [x] 4. Gate and commit `P5-T16: ...`.
 
 **LIVE step (after T17's deploy in T18):** covered by T18 LIVE 2.
 

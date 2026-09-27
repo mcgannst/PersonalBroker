@@ -6,10 +6,10 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 
 | Field | Value |
 |---|---|
-| Current phase | 4 (Phase 3 COMPLETE ~13:45 MT Sep 27, tag phase-3-complete) |
-| Current task | P4 gauntlets (auth, group A, group B); P5-T0 planning |
+| Current phase | 5 (Phase 4 COMPLETE ~17:05 MT Sep 27, tag phase-4-complete) |
+| Current task | P5 wave 1 (T2-T7, T9, T10); P4-REVIEW; T8, T11-T16 queued |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-27T21:01:50Z |
+| Last updated (UTC) | 2026-09-27T22:34:56Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
 | Token last refreshed (UTC) | 2026-09-27T17:21:56Z (re-seeded from Stephen's new token after .env.dev rebuild; token removed from .env.dev) |
@@ -24,6 +24,10 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Phase 4 planning | P4-T0 plan written (836a484: 19 tasks, width 15, crit path 4); verify+fix running |
 | Phase 4 started | 12:48 MT Sep 27; estimate ~5-5.5 h (contracts, 2 waves of builders, gauntlets, wiring, deploy + LIVE): finish ~18:00-18:30 MT |
 | Phase 5 planning | plan accepted (8ce148e); build starts after P4-T18 is accepted |
+| Phase 5 started | 15:52 MT Sep 27 (P5-T1 contracts); estimate ~5.5 h: finish ~21:00-21:30 MT |
+| Phase 4 estimate | revised 15:52 MT: T19 deploy + P4-REVIEW, finish ~17:30 MT |
+| OPEN checks | Tonight 18:10 MT: nightly job_run on trader-dev; Mon 06:10 MT premarket; Mon 07:25 MT preopen message + job_runs; Stephen tap on msg 45 |
+| Backlog P4 | settings-fallback copied 4x (deps/system/meta/stream) - use QuietSettings; pin proxy subnet (TRADER_FORWARDED_ALLOW_IPS in env / deploy.sh check); prod: one-shot migrate container so docker exec can't read owner URL/admin password; SPEC 15 deploy text outdated; small helper duplication |
 
 ## Task board
 
@@ -82,21 +86,41 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P4-T3 | API core, health, SPA serving | T1 | accepted | 2 | group A fix round: breaker 16/16, +10 regression | 4be9e7f |
 | P4-T4 | Auth (Argon2, sessions, CSRF, lockout, TOTP) | T1 | accepted | 2 | fix round: breaker 16/16; trusted-proxy XFF (TRADER_FORWARDED_ALLOW_IPS, default 172.19.0.0/16), NUL-safe, per-session guess limit, Argon2 cap 4 | 4265e45 |
 | P4-T5 | Dashboard and trading reads | T1 | accepted | 2 | group A fix round: breaker 16/16, +10 regression | 4be9e7f |
-| P4-T6 | Decisions (approve/reject, kill switches) | T1 | gauntlet | 1 | built (48 tests); web approvals only via build_decider, race web vs Telegram = one decision | eb748b5 |
+| P4-T6 | Decisions (approve/reject, kill switches) | T1 | accepted | 2 | group B fix round: breaker 34/34; gate 2210 py + 354 web | 39df04d |
 | P4-T7 | Performance, journal, CSV export | T1 | accepted | 2 | group A fix round: breaker 16/16, +10 regression | 4be9e7f |
 | P4-T8 | Settings and strategies | T1 | accepted | 2 | group A fix round: breaker 16/16, +10 regression | 4be9e7f |
-| P4-T9 | System, jobs, token paste, Telegram test | T1 | fixing | 2 | group B gauntlet: V✅ B 33/34 (events id bound) review 0 must-fix -> fix round a2 (upload size cap while parsing) | 56b1241 |
-| P4-T10 | Watchlist CSV upload | T1 | gauntlet | 1 | built; manual list replaces FinViz in nightly; T18 note: cap username so 'web:'+name fits varchar(50) | 7334cee |
+| P4-T9 | System, jobs, token paste, Telegram test | T1 | accepted | 2 | group B fix round: breaker 34/34; gate 2210 py + 354 web | 39df04d |
+| P4-T10 | Watchlist CSV upload | T1 | accepted | 2 | group B fix round: breaker 34/34; gate 2210 py + 354 web | 39df04d |
 | P4-T11 | Change feed and SSE | T1 | accepted | 2 | group A fix round: breaker 16/16, +10 regression | 4be9e7f |
 | P4-T12 | Web shell | T2 | accepted | 2 | web gauntlet 40/40 after fix round; 354 web tests green | ebe2497 |
 | P4-T13 | Web Dashboard and Candidates | T2 | accepted | 2 | web gauntlet 40/40 after fix round; 354 web tests green | ebe2497 |
 | P4-T14 | Web Trades, Performance, Journal, Reports | T2 | accepted | 2 | web gauntlet 40/40 after fix round; 354 web tests green | ebe2497 |
 | P4-T15 | Web Settings | T2 | accepted | 2 | web gauntlet 40/40 after fix round; 354 web tests green | ebe2497 |
 | P4-T16 | Web System | T2 | accepted | 2 | web gauntlet 40/40 after fix round; 354 web tests green | ebe2497 |
-| P4-T17 | Docker image, supervisord, deploy scripts | T1, T2 | gauntlet | 1 | built; image 141MB, all local container checks pass; T19 notes added (docker creds helper workaround) | d1e79f3 |
-| P4-T18 | Wiring | T3-T17 | todo | 1 | - | - |
-| P4-T19 | End to end + deploy trader-dev (LIVE) | T18 | todo | 1 | - | - |
-| P4-REVIEW | Phase 4 review | T19 | todo | 1 | - | - |
+| P4-T17 | Docker image, supervisord, deploy scripts | T1, T2 | accepted | 2 | group B fix round: breaker 34/34; gate 2210 py + 354 web | 39df04d |
+| P4-T18 | Wiring | T3-T17 | accepted | 2 | fix round: breaker 14/14; gate 2333 py + 356 web | 45cb891 |
+| P4-T19 | End to end + deploy trader-dev (LIVE) | T18 | accepted | 1 | deployed trader-dev; LIVE ok; OPEN: Mon 07:22 MT preopen msg + job_runs, Stephen's button tap (msg 45) | 5752ef2 |
+| P4-REVIEW | Phase 4 review | T19 | accepted | 1 | PASS; off-loop market data in API, masked job/worker detail, trades->journal refresh, web client contract test | 97416bc |
+| P5-T0 | Write the Phase 5 plan | P4 | accepted | 1 | plan verify+fix PASS | 8ce148e |
+| P5-T1 | Contracts (backend + web), migration 0006 (LIVE) | - | accepted | 1 | contracts + migration 0006 LIVE; gate 2517 py + 366 web | 8ddff8e |
+| P5-T2 | Metrics module | - | building | 1 | builder running | - |
+| P5-T3 | Replay clock + candle fill model | - | building | 1 | builder running | - |
+| P5-T4 | Replay hooks in engine/broker/proposals | - | building | 1 | builder running | - |
+| P5-T5 | Replay data source | - | building | 1 | builder running | - |
+| P5-T6 | Replay runner | - | building | 1 | builder running | - |
+| P5-T7 | Replay API + SSE | - | building | 1 | builder running | - |
+| P5-T8 | Web Replay page | - | todo | 1 | - | - |
+| P5-T9 | Weekly report + Claude commentary | - | building | 1 | builder running | - |
+| P5-T10 | Telegram/relay additions | - | building | 1 | builder running | - |
+| P5-T11 | Kill-switch trips end to end (tests) | - | todo | 1 | - | - |
+| P5-T12 | Reports API + CSV columns | - | todo | 1 | - | - |
+| P5-T13 | Web Reports commentary | - | todo | 1 | - | - |
+| P5-T14 | Error log mirror | - | todo | 1 | - | - |
+| P5-T15 | Job retries + restart recovery | - | todo | 1 | - | - |
+| P5-T16 | Compose limits | - | todo | 1 | - | - |
+| P5-T17 | Wiring | - | todo | 1 | - | - |
+| P5-T18 | End to end + LIVE | - | todo | 1 | - | - |
+| P5-REVIEW | Phase 5 review | - | todo | 1 | - | - |
 
 ## Escalations
 
@@ -1605,3 +1629,91 @@ None open.
 - Gate: not run (plan only, machine loaded)
 - Findings: must-fix were the gate (check.sh instead of Trader/build/gate.sh), whole-range Questrade FiveMinutes requests the client refuses (over 20,000 intervals), and unbounded replay memory inside the live container (soak risk). Should-fix covered the P4-T18 reconciliation rule, isolation of replay log-mirror rows and SSE watermarks, determinism rules, limit fill price, weekend week mapping, weekly retry cost cap, T17 file gaps (test_launcher.py, mirror for nightly/premarket), LIVE timing clear of cron lines and 11:30/13:30, and retry-aware soak counting
 - Notes: log in the worktree copy of docs/build/agents/P5-T0-verifier-a1.md (the harness blocks writes to the main checkout's agents folder)
+
+### 2026-09-27 15:02 MT · P4-BB · Builder · attempt 2 · finished
+- Result: done. MUST (events bigint bound) and SHOULD-FIX (streamed upload cap) fixed. Nits fixed except the Telegram test route (the sync DB work is inside the notifier, outside the owned files)
+- Commits: 39df04d
+- Gate: gate.sh passed (pytest 2210 passed, vitest 354 passed), breaker file 34/34
+- Notes: oversize stays 422 (plan and tests), not 413. A wait() failure warns under source jobs.manual.lost because the breaker test pins jobs.manual events to exit codes
+
+### 2026-09-27 15:06 MT · P4-T18 · Builder · attempt 1 · started
+- Result: wiring task (services, CLI create-admin/user-password, heartbeat_extra, route/CSRF sweeps, TS mirror, notifier to_thread, §7.1 rows)
+
+### 2026-09-27 15:33 MT · P4-T18 · Builder · attempt 1 · finished
+- Result: done. build_services, create-admin and user-password, heartbeat_extra rate limit, notifier DB steps via to_thread, route 401 and CSRF sweeps, TS mirror with nullability, ProposalService grep, histogram allow_inf_nan, health connect timeout, httpx2, username cap 46, JobLaunchOut nullable plus RunJob "no date", §7.1 rows
+- Commits: 918d949
+- Gate: gate.sh passed (pytest 2317 passed, vitest 356 passed)
+- Notes: test 8 not duplicated, trunk already exits 4 (test_runtime.py exit-4 tests), its event is warning not critical. user-password adds auth.reset_password in auth.py (T4's file)
+
+### 2026-09-27 15:30 MT · P4-T18 · Verifier+Breaker+Reviewer · attempt 1 · started
+- Notes: combined gauntlet on 918d949
+
+### 2026-09-27 15:40 MT · P4-T18 · Verifier+Breaker+Reviewer · attempt 1 · finished
+- Result: V✅ B❌(4) S/C should-fix x4
+- Commits: 9e4ec6d (P4-B18: wiring gauntlet tests)
+- Gate: gate.sh passed (2317 pytest, 356 vitest), worktree clean, T18 boxes ticked, all 7 orchestrator notes done
+- Findings: (1) bad settings row writes a relayed alert per web approval (new GuardedSettings per build_decider call). (2) NaN in heartbeat_extra loses the beat (json.dumps allows NaN, jsonb refuses). (3) QuietSettings reads run sync DB on the event loop (quote TTL, feed interval). (4) ProposalService AST scan misses an aliased import
+
+### 2026-09-27 15:40 MT · P4-T18 · Builder · attempt 2 · started
+- Result: fix round 1 (settings alert per click, NaN heartbeat_extra, sync DB on loop for QuietSettings, aliased ProposalService scan)
+
+### 2026-09-27 16:00 MT · P4-T18 · Builder · attempt 2 · finished
+- Result: all 4 findings fixed plus the 503 should-fix. Shared QuietSettings for decider_for (no settings alert per click), 503 settings_unreadable (keys logged, never values), QuietSettings cached 5 s and refreshed via asyncio.to_thread on the loop, heartbeat_extra allow_nan=False, ProposalService scan flags aliased imports. §7.1 Web API, Worker process and Proposals rows updated, phase 4 plan Fix round 1 note
+- Commits: 45cb891
+- Gate: gate.sh passed (pytest 2333 passed, vitest 356 passed), breaker file 14/14
+- Notes: settings changes now reach the quote TTL and feed interval within 5 s (was at once). trader/api/quotes.py docstring still says "applies at once" (T5-group file, not edited)
+
+### 2026-09-27 15:53 MT · P4-T19 · Builder · attempt 1 · started
+- Notes: local smoke stack + Playwright, deploy to trader-dev, LIVE checks
+
+### 2026-09-27 15:53 MT · P5-T1 · Builder · attempt 1 · started
+- Result: started. Contracts: migration 0006, settings, replay types, schemas + types.ts, stubs, client, fakes
+- Notes: worktree synced to trunk 45cb891
+
+### 2026-09-27 16:15 MT · P4-T19 · Builder · attempt 1 · finished
+- Result: done. Local smoke passed, trader-dev deployed and LIVE-checked (health ok via NPM, api/worker/cron RUNNING uid 10001 read-only, cron next runs in EDT, deep links 200, SSE 624-834 ms, live Playwright passed, audit IP = LAN 192.168.68.107, restart safe)
+- Commits: 078a236, 5752ef2
+- Gate: gate.sh passed (2336 pytest, 356 vitest)
+- OPEN: Mon 2026-09-28 from 07:22 MT check the preopen message (worker OK) and job_runs preopen succeeded for 2026-09-28 (also nightly 18:00 MT tonight, premarket 06:00 MT). Stephen to tap a button on telegram-test message 45 (expect "Invalid button" + warning event source telegram)
+- Notes: admin user stephen, password in .env.dev key ADMIN_PASSWORD_INITIAL, backup /Users/stephen/.config/trader-backup/.env.dev.2026-09-27. No fixes in other tasks' files
+
+### 2026-09-27 16:15 MT · P4-REVIEW · Phase reviewer · attempt 1 · started
+- Notes: whole-phase review+fix of Phase 4 (API/web contracts, auth, safety, SSE, deploy config, secrets, hygiene, §7.1)
+
+### 2026-09-27 16:30 MT · P5-T1 · Builder · attempt 1 · finished
+- Result: done. All 9 plan checkboxes ticked, build notes added to the P5 plan
+- Commits: 8ddff8e
+- Gate: gate.sh passed (2517 pytest, 366 vitest)
+- LIVE: trader_dev alembic current 0005, upgrade head, now 0006 (head). alembic check: no new upgrade operations. /api/health 200 (18:27 ET Sunday)
+- Notes: head was 0005 (no renumbering). Also updated pins in test_system (rev 0006), test_migration_0002 (partial index), test_phase3_contracts (DailySummaryView.run_to_date), ApiServices fields, web nav pins (shell.test, web_pages_breaker)
+
+### 2026-09-27 16:31 MT · P5-T7 · Builder · attempt 1 · started
+- Result: started (Replay API, launcher, SSE topics, live views without replay rows)
+
+### 2026-09-27 16:28 MT · P5-T9 · Builder · attempt 1 · started
+- Weekly report: facts, commentary, number check, budget, job body
+
+### 2026-09-27 16:30 MT · P5-T10 · Builder · attempt 1 · started
+- Notes: Telegram weekly message, run-to-date line, kill-switch reset confirmation, log.* never relayed
+
+### 2026-09-27 16:31 MT · P5-T2 · Builder · attempt 1 · started
+- Result: started (Metrics module behind /api/metrics)
+
+### 2026-09-27 16:28 MT · P5-T4 · Builder · attempt 1 · started
+- Notes: replay hooks in sim_broker, orchestrator, proposals, registry (worktree agent-a5436efb9e85021d8)
+
+### 2026-09-27 16:28 MT · P5-T5 · Builder · attempt 1 · started
+- Replay data source and stored catalysts (trader/replay/data.py, catalysts.py, tests)
+
+### 2026-09-27 16:31 MT · P5-T6 · Builder · attempt 1 · started
+- Result: started (Replay runner: create, pin, snapshot, step, progress, cancel, CLI composition)
+
+### 2026-09-27 16:28 MT · P5-T3 · Builder · attempt 1 · started
+- Notes: replay clock and candle fill model (trader/replay/clock.py, candle_fill_model.py), TDD from trunk 8ddff8e
+
+### 2026-09-27 17:15 MT · P4-REVIEW · Phase reviewer · attempt 1 · finished
+- Result: PASS (no must-fix left open). Fixed in place, the rest listed for the orchestrator
+- Commits: a2c3398, 97416bc
+- Gate: gate.sh passed (pytest 2612 passed, 12 skipped, web 367 passed)
+- Findings fixed: API market-data DB steps ran on the event loop (OffLoopMarketData), job/worker detail JSON unmasked, AuthUser repr showed the CSRF token, dead auth._totp_step, trades SSE topic did not refresh the journal, quotes/services docstrings (5 s settings lag), new client-vs-route contract test, §7.1 Web API row updated
+- Left: settings fallback duplicated 4x outside QuietSettings (should-fix), proxy subnet default unchecked (should-fix), owner DB URL and admin password in the container env (should-fix before prod), nits (duplicated helpers, str-match in killswitch, prod TRADER_TAG without :?, SPEC deploy wording)

@@ -161,10 +161,14 @@ then the task section in <PHASE_PLAN_PATH>, then the SPEC sections it cites.
 Log to the shared state file exactly as §3.2 says: append a "started" entry now and a
 "finished" or "failed" entry at the end, each with ONE `cat >> ... <<'EOF'` command.
 Never print or commit secrets. Stage files by explicit path.
-Shell rules (a hook enforces them): one command per Bash call. No `&&`, `;` or `||` chaining, no leading
-`cd` (the working directory persists between calls, so `cd` in its own call), and no `git -C`. So
-"git pull --rebase && git push" in a plan means two separate calls. Chaining inside a heredoc body is fine.
-Use absolute paths where you can. The repo root is the directory containing Trader/.
+Shell rules (a hook enforces them): one command per Bash call. No `&&`, `;` or `||` chaining, no `cd`
+at all (even on its own), and no `git -C`. Use absolute paths, and `uv --directory
+"/Users/stephen/Documents/Code/Claude Code/Trader/Trader/app" run ...` wherever a plan says "run from
+Trader/app". Git commands run from the repo root, the Bash tool's default working directory. So
+"git pull --rebase && git push" means two separate calls, and a plan's `cd ... && git add ...` block
+becomes separate `git add` / `git commit` calls with absolute or repo-relative paths. Avoid semicolons
+even inside heredoc bodies (the hook sees them). If `uv sync` ran before `trader/` existed, run
+`uv sync --reinstall-package trader` once.
 ```
 
 ### 6.1 Builder

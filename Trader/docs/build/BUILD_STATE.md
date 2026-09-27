@@ -8,8 +8,8 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 |---|---|
 | Current phase | 1 |
 | Current task | P1-T1 |
-| Gauntlet stage | building |
-| Last updated (UTC) | 2026-09-27T04:13:00Z |
+| Gauntlet stage | Verifier |
+| Last updated (UTC) | 2026-09-27T04:45:00Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | `docker/.env.dev` (moves to `trader_dev.trader.api_credentials` in P1-T6) |
 | Token last refreshed (UTC) | 2026-09-27T03:36:53Z (spike S1) |
@@ -22,7 +22,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 
 | ID | Title | Depends on | Status | Attempt | Stage results | Last commit |
 |---|---|---|---|---|---|---|
-| P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | building | 1 | | |
+| P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | gauntlet | 1 | | cf0ad8e |
 | P1-T2 | Database models, migration 0001, test database fixture | T1 | todo | 0 | | |
 | P1-T3 | Crypto and runtime settings store | T2 | todo | 0 | | |
 | P1-T4 | Market types, clock and session calendar | T1 | todo | 0 | | |
@@ -51,3 +51,9 @@ None open.
 
 ### 2026-09-27T04:13:28Z · P1-T1 · Builder · attempt 1 · started
 - Result: starting plan steps 1-10
+
+### 2026-09-27T04:17:24Z · P1-T1 · Builder · attempt 1 · finished
+- Result: done, all 10 plan steps complete and ticked
+- Commits: 8cae90d, cf0ad8e
+- Gate: check.sh passed (4 tests)
+- Notes: uv 0.12.19, Python 3.12.14. Two lint/type fixes to plan code: test_missing_required_value_fails uses pydantic.ValidationError (ruff B017 rejects bare Exception), and get_env() drops an unused type-ignore (mypy strict). .env.dev: MIGRATION_DATABASE_URL renamed, APP_ENCRYPTION_KEY and SESSION_SECRET added, rerun is a no-op. notify.py sent. The hook also blocks a standalone change-directory call, so used uv --directory and absolute paths.

@@ -684,12 +684,26 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - Each scenario drives quotes through `Engine.on_quotes` and events through `run_event`, then pumps the relay once.
 
 **Acceptance tests (real DB, fake clock, fake quotes):**
-- [ ] 1. **Daily loss:** three stop-outs in one session (a test plug-in with `max_positions` 3) take the day's P&L past −5% including fees and slippage; the trip happens on the fill that crosses it (`kill_switch_events` row with value and threshold 0.05), the relay sends one `kill_switch` message with "Value x% vs threshold 5%"; a fourth `EnterLong` the same session is rejected with check `kill_switch`; the next session's first entry is accepted and no reset alert is sent.
-- [ ] 2. **Drawdown:** losing trades over three sessions reach 15% below the peak equity: one trip, one alert, entries blocked on the following sessions; after `POST /api/killswitch/max_drawdown_pct/reset` with a reason, entries are allowed and a further 15% fall from the equity at the reset trips again.
-- [ ] 3. **Expectancy:** four closed trades with mean R ≤ 0 do not trip; the fifth close with the mean still ≤ 0 trips (value = the mean R, threshold 0); with a mean > 0 after five trades nothing trips; after a reset it re-arms only after five more trades.
-- [ ] 4. **Exits never blocked:** with all three automatic switches and `manual_pause` tripped, the protective stop proposal of an open position is submitted and fills, and the flatten event exits the position.
-- [ ] 5. Each trip writes exactly one `error` event and one alert even when two fills evaluate the switches at the same moment (two concurrent `on_quotes` calls in threads).
-- [ ] 6. Gate and commit `P5-T11: ...`.
+- [x] 1. **Daily loss:** three stop-outs in one session (a test plug-in with `max_positions` 3) take the day's P&L past −5% including fees and slippage; the trip happens on the fill that crosses it (`kill_switch_events` row with value and threshold 0.05), the relay sends one `kill_switch` message with "Value x% vs threshold 5%"; a fourth `EnterLong` the same session is rejected with check `kill_switch`; the next session's first entry is accepted and no reset alert is sent.
+- [x] 2. **Drawdown:** losing trades over three sessions reach 15% below the peak equity: one trip, one alert, entries blocked on the following sessions; after `POST /api/killswitch/max_drawdown_pct/reset` with a reason, entries are allowed and a further 15% fall from the equity at the reset trips again.
+- [x] 3. **Expectancy:** four closed trades with mean R ≤ 0 do not trip; the fifth close with the mean still ≤ 0 trips (value = the mean R, threshold 0); with a mean > 0 after five trades nothing trips; after a reset it re-arms only after five more trades.
+- [x] 4. **Exits never blocked:** with all three automatic switches and `manual_pause` tripped, the protective stop proposal of an open position is submitted and fills, and the flatten event exits the position.
+- [x] 5. Each trip writes exactly one `error` event and one alert even when two fills evaluate the switches at the same moment (two concurrent `on_quotes` calls in threads).
+- [x] 6. Gate and commit `P5-T11: ...`.
+
+**Build notes (P5-T11 builder, 2026-09-27; trunk 9407204):**
+- Tests only; no defect found, so `trader/engine/killswitch.py` is unchanged and nothing is xfailed.
+- Test 2: a 15% drawdown in three sessions cannot stay under the 5% daily limit every day
+  (1 − 0.95³ ≈ 14.3%), so the third session's gapped stop-out trips `daily_loss_pct` on the same fill; the test
+  asserts one `max_drawdown_pct` trip and one drawdown alert (plus the daily one), then the reset (blank reason
+  422, audit row, Telegram "KILL SWITCH RESET" confirmation) and the re-trip from the equity at the reset.
+- Test 5 forces the race with a barrier inside `KillSwitches.inputs`, so both fills compute crossing inputs
+  before either evaluates.
+- Added (orchestrator): the manual pause through the real `TelegramBot` + `Commands` (confirmation on the fake
+  Telegram, entries blocked, the stop still fills, `/resume`), and the daily switch inside a replay through the
+  real `run_replay` and `build_replay_engine` (trip row and event carry the replay's run id and replay time,
+  the fourth entry is rejected, the next replayed session trades, the live relay sends nothing). A web-app
+  pause is not relayed to Telegram (a `warning` event; P3 design, pinned by P5-T10's relay test).
 
 ---
 

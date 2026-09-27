@@ -7,7 +7,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 1 |
-| Current task | T6 fixing, T7 B+review, T9 building (incl. LIVE nightly) |
+| Current task | P1-REVIEW (whole-phase review), P2-T0 planning |
 | Gauntlet stage | Breaker + reviewers |
 | Last updated (UTC) | 2026-09-27T04:44:00Z |
 | Last pushed commit | d64518b |
@@ -30,8 +30,8 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T6 | Questrade auth, bootstrap, seed and keep-alive CLI | T2, T3, T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 0607f11 |
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | f14f4fa |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
-| P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | gauntlet | 2 | V✅ B❌ S+C❌ → fix 42bd500 (verify+review running) | 42bd500 |
-| P1-REVIEW | Phase 1 whole-phase review | all P1 | todo | 0 | | |
+| P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 42bd500 |
+| P1-REVIEW | Phase 1 whole-phase review | all P1 | building | 1 |  |  |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | todo | 0 | | |
 
 ## Escalations
@@ -612,3 +612,12 @@ None open.
 - Gate: check.sh passed (316 tests). Breaker file unchanged, all 9 of its tests pass
 - LIVE: nightly --date 2026-09-28 --force succeeded, universe 543, source finviz, unresolved none, candle_errors 0. Read-only check: 543 snapshot rows match 543 stats rows, all finviz, 0 STALE symbols
 - Notes: min opening bars is min(10, lookback length), since a lookback setting of 5 to 9 could never reach 10
+
+### 2026-09-27T05:44:41Z · P1-T9 · Verifier+fix reviewer · attempt 2 · started
+- Notes: verifying trunk after fix commit 42bd500 and reviewing the fix
+
+### 2026-09-27T05:52:00Z · P1-T9 · Verifier+fix reviewer · attempt 2 · finished
+- Result: PASS (no must-fix or should-fix)
+- Commits: reviewed 42bd500 at trunk 6224a9b
+- Gate: check.sh green (ruff, format, mypy, 316 passed), breaker 9/9, plan boxes all ticked, tree clean
+- Findings: nits only. Pre-existing, not from the fix: an empty or mostly unresolved Questrade result still succeeds with only an info event. Lock-release tests retry in the same process, where locks are re-entrant. A pg_locks probe confirmed the locks are released.

@@ -25,34 +25,37 @@
 | P2-T7 | Market data service | T6 | C |
 | P2-T8 | `orb_sip` plug-in 1.0.0 | T6, T7 | C |
 | P2-T9 | `spy_overlay` plug-in 1.0.0 | T6, T7 | D |
-| P2-T10 | Risk manager and kill switches | T5 | B |
+| P2-T10 | Risk manager and kill switches | T5, T6 | B |
 | P2-T11 | Proposal service | T5, T10 | B |
 | P2-T12 | Claude catalyst classifier, store and service | T2 | E |
 | P2-T13 | Engine orchestrator | T8, T9, T10, T11, T12 | A |
 | P2-T14 | Pre-market job and `premarket` CLI | T7, T12 | E |
 | P2-T15 | Integration: one full simulated day | T13, T14 | A |
 
-After T2, lanes B (T3 → T5 → T10 → T11), C (T4 → T6 → T7 → T8), D (T9, once T7 is in) and E (T12 → T14, T14 once T7 is in) run in parallel. They touch disjoint files except `pyproject.toml` (T6 adds the entry-point table after `[project.scripts]`, T12 adds one dependency line; the hunks don't overlap) and `uv.lock` (T12 only).
+After T2, lanes B (T3 → T5 → T10 → T11, T10 once T6 is also in, because it imports the intent types from `trader.strategies.base`), C (T4 → T6 → T7 → T8), D (T9, once T7 is in) and E (T12 → T14, T14 once T7 is in) run in parallel. They touch disjoint files except `pyproject.toml` (T6 adds the entry-point table after `[project.scripts]`, T12 adds one dependency line; the hunks don't overlap) and `uv.lock` (T12 only).
 
 **Changes from the master-plan outline (§7.2), with reasons:**
 - **T4 creates `trader/broker/types.py`** (order spec, fees, fill decision, fill event, position/order/account views) and T6 depends on T4. The outline had these types in T5's `base.py`, but the fill model (T4) and the strategy framework (T6, `on_fill(ctx, fill)`) both need them before T5 exists. T5's `base.py` holds only the `Broker` protocol and `BrokerRejected`.
 - **T6 also creates `tests/strategies/fakes.py`** (fake market data and catalysts) so that T8 and T9, which run in parallel, share one harness.
+- **T10 depends on T6 as well as T5** (the outline listed only T5): the risk manager evaluates the `EnterLong`/`Exit`/`Cancel` intents that T6 defines.
 - **T7 creates `tests/fakes_questrade.py`**, a fake Questrade client reused by T13 and T15.
 - **T12 also holds the catalyst store and `CatalystService`** (the object strategies call as `ctx.catalysts`), so neither T6 nor T13 needs Claude details. T13 needs no extra file for it.
 - **No task was merged or dropped.**
 
-**Contracts refined (master plan §7.1), names and meaning kept:**
+**Contracts refined (master plan §7.1, which now records these refined shapes), names and meaning kept:**
 - `Strategy.on_event` and `Strategy.on_fill` are `async def`. The market-data contract (`MarketDataService`, P2-T7) is async because the Questrade client is async, and strategies read market data inside `on_event`. `schedule(cal)` stays synchronous. P3-T1 and P5 must `await` them.
 - Strategy plug-ins are constructed with their validated params (`OrbSip(params)`), and the protocol has a `params` attribute, because `schedule(cal)` has no params argument but `orb_sip`'s event times (`entry_cancel_at`, `exit_at`) are settings.
 - `Exit.order_type` is `Literal["market", "stop"]` (the `Exit` contract has no limit price).
 - `Broker.submit(spec, session=None)` and `Broker.cancel(order_id, reason, session=None)` take an optional SQLAlchemy session so the proposal service can decide and submit in one transaction (a crash can't leave an approved proposal with no order). Omitting `session` behaves exactly as the contract.
 - `Broker.end_of_session(session_date) -> list[int]` returns the cancelled order IDs.
 - `ProposalService.create/decide/expire_due` return ORM `Proposal` rows (detached). `DecisionResult` also carries `order_id`.
-- `FillModel.evaluate` is implemented by `QuoteFillModel`, which raises `TypeError` for a `Candle` (candle fills are P5-T2's `CandleFillModel`).
-- Staleness uses `QtQuote.last_trade_time`: Questrade quotes carry no other timestamp (P1-T7 `QtQuote`). A quote is also unusable when `is_halted` or `delay > 0`.
+- `FillModel` is a `Protocol` in `trader.broker.types` with two methods that both accept `market: QtQuote | Candle`: `evaluate(order, market, now) -> FillDecision | None` (the contract) and `assess(order, market, now) -> FillDecision | NoFill` (the same decision with the reason for not filling, which the broker needs to log stale quotes). `SimBroker` is typed to the `FillModel` protocol, not to `QuoteFillModel`, so P5-T2's `CandleFillModel` plugs into the same broker. Phase 2's only implementation, `QuoteFillModel`, raises `TypeError` for a `Candle`. `SimBroker.on_quotes` is the Phase 2 path; P5 adds `SimBroker.on_candles(candles: Mapping[int, Candle], now) -> list[FillEvent]`, which runs the same per-order loop with a candle in place of the quote (documented in T5, not built now). Phase 2 behaviour is unchanged.
+- **Assumption (staleness):** staleness uses `QtQuote.last_trade_time`, because Questrade quotes carry no separate quote timestamp (P1-T7 `QtQuote`). This may over-flag quiet stocks whose last trade is older than `stale_quote_seconds` while the bid/ask is live, so such orders wait instead of filling (the safe direction). It will be checked live in market hours (Phase 6, S2 recheck). A quote is also unusable when `is_halted` or `delay > 0`.
+- **Entry cutoff in the broker (BR-42, overnight hold):** the risk manager already refuses new entries at or after `session_close − no_entry_before_close_minutes` (T10 check 4), but an entry order approved earlier can still be working then. `SimBroker` therefore refuses to fill an entry (buy-to-open) order at or after that cutoff: it cancels the order with reason `"entry cutoff"` and logs a `warning` event (T5). And when `auto_flatten_on_expiry` is on, an expired `cancel` proposal auto-executes like an expired flatten, so an unanswered "cancel the entry" can't leave the order working into the close (T11).
 - `MarketDataService.quotes()` returns quotes keyed by `trader.symbols.id` with `QtQuote.symbol_id` rewritten to that ID. Inside the engine every `symbol_id` is a database ID; Questrade IDs stay at the client boundary.
 - `MarketDataService` keeps the five contract methods and adds `universe_status(session_date)` (the nightly job's fallback/stale verdict, P1-T9 ruling), `prior_close`, `prior_closes` and `symbol_ids`. `opening_bars` takes an optional `symbol_ids` filter.
-- `orb_sip` gains one setting beyond SPEC §5.2, `stale_universe: "skip" | "trade"` (default `skip`): the orchestrator's P1-T9 ruling says a stale fallback universe skips entries by default because the SPEC is silent.
+- `orb_sip` gains one setting beyond the original SPEC §5.2 table, `stale_universe: "skip" | "trade"` (default `skip`): the orchestrator's P1-T9 ruling says a stale fallback universe skips entries by default. SPEC §5.2 now lists it.
+- SPEC §10 now uses the real column names from migration 0002: `orders.order_type`, `orders.stop_price`, `orders.limit_price` and `trades.pnl_r`.
 - `claude.model` accepts `claude-sonnet-5` (default) or `claude-haiku-4-5`. SPEC §2 names the cheaper model with a date suffix; the undated alias is the current ID. Costs are computed from a per-model price table ($2/$10 and $1/$5 per million input/output tokens).
 
 Every command below runs from the repository root of your worktree unless it says otherwise. "Run from `Trader/app`" means `uv --directory Trader/app run ...`.
@@ -89,7 +92,7 @@ Every command below runs from the repository root of your worktree unless it say
 | `trader/adapters/claude/__init__.py`, `trader/adapters/claude/catalyst.py` | Classifier, store, service | T12 |
 | `tests/adapters/test_claude_catalyst.py` | T12 tests | T12 |
 | `trader/engine/orchestrator.py`, `tests/engine/test_orchestrator.py` | Engine and tests | T13 |
-| `trader/jobs/premarket.py`, `trader/cli.py` (add `premarket`), `tests/jobs/test_premarket.py` | Pre-market job | T14 |
+| `trader/jobs/premarket.py`, `trader/cli.py` (add `premarket`), `tests/jobs/test_premarket.py`, `tests/test_cli.py` (add a smoke test) | Pre-market job | T14 |
 | `tests/integration/__init__.py`, `tests/integration/test_simulated_day.py` | Full day | T15 |
 
 ## Global Constraints (reminder)
@@ -101,6 +104,7 @@ The master plan's **Global Constraints** apply to every task here, word for word
 - **Claude:** tests never reach the network. The classifier takes an injected client; the SDK-shape test gives the real `anthropic.AsyncAnthropic` (1.x, which uses `httpx2`, so `respx` can't see it) a fake `httpx2.MockTransport`. The default model is `claude-sonnet-5`.
 - **Prices** are quantized to 4 dp with `ROUND_HALF_UP` (`Q4 = Decimal("0.0001")`).
 - **IDs:** inside the engine, `symbol_id` always means `trader.symbols.id`.
+- **Assumption (quote staleness):** a quote's age is `now − QtQuote.last_trade_time`, because Questrade quotes carry no separate quote timestamp. This may over-flag quiet stocks as stale (their orders wait rather than fill). No code works around it; it is re-checked live in market hours in Phase 6 (S2 recheck).
 - Phase 1 interfaces used here, read from trunk: `trader.events.log_event`, `trader.jobs.runner.run_job`, `trader.market.repository.upsert_intraday_candles` and `trader.jobs.nightly.run_nightly` (P1-T9). If P1-T9's fix rounds renamed any of them, use the trunk names and note it in your report.
 
 ## Review Focus
@@ -110,7 +114,7 @@ The five engine failure modes most likely to hurt Stephen, most likely first. Ea
 1. **A fill on a stale, halted, delayed or one-sided quote** (quote older than `stale_quote_seconds`, `is_halted`, `delay > 0`, no bid/ask). Expected: no fill, the order keeps working, a `stale_quote` event is logged once and escalated if it persists. [P2-T4: `test_stale_quote_never_fills`, `test_unusable_quotes_never_fill`; P2-T5: `test_stale_quote_keeps_order_working_and_logs_once`]
 2. **A double decision on one proposal** (Telegram and the web at the same moment, a tap after expiry, a repeated auto path). Expected: exactly one decision and one order; every later call gets `already_decided=True`. [P2-T11: `test_concurrent_decisions_first_wins`, `test_decide_after_expiry_is_already_decided`; P2-T5: `test_order_fills_only_once`]
 3. **T+1 settlement across weekends and holidays** (Friday trades, the Wednesday before Thanksgiving, Christmas Eve). Expected: sale proceeds count as settled only on the next trading session; buys reduce settled cash at once. [P2-T3: `test_settle_date_skips_weekend_and_holidays`, `test_sale_proceeds_settle_next_session`]
-4. **A position left open at the close** (a manual-mode flatten that expires, an entry that fills late, a missed flatten). Expected: an expired flatten auto-submits when `auto_flatten_on_expiry` is on; end of session flags any open position loudly; the simulated day ends flat. [P2-T11: `test_expired_flatten_auto_submits`; P2-T13: `test_end_of_session_flags_open_position`; P2-T15: `test_full_day_ends_flat`]
+4. **A position left open at the close** (a manual-mode flatten that expires, an entry that fills late, a missed flatten). Expected: an expired flatten (and, the same way, an expired cancel) auto-submits when `auto_flatten_on_expiry` is on; the broker cancels an entry order instead of filling it at or after `session_close − no_entry_before_close_minutes` ("entry cutoff"); end of session flags any open position loudly; the simulated day ends flat. [P2-T5: `test_an_entry_that_would_fill_late_is_cancelled_instead`; P2-T11: `test_expired_flatten_auto_submits`, `test_an_entry_that_would_fill_late_is_cancelled_instead`; P2-T13: `test_end_of_session_flags_open_position`; P2-T15: `test_full_day_ends_flat`]
 5. **A kill switch blocking an exit or a protective stop.** Expected: exits, stops and cancels pass every check even with every switch tripped and outside market hours; only entries are blocked. [P2-T10: `test_exits_and_cancels_pass_when_everything_is_tripped`; P2-T13: `test_protective_stop_placed_while_kill_switch_tripped`]
 
 ---
@@ -1860,12 +1864,13 @@ git push origin HEAD:trunk
   - `OrderSpec(symbol_id: int, side: Side, order_type: OrderType, qty: int, stop: Decimal | None = None, limit: Decimal | None = None, tif: TimeInForce = "day", purpose: Purpose = "entry", position_id: int | None = None, proposal_id: int | None = None, strategy_config_id: int | None = None, stop_loss: Decimal | None = None, reason: str = "")`. Construction raises `ValueError` for qty ≤ 0, a stop/stop-limit without a positive `stop`, a limit/stop-limit without a positive `limit`, a buy that isn't an entry or an entry that isn't a buy (long only), or a sell without `position_id`. `to_json() -> dict[str, Any]` (Decimals as strings) and `OrderSpec.from_json(d) -> OrderSpec`.
   - `Fees(commission=0, ecn=0, sec=0)` with `total` property, `to_json()`, `Fees.from_json(d)`.
   - `FillDecision(price: Decimal, qty: int, slippage: Decimal, fees: Fees, quote_snapshot: dict[str, Any], trigger: str)` (`slippage` is per share); `NoFill(reason: str, detail: str = "")`; reasons: `halted`, `delayed_quote`, `stale_quote`, `no_ask`, `no_bid`, `not_triggered`, `above_limit`, `below_limit`.
-  - `FillModel` protocol: `evaluate(order: OrderSpec, market: QtQuote | Candle, now: datetime) -> FillDecision | None` (master-plan contract).
+  - `FillModel` protocol (master plan §7.1 contract, refined): `evaluate(order: OrderSpec, market: QtQuote | Candle, now: datetime) -> FillDecision | None` and `assess(order: OrderSpec, market: QtQuote | Candle, now: datetime) -> FillDecision | NoFill` (the same decision, with the reason when it doesn't fill). `SimBroker` (T5) depends on this protocol only, so P5-T2's `CandleFillModel` can implement it for replay.
   - `FillEvent(fill_id, order_id, run_id, symbol_id, side, purpose, qty, price, ts, position_id, strategy_config_id, stop_loss, proposal_id, trade_id=None, pnl=None)`; `Fill = FillEvent` (the name SPEC §5.1 uses in `on_fill`).
   - `PositionView(id, symbol_id, strategy_config_id, qty, avg_price, stop_loss, opened_at, session_date, stop_order_id, unprotected_since, unprotected_seconds)`; `OrderView(id, symbol_id, side, order_type, purpose, qty, stop, limit, status, position_id, strategy_config_id, proposal_id, submitted_at)`; `AccountState(total_cash, settled_cash, buying_power, positions_value, equity)`.
 - Produces (`trader.broker.fill_model`):
   - `FillParams(slippage_min=0.01, slippage_bps=5, stale_quote_seconds=10.0, commission=0, ecn_per_share=0.0035, direct_route=False, sec_fee_rate=0.0000206)` and `FillParams.from_settings(s: RuntimeSettings) -> FillParams`.
-  - `QuoteFillModel(params: FillParams)`: `slip(price) -> Decimal` (`max(slippage_min, slippage_bps/10000 × price)`, 4 dp half-up); `fees(side, qty, price) -> Fees` (commission per fill; ECN per share only when `direct_route`; SEC fee on sells only, `sec_fee_rate × value`); `assess(order, quote, now) -> FillDecision | NoFill`; `evaluate(order, market, now) -> FillDecision | None` (raises `TypeError` for a `Candle`); `quote_snapshot(quote, now) -> dict[str, Any]` (module function).
+  - `QuoteFillModel(params: FillParams)`: `slip(price) -> Decimal` (`max(slippage_min, slippage_bps/10000 × price)`, 4 dp half-up); `fees(side, qty, price) -> Fees` (commission per fill; ECN per share only when `direct_route`; SEC fee on sells only, `sec_fee_rate × value`); `assess(order, market, now) -> FillDecision | NoFill` and `evaluate(order, market, now) -> FillDecision | None` (both satisfy `FillModel`; both raise `TypeError` for a `Candle`, since candle fills are P5-T2's); `quote_snapshot(quote, now) -> dict[str, Any]` (module function).
+  - **Assumption (staleness):** the quote's age is `now − QtQuote.last_trade_time`, because Questrade quotes carry no separate quote timestamp. A quiet stock whose last trade is older than `stale_quote_seconds` is therefore treated as stale even if its bid/ask is live, so its orders wait (the safe direction). No code change works around this; it is re-checked live in market hours in Phase 6 (the S2 recheck).
   - Rules (SPEC §7.2), after the quote is found usable (not halted, `delay == 0` (a `None` delay is unknown and counts as delayed), `last_trade_time` present and `now − last_trade_time ≤ stale_quote_seconds`; non-positive prices count as missing):
 
     | Order | Trigger | Price | Slippage/share |
@@ -1889,7 +1894,7 @@ import pytest
 
 from trader.adapters.questrade.models import QtQuote
 from trader.broker.fill_model import FillParams, QuoteFillModel
-from trader.broker.types import FillDecision, NoFill, OrderSpec
+from trader.broker.types import FillDecision, FillModel, NoFill, OrderSpec
 from trader.market.types import Candle
 from trader.settings_store import RuntimeSettings
 
@@ -2071,6 +2076,13 @@ def test_candles_are_not_this_models_job() -> None:
     c = Candle(NOW, NOW + timedelta(minutes=1), Decimal(1), Decimal(1), Decimal(1), Decimal(1), 1, None)
     with pytest.raises(TypeError):
         MODEL.evaluate(buy(), c, NOW)
+    with pytest.raises(TypeError):
+        MODEL.assess(buy(), c, NOW)
+
+
+def test_quote_model_satisfies_the_fill_model_protocol() -> None:
+    model: FillModel = MODEL  # mypy checks the protocol; the broker is typed to FillModel, not QuoteFillModel
+    assert model.evaluate(buy(), q(), NOW) is not None
 
 
 def test_params_from_settings() -> None:
@@ -2243,7 +2255,15 @@ class NoFill:
 
 
 class FillModel(Protocol):
+    """Decides whether a working order fills against one piece of market data (master plan §7.1).
+
+    QuoteFillModel (P2-T4) fills from quotes; CandleFillModel (P5-T2) will fill from candles for replay.
+    An implementation raises TypeError for a market type it doesn't handle.
+    """
+
     def evaluate(self, order: OrderSpec, market: QtQuote | Candle, now: datetime) -> FillDecision | None: ...
+
+    def assess(self, order: OrderSpec, market: QtQuote | Candle, now: datetime) -> FillDecision | NoFill: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -2314,8 +2334,9 @@ class AccountState:
 ```python
 """Quote-based fill model for live simulation (SPEC §7.2, BR-20).
 
-Staleness uses QtQuote.last_trade_time, the only timestamp a Questrade quote carries (P1-T7).
-Candle fills for replay are a separate model (P5-T2).
+Assumption: staleness uses QtQuote.last_trade_time, because a Questrade quote carries no separate quote
+timestamp (P1-T7). This may over-flag quiet stocks as stale; it is re-checked live in Phase 6 (S2 recheck).
+QuoteFillModel implements the FillModel protocol; candle fills for replay are a separate model (P5-T2).
 """
 
 from dataclasses import dataclass
@@ -2385,12 +2406,13 @@ class QuoteFillModel:
         return Fees(commission=self._p.commission, ecn=ecn, sec=sec)
 
     def evaluate(self, order: OrderSpec, market: QtQuote | Candle, now: datetime) -> FillDecision | None:
-        if not isinstance(market, QtQuote):
-            raise TypeError("QuoteFillModel fills from quotes; candle fills belong to the replay model (P5-T2)")
         out = self.assess(order, market, now)
         return out if isinstance(out, FillDecision) else None
 
-    def assess(self, order: OrderSpec, quote: QtQuote, now: datetime) -> FillDecision | NoFill:
+    def assess(self, order: OrderSpec, market: QtQuote | Candle, now: datetime) -> FillDecision | NoFill:
+        if not isinstance(market, QtQuote):
+            raise TypeError("QuoteFillModel fills from quotes; candle fills belong to the replay model (P5-T2)")
+        quote = market
         if quote.symbol_id != order.symbol_id:
             raise ValueError(f"a quote for symbol {quote.symbol_id} can't fill an order for symbol {order.symbol_id}")
         if quote.is_halted:
@@ -2489,11 +2511,12 @@ git push origin HEAD:trunk
 - Create: `Trader/app/trader/broker/base.py`, `Trader/app/trader/broker/sim_broker.py`, `Trader/app/tests/broker/test_sim_broker.py`
 
 **Interfaces:**
-- Consumes: `Ledger`, `CashBalances` (P2-T3); `OrderSpec`, `FillDecision`, `NoFill`, `Fees`, `FillEvent`, `PositionView`, `OrderView`, `AccountState`, `Q4` (P2-T4); `QuoteFillModel` (P2-T4); models `Order`, `Fill`, `Position`, `Trade`, `EquitySnapshot`, `EventLog` (P2-T1, P1-T2); `log_event` (P1-T9); `session_scope` (P1-T2); `et_date` (P1-T4); `get_live_run` (P2-T2, tests); `tests.factories` (P2-T1).
+- Consumes: `Ledger`, `CashBalances` (P2-T3); `OrderSpec`, `FillDecision`, `NoFill`, `Fees`, `FillEvent`, `FillModel`, `PositionView`, `OrderView`, `AccountState`, `Q4` (P2-T4); `QuoteFillModel` (P2-T4, tests only); `SessionCalendar.is_session/session_close` (P1-T4); `RuntimeSettings.no_entry_before_close_minutes` (P2-T2); models `Order`, `Fill`, `Position`, `Trade`, `EquitySnapshot`, `EventLog` (P2-T1, P1-T2); `log_event` (P1-T9); `session_scope` (P1-T2); `et_date` (P1-T4); `get_live_run` (P2-T2, tests); `tests.factories` (P2-T1).
 - Produces:
   - `trader.broker.base`: `BrokerRejected(ValueError)`; `Broker` protocol: `submit(spec: OrderSpec, session: Session | None = None) -> int`, `cancel(order_id: int, reason: str, session: Session | None = None) -> bool`, `on_quotes(quotes: Sequence[QtQuote], now: datetime) -> list[FillEvent]`, `end_of_session(session_date: date) -> list[int]`.
-  - `trader.broker.sim_broker.SimBroker(factory, clock, ledger: Ledger, fill_model: QuoteFillModel, run_id: int, currency: str = "USD")` implementing `Broker`, plus: `open_positions() -> list[PositionView]`, `working_orders() -> list[OrderView]`, `working_symbol_ids() -> list[int]`, `account_state(today: date, marks: Mapping[int, Decimal], cash_account_mode: bool) -> AccountState` (a position without a mark is valued at its average price), `snapshot_equity(now: datetime, account: AccountState) -> None` (one `equity_snapshots` row per `(run_id, ts)`, peak carried forward, drawdown 4 dp).
-  - Behaviour: `submit` creates a `working` order and returns its id. Sells must name an open position of this run with exactly its quantity: larger is refused (long only), smaller is refused (no partial exits; partial fills are out of scope, SPEC §7.2). A `stop` order becomes the position's `stop_order_id` (a previous working stop is cancelled as "replaced") and ends its unprotected interval. `cancel` returns `False` unless the order is working; cancelling a position's stop restarts its unprotected interval. `on_quotes` locks this run's working orders for the quoted symbols (`FOR UPDATE SKIP LOCKED`, oldest first), so a concurrent caller can't fill one order twice. A fill writes, in one transaction: the `fills` row (with the quote snapshot), the order status, ledger rows (principal, then fees if any), and either a new position (entry) or the closed position, its `trades` row (pnl net of entry and exit fees, `pnl_r = pnl / planned_risk`, `planned_risk = (entry fill − stop_loss) × qty`, `slippage_total = (entry + exit slippage) × qty`) and the cancellation of every other working order on that position ("position closed"). An unusable quote (`stale_quote`, `halted`, `delayed_quote`, `no_ask`, `no_bid`) sets `orders.stale_since` and logs one warning; if it persists 60 s, one error event is logged and `stale_alerted` is set; a later usable quote clears `stale_since`. `end_of_session` cancels every working order of the run with `session_date <= session_date`.
+  - `trader.broker.sim_broker.SimBroker(factory, clock, ledger: Ledger, fill_model: FillModel, run_id: int, currency: str = "USD", *, calendar: SessionCalendar | None = None, settings: Callable[[], RuntimeSettings] | None = None)` implementing `Broker`. `fill_model` is typed to the `FillModel` protocol (P2-T4), not to `QuoteFillModel`. `calendar` defaults to `SessionCalendar()`; `settings` is read when an entry's cutoff is checked (the engine passes `SettingsStore.load`, so a change applies at once) and defaults to `RuntimeSettings()` defaults. Plus: `entry_cutoff(day: date) -> datetime | None` (`session_close(day) − no_entry_before_close_minutes`; `None` when `day` isn't a session), `open_positions() -> list[PositionView]`, `working_orders() -> list[OrderView]`, `working_symbol_ids() -> list[int]`, `account_state(today: date, marks: Mapping[int, Decimal], cash_account_mode: bool) -> AccountState` (a position without a mark is valued at its average price), `snapshot_equity(now: datetime, account: AccountState) -> None` (one `equity_snapshots` row per `(run_id, ts)`, peak carried forward, drawdown 4 dp).
+  - Behaviour: `submit` creates a `working` order and returns its id. Sells must name an open position of this run with exactly its quantity: larger is refused (long only), smaller is refused (no partial exits; partial fills are out of scope, SPEC §7.2). A `stop` order becomes the position's `stop_order_id` (a previous working stop is cancelled as "replaced") and ends its unprotected interval. `cancel` returns `False` unless the order is working; cancelling a position's stop restarts its unprotected interval. `on_quotes` locks this run's working orders for the quoted symbols (`FOR UPDATE SKIP LOCKED`, oldest first), so a concurrent caller can't fill one order twice. A fill writes, in one transaction: the `fills` row (with the quote snapshot), the order status, ledger rows (principal, then fees if any), and either a new position (entry) or the closed position, its `trades` row (pnl net of entry and exit fees, `pnl_r = pnl / planned_risk`, `planned_risk = (entry fill − stop_loss) × qty`, `slippage_total = (entry + exit slippage) × qty`) and the cancellation of every other working order on that position ("position closed"). An unusable quote (`stale_quote`, `halted`, `delayed_quote`, `no_ask`, `no_bid`) sets `orders.stale_since` and logs one warning; if it persists 60 s, one error event is logged and `stale_alerted` is set; a later usable quote clears `stale_since`. **Entry cutoff (BR-42, overnight hold):** before the fill model is asked, a working entry (buy-to-open) order met at or after `entry_cutoff(et_date(now))`, on a non-session day, or on a later session than its own is never filled: it is cancelled with reason `"entry cutoff"` and one `warning` event is logged (it could never fill legally, so it isn't left working). Stops and exits are never refused. `end_of_session` cancels every working order of the run with `session_date <= session_date`.
+  - **P5 path (documented, not built in Phase 2):** P5-T2 adds `on_candles(candles: Mapping[int, Candle], now: datetime) -> list[FillEvent]`, which locks the same working orders and runs the same loop (entry cutoff, then `self._fill_model.assess(spec, candle, now)`, then `_no_fill` / `_fill`) with a `CandleFillModel`. Because `SimBroker` depends only on the `FillModel` protocol, nothing else in the broker changes.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2710,6 +2733,31 @@ def test_stale_quote_keeps_order_working_and_logs_once(env: Env) -> None:
     assert order is not None and order.stale_since is None and order.status == "working"
 
 
+def test_an_entry_that_would_fill_late_is_cancelled_instead(env: Env) -> None:
+    """Review Focus 4 (BR-42): from the no-entry cutoff on, an entry is cancelled instead of filled."""
+    cutoff = CAL.session_close(DAY) - timedelta(minutes=30)  # 15:30 ET with the default 30 minutes
+    assert env.broker.entry_cutoff(DAY) == cutoff and env.broker.entry_cutoff(date(2026, 10, 4)) is None  # Sunday
+    env.clock.set(cutoff - timedelta(seconds=1))
+    pid = fill_entry(env)  # one second before the cutoff an entry still fills
+    late = entry(env, qty=5)
+    env.clock.set(cutoff)
+    market_exit(env, pid)  # exits are never refused
+    fills = env.broker.on_quotes([quote(env, "10.01", "10.02", "10.02")], cutoff)  # would trigger the buy stop
+    assert [f.purpose for f in fills] == ["exit"]
+    with env.factory() as s:
+        order = s.get(m.Order, late)
+        levels = s.execute(select(m.EventLog.level).where(m.EventLog.message.contains("entry cutoff"))).scalars().all()
+    assert order is not None and order.status == "cancelled" and order.cancel_reason == "entry cutoff"
+    assert levels == ["warning"] and env.broker.open_positions() == [] and env.broker.working_orders() == []
+
+
+def test_the_entry_cutoff_follows_the_settings(env: Env) -> None:
+    settings = RuntimeSettings(no_entry_before_close_minutes=60)
+    broker = SimBroker(env.factory, env.clock, Ledger(CAL), QuoteFillModel(FillParams()), env.run_id,
+                       calendar=CAL, settings=lambda: settings)
+    assert broker.entry_cutoff(DAY) == CAL.session_close(DAY) - timedelta(minutes=60)
+
+
 def test_order_fills_only_once(env: Env) -> None:
     """Review Focus 2: repeated or concurrent quote batches fill an order once."""
     entry(env)
@@ -2819,9 +2867,12 @@ class Broker(Protocol):
 
 Each fill is one transaction: fill row, order status, ledger rows, position and trade. Working orders are
 locked FOR UPDATE SKIP LOCKED while quotes are applied, so two callers never fill one order twice.
+An entry met at or after the no-entry cutoff (close - no_entry_before_close_minutes) is cancelled, never
+filled (BR-42). The broker depends on the FillModel protocol only; P5-T2 adds on_candles() for replay,
+running the same per-order loop with a CandleFillModel.
 """
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -2833,7 +2884,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from trader.adapters.questrade.models import QtQuote
 from trader.broker.base import BrokerRejected
-from trader.broker.fill_model import QuoteFillModel
 from trader.broker.ledger import Ledger
 from trader.broker.types import (
     Q4,
@@ -2842,6 +2892,7 @@ from trader.broker.types import (
     Fees,
     FillDecision,
     FillEvent,
+    FillModel,
     NoFill,
     OrderSpec,
     OrderView,
@@ -2850,10 +2901,13 @@ from trader.broker.types import (
 from trader.db import models as m
 from trader.db.session import session_scope
 from trader.events import log_event
+from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock, et_date
+from trader.settings_store import RuntimeSettings
 
 UNUSABLE_QUOTE = frozenset({"stale_quote", "halted", "delayed_quote", "no_ask", "no_bid"})
 STALE_ALERT_AFTER = timedelta(seconds=60)
+ENTRY_CUTOFF = "entry cutoff"
 SOURCE = "broker"
 
 
@@ -2921,9 +2975,12 @@ class SimBroker:
         factory: sessionmaker[Session],
         clock: Clock,
         ledger: Ledger,
-        fill_model: QuoteFillModel,
+        fill_model: FillModel,
         run_id: int,
         currency: str = "USD",
+        *,
+        calendar: SessionCalendar | None = None,
+        settings: Callable[[], RuntimeSettings] | None = None,
     ) -> None:
         self._factory = factory
         self._clock = clock
@@ -2931,6 +2988,15 @@ class SimBroker:
         self._fill_model = fill_model
         self.run_id = run_id
         self._currency = currency
+        self._cal = calendar if calendar is not None else SessionCalendar()
+        self._settings: Callable[[], RuntimeSettings] = settings if settings is not None else RuntimeSettings
+
+    def entry_cutoff(self, day: date) -> datetime | None:
+        """The moment entries stop filling on `day`: session close - no_entry_before_close_minutes (BR-42)."""
+        if not self._cal.is_session(day):
+            return None
+        minutes = self._settings().no_entry_before_close_minutes
+        return self._cal.session_close(day) - timedelta(minutes=minutes)
 
     @contextmanager
     def _session(self, session: Session | None) -> Iterator[Session]:
@@ -3061,15 +3127,38 @@ class SimBroker:
                 .scalars()
                 .all()
             )
+            today = et_date(now)
+            cutoff: datetime | None = None
+            cutoff_read = False
             for order in orders:
                 if order.status != "working":  # cancelled earlier in this batch (position closed)
                     continue
+                if order.purpose == "entry":
+                    if not cutoff_read:  # read the settings once per batch, and only when an entry is working
+                        cutoff, cutoff_read = self.entry_cutoff(today), True
+                    if cutoff is None or now >= cutoff or order.session_date != today:
+                        self._refuse_late_entry(s, order, now, cutoff)
+                        continue
                 outcome = self._fill_model.assess(_spec(order), by_symbol[order.symbol_id], now)
                 if isinstance(outcome, NoFill):
                     self._no_fill(s, order, outcome, now)
                     continue
                 events.append(self._fill(s, order, outcome, now))
         return events
+
+    def _refuse_late_entry(self, s: Session, order: m.Order, now: datetime, cutoff: datetime | None) -> None:
+        self._close_order(order, now, ENTRY_CUTOFF)
+        self._log(
+            s,
+            "warning",
+            f"order {order.id}: entry cutoff reached, cancelled instead of filled (no overnight hold)",
+            {
+                "order_id": order.id,
+                "reason": ENTRY_CUTOFF,
+                "cutoff": cutoff.isoformat() if cutoff else None,
+                "order_session": order.session_date.isoformat(),
+            },
+        )
 
     def _no_fill(self, s: Session, order: m.Order, outcome: NoFill, now: datetime) -> None:
         if outcome.reason not in UNUSABLE_QUOTE:
@@ -6260,7 +6349,7 @@ git push origin HEAD:trunk
   - `ProposalService(factory, clock, settings: SettingsStore, broker: Broker, run_id: int)`:
     - `create(signal_id, sized: SizedOrder, kind: ProposalKind) -> Proposal` (ORM row, detached): `pending` with `expires_at = now + TTL(kind)` (entry `proposal_ttl_entry_seconds`, stop `proposal_ttl_stop_seconds`, exit and cancel `proposal_ttl_exit_seconds`); in `auto` mode it is `auto_approved` and executed at once (`decided_via="auto"`, latency 0). `order_spec` is the spec JSON, or `{"cancel_order_id", "reason"}` for a cancel.
     - `decide(proposal_id, decision: Literal["approve","reject"], via: Literal["telegram","web","auto"], actor: str) -> DecisionResult`: locks the row; the first decision wins, any later one (or one after `expires_at`, which expires it first) returns `already_decided=True` with the current status. Approve executes in the same transaction: submit (or cancel) through the broker with the session, so the proposal is `submitted` with its `order_id`, or `failed` with `error` if the broker refuses. Stores `decided_at`, `decided_via`, `decided_by`, `decision_latency_ms`, and writes `audit_log` `proposal.approve` / `proposal.reject`.
-    - `expire_due(now) -> list[Proposal]`: every pending proposal of the run with `expires_at <= now` becomes `expired` (`expired_at` set). A protective stop logs an `error` event (the position stays unprotected; `escalated_at`, `escalations = 1`). An exit with `auto_flatten_on_expiry` on is submitted at once (`decided_via="auto"`, `decided_by="auto_flatten_on_expiry"`, final status `submitted`); with it off, an `error` escalation is logged. Entries and cancels just expire.
+    - `expire_due(now) -> list[Proposal]`: every pending proposal of the run with `expires_at <= now` becomes `expired` (`expired_at` set). A protective stop logs an `error` event (the position stays unprotected; `escalated_at`, `escalations = 1`). An exit with `auto_flatten_on_expiry` on is submitted at once (`decided_via="auto"`, `decided_by="auto_flatten_on_expiry"`, final status `submitted`); with it off, an `error` escalation is logged. A cancel with `auto_flatten_on_expiry` on is executed the same way (the working order is cancelled, `decided_by="auto_flatten_on_expiry"`, final status `submitted`, or `failed` if the order is no longer working), because an unanswered "cancel this entry" must not leave a buy working into the close (BR-42); with it off, a cancel just expires. Entries just expire.
     - `escalate_unprotected(now) -> list[Proposal]`: re-alerts (an `error` event, `escalations += 1`) every `stop_escalation_seconds` for each expired stop proposal whose position is still open with no stop order.
     - `set_approval_mode(mode: Literal["manual","auto"], actor: str) -> None`: through `SettingsStore.set`, which audits the change (SPEC §6.2).
     - Proposal status values: `pending`, `approved` (transient inside the transaction), `rejected`, `expired`, `auto_approved` (transient), `submitted`, `failed`.
@@ -6475,6 +6564,29 @@ def test_expired_flatten_escalates_when_auto_flatten_is_off(env: Env) -> None:
     with env.factory() as s:
         levels = s.execute(select(m.EventLog.level).where(m.EventLog.source == "proposals")).scalars().all()
     assert "error" in levels
+
+
+def test_an_entry_that_would_fill_late_is_cancelled_instead(env: Env) -> None:
+    """Review Focus 4 (BR-42): an unanswered cancel of a working entry executes on expiry, like a flatten."""
+    order_id = env.broker.submit(entry_sized(env).spec)  # type: ignore[arg-type]
+    sized = SizedOrder(Cancel(order_id, "entry_cancel_at"), "cancel", 10, None, cancel_order_id=order_id)
+    p = env.svc.create(env.signal_id, sized, "cancel")
+    (expired,) = env.svc.expire_due(T + timedelta(minutes=5))
+    assert expired.id == p.id and expired.status == "submitted" and expired.expired_at == T + timedelta(minutes=5)
+    assert expired.decided_via == "auto" and expired.decided_by == "auto_flatten_on_expiry"
+    assert env.broker.working_orders() == []  # the entry can no longer fill late
+    with env.factory() as s:
+        order = s.get(m.Order, order_id)
+    assert order is not None and order.status == "cancelled" and order.cancel_reason == "entry_cancel_at"
+
+
+def test_an_expired_cancel_just_expires_when_auto_flatten_is_off(env: Env) -> None:
+    env.store.set("auto_flatten_on_expiry", False, actor="stephen")
+    order_id = env.broker.submit(entry_sized(env).spec)  # type: ignore[arg-type]
+    sized = SizedOrder(Cancel(order_id, "entry_cancel_at"), "cancel", 10, None, cancel_order_id=order_id)
+    env.svc.create(env.signal_id, sized, "cancel")
+    (expired,) = env.svc.expire_due(T + timedelta(minutes=5))
+    assert expired.status == "expired" and [o.id for o in env.broker.working_orders()] == [order_id]
 
 
 def test_a_cancel_proposal_cancels_the_order(env: Env) -> None:
@@ -6710,10 +6822,11 @@ class ProposalService:
         if p.kind == "stop":
             p.escalated_at, p.escalations = now, 1
             self._log(s, "error", f"protective stop proposal {p.id} expired: position {p.position_id} has no stop", p)
-        elif p.kind == "exit" and settings.auto_flatten_on_expiry:
+        elif p.kind in ("exit", "cancel") and settings.auto_flatten_on_expiry:
+            # BR-42: an unanswered flatten, or an unanswered cancel of a working entry, executes by itself
             p.decided_at, p.decided_via, p.decided_by = now, "auto", "auto_flatten_on_expiry"
             self._execute(s, p)
-            self._log(s, "warning", f"exit proposal {p.id} expired and was submitted automatically", p)
+            self._log(s, "warning", f"{p.kind} proposal {p.id} expired and was executed automatically", p)
         elif p.kind == "exit":
             p.escalated_at, p.escalations = now, 1
             self._log(s, "error", f"exit proposal {p.id} expired: position {p.position_id} is still open", p)
@@ -7478,7 +7591,7 @@ git push origin HEAD:trunk
     - `async on_quotes(quotes, now) -> list[FillEvent]` and `async poll_quotes() -> list[FillEvent]` (quotes for the symbols with working orders, then `on_quotes`). After each fill: an equity snapshot, a kill-switch evaluation, then `on_fill` of the strategy that owns the position (by `strategy_config_id`, even if that strategy has since been disabled) and its intents handled with event key `fill:<fill_id>`.
     - `async tick(now) -> None`: `expire_due(now)` then `escalate_unprotected(now)`.
     - `async end_of_session(session_date) -> list[PositionView]`: cancels working orders, snapshots equity, and returns positions still open, logging a `critical` event when there are any (BR-42 safety net).
-  - `build_engine(core: Core, client: QuoteClient, catalysts: CatalystSource) -> Engine`: the live run, a registry with defaults, the market-data service, a sim broker with fill params from settings. P3's worker uses it; the worker rebuilds it each session so fill settings changes apply.
+  - `build_engine(core: Core, client: QuoteClient, catalysts: CatalystSource) -> Engine`: the live run, a registry with defaults, the market-data service, a sim broker with fill params from settings and the entry cutoff read live from the settings store (`calendar=core.calendar, settings=core.settings.load`). P3's worker uses it; the worker rebuilds it each session so fill settings changes apply.
   - Contexts: an entry strategy sees its own open positions and working orders (every revision of its config); an overlay sees every open position of the entry strategies. `entries_today` counts the strategy's entry proposals for the session in `pending`, `approved`, `auto_approved` or `submitted`, so a re-fired event can't open a second position.
 
 - [ ] **Step 1: Write the failing tests**
@@ -7568,7 +7681,8 @@ def build(factory: sessionmaker[Session], *, auto: bool) -> World:
     fq.add_bars(102, "FiveMinutes", [five("30.00", "30.60", "29.90", "30.50", 3000)])
     registry = StrategyRegistry(factory, clock)
     registry.ensure_defaults()
-    broker = SimBroker(factory, clock, Ledger(CAL), QuoteFillModel(FillParams.from_settings(settings)), run.id)
+    broker = SimBroker(factory, clock, Ledger(CAL), QuoteFillModel(FillParams.from_settings(settings)), run.id,
+                       calendar=CAL, settings=store.load)
     proposals = ProposalService(factory, clock, store, broker, run.id)
     ks = KillSwitches(factory, clock)
     engine = Engine(
@@ -8125,6 +8239,8 @@ def build_engine(core: Core, client: QuoteClient, catalysts: CatalystSource) -> 
         QuoteFillModel(FillParams.from_settings(settings)),
         run.id,
         currency=settings.account_currency,
+        calendar=core.calendar,
+        settings=core.settings.load,  # the entry cutoff follows no_entry_before_close_minutes live
     )
     return Engine(
         factory=core.factory,
@@ -8163,7 +8279,7 @@ git push origin HEAD:trunk
 
 **Files:**
 - Create: `Trader/app/trader/jobs/premarket.py`, `Trader/app/tests/jobs/test_premarket.py`
-- Modify: `Trader/app/trader/cli.py` (add `premarket`)
+- Modify: `Trader/app/trader/cli.py` (add `premarket`), `Trader/app/tests/test_cli.py` (add the `premarket` smoke test)
 
 **Interfaces:**
 - Consumes: `FinvizScraper.screen(filters, view=111, signal=None) -> ScreenerPage` and `.news(ticker, today_et)` (P1-T5; `ScreenerPage(total, header, rows, bad_rows=0)`, rows are dicts with `"Ticker"`; failures raise `FinvizError`); `to_questrade_ticker` (P1-T5); `MarketDataService.universe`, `quotes`, `prior_closes` (P2-T7); `CatalystService.classify_many`, `mark_unclassified`, `CatalystRequest`, `OVER_CAP`, `CatalystStore`, `CatalystClassifier` (P2-T12); `RuntimeSettings` (`universe_finviz_filters`, `premarket_*`, `claude_premarket_max_candidates`; P1-T3/P2-T2); `OVERLAY_SYMBOL` (P1-T3); `run_job` (P1-T9: returns `skipped` for a session that already succeeded, or while another run holds the job's lock); `log_event` (P1-T9); `FakeQuestrade` (P2-T7) in tests.
@@ -8748,7 +8864,8 @@ def setup_day(factory: sessionmaker[Session]) -> Day:
                                 CatalystClassifier(claude, store.load), finviz)
     registry = StrategyRegistry(factory, clock)
     registry.ensure_defaults()
-    broker = SimBroker(factory, clock, Ledger(CAL), QuoteFillModel(FillParams.from_settings(settings)), run.id)
+    broker = SimBroker(factory, clock, Ledger(CAL), QuoteFillModel(FillParams.from_settings(settings)), run.id,
+                       calendar=CAL, settings=store.load)
     engine = Engine(
         factory=factory,
         clock=clock,
@@ -8892,11 +9009,12 @@ git push origin HEAD:trunk
 ## Self-review (done by the plan author)
 
 - **Spec coverage (Phase 2 scope):**
-  - BR-03 (pre-market scan, catalysts recorded) → T14, T12. BR-05 (Claude type, quality, reason) → T12. BR-10 (plug-ins, versioned settings, no engine change) → T6 (entry points, `strategy_configs` revisions). BR-11 → T8. BR-12 → T9. BR-13 (rule values on every signal) → T8 evidence plus T13 `evidence.sizing`. BR-20 (quote fills, slippage) → T4. BR-21 (cash, positions, T+1, settled-cash rule) → T3, T5, T10 check 5. BR-22 (capital, currency, FX cost, markets) → T2, T10 check 6. BR-23 (audit trail) → T5 (fills with quote snapshots), T11 (`audit_log` for decisions), T13 (signals). BR-40 → T10. BR-41 → T10 (daily loss, drawdown, expectancy; manual reset with reason). BR-42 → T8 flatten, T11 auto-flatten on expiry, T13 end-of-session alarm, T15.
+  - BR-03 (pre-market scan, catalysts recorded) → T14, T12. BR-05 (Claude type, quality, reason) → T12. BR-10 (plug-ins, versioned settings, no engine change) → T6 (entry points, `strategy_configs` revisions). BR-11 → T8. BR-12 → T9. BR-13 (rule values on every signal) → T8 evidence plus T13 `evidence.sizing`. BR-20 (quote fills, slippage) → T4. BR-21 (cash, positions, T+1, settled-cash rule) → T3, T5, T10 check 5. BR-22 (capital, currency, FX cost, markets) → T2, T10 check 6. BR-23 (audit trail) → T5 (fills with quote snapshots), T11 (`audit_log` for decisions), T13 (signals). BR-40 → T10. BR-41 → T10 (daily loss, drawdown, expectancy; manual reset with reason). BR-42 → T8 flatten, T5 entry cutoff in the broker (a late entry is cancelled, never filled), T11 auto-flatten (and auto-cancel) on expiry, T13 end-of-session alarm, T15.
   - SPEC §3a (runs, clock, intents, proposals, orders, fills) → T1, T2, T6. §4.2 pre-market → T14. §4.3 (schema output, budget, cap, 9:35 classification) → T12, T14, T8/T13 via `CatalystService.get`. §5.1 → T6 (refined: async callbacks). §5.2 → T8 (all 7 steps; `stale_universe` added per the P1-T9 ruling). §5.3 → T9. §6.1 → T10. §6.2 (states, TTLs, unprotected escalation, auto flatten, audited approval mode) → T11. §6.3 → T10. §7.1 order types and end-of-session cancel → T4, T5. §7.2 every table row, stale quotes, fees, snapshot → T4, T5. §7.3 → T2, T3. §10 trading tables and both views → T1. §13 runtime settings → T2.
   - Out of this phase on purpose: Telegram messages and the scheduler/worker loop (P3: the engine exposes `run_event`, `poll_quotes`, `tick`, `end_of_session`), the candle fill model and replay run creation (P5), the weekly report's Claude commentary (P5, `adapters/claude/reports.py`), `users` (P4).
 - **Placeholders:** none. Two conditional notes give exact fixes: T1 Step 4 (which side to fix if the model/migration comparison differs) and T12 Step 5 (confirm the installed SDK is 1.x if the SDK-shape test fails).
 - **Type consistency:** `OrderSpec`, `FillEvent`/`Fill`, `PositionView`, `OrderView`, `AccountState` (T4) are used unchanged by T5, T6, T8–T13. `SizedOrder.kind` and `ProposalKind` (T10) match `ProposalService.create(..., kind)` (T11). `CatalystInfo` (T6) is satisfied by `StoredCatalyst` (T12) and `FakeCatalyst`. `MarketDataView` (T6) is implemented by `MarketDataService` (T7) and `FakeData`; `prior_closes` is on the service only (T14 uses the service). Event keys `orb_open`, `entry_cancel`, `flatten`, `overlay_decision` are defined in T8/T9 and used by T13/T15. DB symbol IDs everywhere; Questrade IDs only inside `FakeQuestrade` and at `MarketDataService`'s client boundary.
-- **Review Focus tests:** 1 → T4 `test_stale_quote_never_fills`, `test_unusable_quotes_never_fill`; T5 `test_stale_quote_keeps_order_working_and_logs_once`. 2 → T11 `test_concurrent_decisions_first_wins`, `test_decide_after_expiry_is_already_decided`; T5 `test_order_fills_only_once`. 3 → T3 `test_settle_date_skips_weekend_and_holidays`, `test_sale_proceeds_settle_next_session`. 4 → T11 `test_expired_flatten_auto_submits`; T13 `test_end_of_session_flags_open_position`; T15 `test_full_day_ends_flat`. 5 → T10 `test_exits_and_cancels_pass_when_everything_is_tripped`; T13 `test_protective_stop_placed_while_kill_switch_tripped`. The master plan's items 2 (early closes) and 4 (missing candle) also have Phase 2 tests: T6 `test_offsets_follow_an_early_close`, T8 `test_an_early_close_moves_the_flatten`, T10 `test_entry_window_follows_an_early_close_and_holidays`, T7 `test_opening_bars_report_api_errors_per_symbol`, T8 `test_missing_bars_and_baselines_are_noted_not_raised`.
+- **Review Focus tests:** 1 → T4 `test_stale_quote_never_fills`, `test_unusable_quotes_never_fill`; T5 `test_stale_quote_keeps_order_working_and_logs_once`. 2 → T11 `test_concurrent_decisions_first_wins`, `test_decide_after_expiry_is_already_decided`; T5 `test_order_fills_only_once`. 3 → T3 `test_settle_date_skips_weekend_and_holidays`, `test_sale_proceeds_settle_next_session`. 4 → T5 `test_an_entry_that_would_fill_late_is_cancelled_instead`; T11 `test_expired_flatten_auto_submits`, `test_an_entry_that_would_fill_late_is_cancelled_instead`; T13 `test_end_of_session_flags_open_position`; T15 `test_full_day_ends_flat`. 5 → T10 `test_exits_and_cancels_pass_when_everything_is_tripped`; T13 `test_protective_stop_placed_while_kill_switch_tripped`. The master plan's items 2 (early closes) and 4 (missing candle) also have Phase 2 tests: T6 `test_offsets_follow_an_early_close`, T8 `test_an_early_close_moves_the_flatten`, T10 `test_entry_window_follows_an_early_close_and_holidays`, T7 `test_opening_bars_report_api_errors_per_symbol`, T8 `test_missing_bars_and_baselines_are_noted_not_raised`.
 - **Code checked before hand-off:** every code block in this plan was laid over trunk at `4f65a89` (Phase 1 complete, P1-REVIEW accepted) in a scratch copy outside the repo and run through the gate: `ruff check`, `ruff format` and `mypy trader` clean, and 564 tests passed, including every Phase 2 test, the integration day, and the P1 gauntlet suites for T2–T9. That run found and fixed four things now in the plan: the catalyst upsert must key the `type` column by its column name; `anthropic` 1.x uses `httpx2`, so the SDK-shape test uses `httpx2.MockTransport`, not `respx`; P1's `test_upgrade_at_head_is_a_noop` pinned head `0001` (T1 Step 5); and a few type and line-length fixes. Not run there: `tests/test_build_scripts.py` and the P1-T1 breaker, which load `Trader/build/` from outside `Trader/app`.
+- **Fix round (attempt 2), re-checked:** after the plan-review fixes (T10 depends on T6; the broker's entry cutoff and the auto-executed expired cancel for BR-42; the `FillModel` protocol with `assess`; the staleness assumption; `tests/test_cli.py` in T14's files), every code block from P2-T2 onwards was laid over trunk at `c36f03e` (P2-T1 built and accepted) in a scratch copy of the whole `Trader/` tree outside the repo, with `anthropic` and `httpx2` added as T12 says. `check.sh` passed: `ruff check`, `ruff format --check` and `mypy trader` clean, 585 tests passed (including `tests/test_build_scripts.py` this time).
 - **P1-T9 fix-round inputs folded in:** the stale fallback universe (`universe_status` in T7, `stale_universe="skip"` in T8), `avg_open_vol_14d` being `NULL` with too few bars (T8 notes and skips the symbol), `run_job` returning `skipped` under the advisory lock (T14 prints the status), and `QtQuote.delay` being `None` when unknown (T4 treats it as delayed). Builders re-read `trader/jobs/nightly.py` for the exact detail keys.

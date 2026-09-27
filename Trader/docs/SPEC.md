@@ -235,6 +235,7 @@ class Strategy(Protocol):
 | `entry_cancel_at` | `open+120m` | 11:30 ET; `null` = work all day (the paper's rule) |
 | `exit_at` | `close-10m` | flatten |
 | `doji_body_pct_max` | 0.10 | body/range ≤ 10% counts as a doji → skip |
+| `stale_universe` | `skip` | `skip` \| `trade`: what to do when the nightly job flagged the fallback universe as stale (§4.2, `fallback_stale`). `skip` emits no entries that session and logs an error note (orchestrator ruling in P1-T9) |
 
 **Event `open+5m` (9:35:05 ET):**
 1. For every symbol in the universe, fetch the 9:30–9:35 five-minute bar (batched and rate-limited).
@@ -404,10 +405,10 @@ Timestamps are `timestamptz` in UTC. Money is `numeric(14,4)`. Primary keys are 
 | `candidates` | id, run_id, session_date, strategy_key, symbol_id, rvol, rank, candle jsonb, passed bool, reject_reason | Every ranked name, including rejected ones |
 | `signals` | id, run_id, strategy_config_id, symbol_id, ts, intent jsonb, evidence jsonb | What the strategy wanted |
 | `proposals` | id, run_id, signal_id, kind (entry/stop/exit/cancel), order_spec jsonb, qty, status, created_at, expires_at, decided_at, decided_via (telegram/web/auto), decision_latency_ms | Approval workflow |
-| `orders` | id, run_id, proposal_id, symbol_id, side, type, qty, stop, limit, tif, status, submitted_at, closed_at | Simulated orders |
+| `orders` | id, run_id, proposal_id, symbol_id, side, order_type, qty, stop_price, limit_price, tif, status, submitted_at, closed_at | Simulated orders |
 | `fills` | id, order_id, ts, qty, price, fees jsonb, quote_snapshot jsonb, slippage | Executions |
 | `positions` | id, run_id, symbol_id, strategy_config_id, qty, avg_price, opened_at, closed_at, stop_order_id, unprotected_seconds | Position life cycle |
-| `trades` | id, run_id, position_id, entry_price, exit_price, qty, pnl, pnl_R, planned_risk, exit_reason, slippage_total | Round trips (for metrics) |
+| `trades` | id, run_id, position_id, entry_price, exit_price, qty, pnl, pnl_r, planned_risk, exit_reason, slippage_total | Round trips (for metrics) |
 | `cash_ledger` | id, run_id, ts, trade_date, settle_date, currency, amount, kind, ref | Cash and T+1 settlement |
 | `equity_snapshots` | run_id, ts, equity, cash, settled_cash, peak_equity, drawdown_pct | Equity curve |
 | `journal` | run_id, session_date, rules_followed bool, notes, answered_via | Daily adherence |

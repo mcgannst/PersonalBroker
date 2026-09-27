@@ -8738,7 +8738,7 @@ The day (Tue 2026-10-06, auto approval, fake clock, fake FinViz/Questrade/Claude
 
 Money: buy 33 × 21.5608 = 711.5064; sell 33 × 21.8890 = 722.3370; SEC fee 0.0149; pnl = 0.3282 × 33 − 0.0149 = 10.8157; planned risk (21.5608 − 21.41) × 33 = 4.9764; R = 2.1734; slippage (0.0108 + 0.0110) × 33 = 0.7194. Cash: 730.8157 total; settled on the day 720 − 711.5064 − 0.0149 = 8.4787; settled next session 730.8157.
 
-- [ ] **Step 1: Write the integration test**
+- [x] **Step 1: Write the integration test**
 
 `Trader/app/tests/integration/__init__.py`: empty file.
 
@@ -8998,12 +8998,12 @@ async def test_stop_out_day_ends_flat(db_factory: sessionmaker[Session]) -> None
     assert all(p.closed_at is not None for p in positions)
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `uv --directory Trader/app run pytest tests/integration -q`
 Expected: 2 passed. This task adds no production code, so it passes as soon as it's written if T1–T14 are right. If it fails, don't patch it here: find the owning task from the failing step (nightly → P1-T9, pre-market → P2-T14, the 9:35 scan → P2-T8/T13, fills and ledger → P2-T4/T5, proposals → P2-T11) and report it as a finding with the exact assertion, so the orchestrator reopens that task.
 
-- [ ] **Step 3: Run the gate, commit and push**
+- [x] **Step 3: Run the gate, commit and push**
 
 Run: `uv --directory Trader/app run ruff format .` then `bash Trader/app/scripts/check.sh` → all pass.
 ```bash

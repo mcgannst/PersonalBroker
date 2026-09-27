@@ -228,6 +228,14 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 - [x] 12. Settled keys: after `orb_open` is `missed`, `fired_keys` contains it and `due_events` no longer returns it (exactly one failed run and one `error` event after ten further `due_events`/`fire_event` rounds driven the way the worker drives them); a runner that fails three times makes the key settled, and a fourth round does not call it.
 - [x] 13. Gate and commit `P3-T3: ...`.
 
+**Fix round 1 (gauntlet P3-B1 + review, orchestrator rulings; supersedes the text above where they differ):**
+- **Success not recordable:** besides the `failed` outcome, `run_job`/`run_job_async` write a best-effort `critical` event (source `job.<job>`, on a fresh session) so the relay alerts. New keyword `rerun_abandoned: bool = True` on both: when False (and not `force`), a leftover `running` row found under the lock is settled as failed with error `outcome unknown: not re-run automatically` (`runner.OUTCOME_UNKNOWN`) plus one `critical` event, and the body is not run. `fire_event` passes `rerun_abandoned = force or event.always_fire_late`: an entry-type event whose outcome is unknown is never re-run automatically, safety events (flatten, entry_cancel, overlay_decision: idempotent) are. `fired_keys` treats `outcome unknown` as settled. `trader event KEY --force` still runs it.
+- **Plan problems:** `DayPlan` gains `problems: tuple[PlanProblem, ...] = ()` (`PlanProblem(kind, key, message, strategies)`, `problem_id = "<kind>:<key>"`); `day_plan` stays pure. `report_plan_problems(factory, clock, plan) -> int` writes each problem as ONE `error` event (source `scheduler`, `data.problem`, `data.session_date`) per session, deduped under a transaction advisory lock. `fire_event` calls it; the worker step should call it too (the breaker harness's worker round does).
+- **Retry backoff:** a failed attempt is retried only after `RETRY_BACKOFF_SECONDS = (30, 60, 120)` (`retry_backoff(n)`); until then `fire_event` returns `skipped` `{"reason": "retry backoff", "attempts", "retry_at"}`. Entry keys settle after `MAX_EVENT_ATTEMPTS` (attempts at +0, +30, +90 s: inside the grace). Safety keys are never settled by failures (`fired_keys(..., always_fire_late=None)` reads the stored setting when needed) and retry every 120 s until the close, when they are `missed`.
+- **Grace boundary:** exact `timedelta` comparison (120.9 s late with a 120 s grace is missed); `late_seconds` is rounded up.
+- **Disabled strategies (P2-REVIEW, BR-42):** `day_plan(..., exits_only=...)` also schedules the safety events (`scheduler.always_fire_late`) of disabled strategies that still own an open position or a working order; `exits_only_strategies(factory, registry, run_id)` finds them and `live_day_plan(factory, registry, run_id, cal, session_date, settings)` is the worker's plan (enabled + exits-only). The engine runs them exits-only.
+- Added tests: backoff (30 s wait, 30/60/120), exact grace, safety key retrying to the close, leftover `running` entry event settled / safety event re-run / `--force`, plan problems once per session, exits-only plan (pure and live), runner critical event and `rerun_abandoned`.
+
 ---
 
 ### Task P3-T4: Message formats (`Renderer`)
@@ -359,7 +367,7 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 - `/pnl`: today's realized P&L (trades with today's `session_date`), unrealized (as `/positions`), week to date (trades since the Monday of the current ET week), equity and drawdown from the latest `equity_snapshots` row (or the sim account's starting cash when there is none).
 - `/pending`: `messenger.send_proposal(id, resend=True)` for each pending proposal of the live run, oldest first; replies `No pending proposals.` when there are none, else nothing extra.
 - `/pause`: if `manual_pause` is already active, reply `Already paused.`; else issue a `pause` nonce (TTL `telegram.confirm_ttl_seconds`, actions `y`/`n`) and send `render.pause_confirm(buttons)` ("Pause new entries? Exits and stops keep working."). `confirm_pause("y")` calls `KillSwitches.pause(run_id, current_session(calendar, now), actor="telegram")` (audited by P2) and returns `Paused: new entries are blocked.`; `"n"` returns `Cancelled.`.
-- `/resume`: `KillSwitches.resume(run_id, actor="telegram")`; True → `Manual pause lifted.` plus, when automatic switches are still tripped, `Still blocked by: <switches>. Reset them in the web app.`; False → `Not paused.`. It never resets an automatic switch (BR-34).
+- `/resume`: `KillSwitches.resume(run_id, actor="telegram")`; True → `Manual pause lifted.` plus, when automatic switches are still tripped, `Still blocked by:` and one line per switch saying how it clears (fix round 1); False → `Not paused.`. It never resets an automatic switch (BR-34).
 - `/help`: `render.help()`.
 - Read-only commands open read-only DB work only; only `/pause` confirmation and `/resume` change state.
 
@@ -374,6 +382,11 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 - [x] 8. `/resume` lifts `manual_pause` only: with `max_drawdown_pct` also tripped it stays blocking and the reply names it; `/resume` when not paused replies `Not paused.`.
 - [x] 9. `/status@StephenTraderDevBot` works; `/nonsense` and plain text get the unknown-command reply; `/help` calls `render.help()`.
 - [x] 10. Gate and commit `P3-T7: ...`.
+
+**Fix round 1 (review nits):**
+- `/resume` with automatic switches still tripped lists each on its own line with how it clears: `daily_loss_pct` "clears by itself at the next session", the others "reset it in the web app (with a reason)" (replaces "Reset them in the web app").
+- `/pnl` adds a second reply `Unrealized P&L is partial: no quote for <tickers>.` when a position has no quote (`PnlView` is unchanged: its field list is a contract); `pnl_view(deps, lines=None)` can reuse the position lines.
+- The heartbeat age is None (worker not running) when the heartbeat row's phase is `stopped`.
 
 ---
 
@@ -408,6 +421,13 @@ The five Phase 3 failure modes most likely to hurt Stephen, most likely first. E
 - [x] 8. After 50 events accumulate with `relay_catchup_max = 20`, one pump sends 20 plus one summary, and the next pump sends nothing old.
 - [x] 9. A messenger that raises in `send_proposal` does not stop fills and events from being relayed in the same pump.
 - [x] 10. Gate and commit `P3-T8: ...`.
+
+**Fix round 1 (gauntlet P3-B1 + review, orchestrator rulings; supersedes the text above where they differ):**
+- **Out-of-order commits:** every pump also re-scans a trailing window below the cursor: relevant rows with `id > cursor − 1000` and `ts >= now − 120 s`, above the stream's re-scan floor. Chosen: the time bound, because a late row is one whose writer transaction was still open, and that is bounded in time (ours take milliseconds to seconds), not in ids; it also limits re-sends to the last 2 minutes of rows. The id bound only keeps the query on the primary-key index. Rows this instance already handled, and rows whose dedupe key is already in `notifications`, are dropped before rendering; anything else is a notifier dedupe no-op. Late rows are not counted in `RelayReport`.
+- **Re-scan floor:** a `<stream>.floor` row in `notify_cursors`, created at the cursor (no history) and moved to the highest id skipped by the catch-up cap, so capped rows are never sent by the re-scan.
+- **Poison rows:** each row is rendered in its own savepoint and try; a failure logs `relay.row_failed` with the exception type only, writes ONE `error` event (source `notify.relay`, `data.row = "<stream prefix>:<id>"`, never relayed: `NEVER_RELAYED = ("telegram", "notify.relay")`), skips the row, and the cursor still moves past it.
+- **Catch-up cap:** applies only to a real backlog: the first pump of a relay instance (a restart) or waiting rows older than 5 minutes (`BACKLOG_AGE`). A fresh burst in normal running is sent in full. `relay_catchup_max = 0` means no cap.
+- Added tests: cap 0, fresh burst uncapped, aged backlog capped without a restart, a row committed below the cursor, an unrenderable row (one error event, not relayed); test 6 now checks that a second instance's re-scan sends nothing twice (it may re-render), test 8 uses a fresh instance (a restart).
 
 ---
 

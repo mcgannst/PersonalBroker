@@ -91,11 +91,21 @@ def _token(deps: CommandDeps, now: datetime) -> tuple[bool, float | None, str | 
 
 
 def _heartbeat_age(deps: CommandDeps, now: datetime) -> float | None:
+    """Seconds since the worker's last beat; None when there is no row or the worker said it stopped
+    (phase `stopped`: a clean shutdown, so it is not running however recent the beat)."""
     with deps.factory() as s:
-        beat = s.execute(
-            select(m.WorkerHeartbeat.beat_at).where(m.WorkerHeartbeat.process == "worker")
-        ).scalar_one_or_none()
-    return (now - beat).total_seconds() if beat is not None else None
+        row = s.execute(
+            select(m.WorkerHeartbeat.beat_at, m.WorkerHeartbeat.phase).where(
+                m.WorkerHeartbeat.process == "worker"
+            )
+        ).one_or_none()
+    if row is None:
+        return None
+    beat_at: datetime = row[0]
+    phase: str = row[1]
+    if phase == "stopped":
+        return None
+    return (now - beat_at).total_seconds()
 
 
 def _pending_ids(deps: CommandDeps) -> list[int]:
@@ -202,9 +212,11 @@ def _trade_pnl(s: Session, run_id: int, since: date, until: date | None = None) 
     return Decimal(s.execute(q).scalar_one())
 
 
-async def pnl_view(deps: CommandDeps) -> PnlView:
+async def pnl_view(deps: CommandDeps, lines: Sequence[PositionLine] | None = None) -> PnlView:
     """Today's realized P&L, the unrealized P&L of open positions, the week to date (from the Monday of the
-    current ET week) and equity/drawdown from the latest snapshot (or the starting cash when none)."""
+    current ET week) and equity/drawdown from the latest snapshot (or the starting cash when none).
+    Positions without a quote are left out of `unrealized` (the /pnl handler then says it is partial).
+    `lines` reuses already-built position lines (one quote fetch per command)."""
     now = deps.clock.now()
     session_date = current_session(deps.calendar, now)
     today = et_date(now)
@@ -226,7 +238,8 @@ async def pnl_view(deps: CommandDeps) -> PnlView:
             ).scalar_one_or_none()
             equity = peak = cash if cash is not None else Decimal(0)
             drawdown = Decimal(0)
-    lines = await position_lines(deps)
+    if lines is None:
+        lines = await position_lines(deps)
     unrealized = sum((ln.unrealized_pnl for ln in lines if ln.unrealized_pnl is not None), Decimal(0))
     return PnlView(
         session_date=session_date,
@@ -240,6 +253,14 @@ async def pnl_view(deps: CommandDeps) -> PnlView:
 
 
 # --- command handler -------------------------------------------------------------------------------------
+
+
+def _reset_hint(switch: str) -> str:
+    """How an automatic switch clears (killswitch.py): daily_loss_pct by itself at the next session; the
+    others only by a reset with a reason in the web app."""
+    if switch == "daily_loss_pct":
+        return "clears by itself at the next session"
+    return "reset it in the web app (with a reason)"
 
 
 def parse_command(text: str) -> str | None:
@@ -264,7 +285,12 @@ class Commands:
         if command == "/positions":
             return [d.render.positions(await position_lines(d), d.clock.now())]
         if command == "/pnl":
-            return [d.render.pnl(await pnl_view(d))]
+            lines = await position_lines(d)
+            out = [d.render.pnl(await pnl_view(d, lines))]
+            unpriced = [ln.ticker for ln in lines if ln.unrealized_pnl is None]
+            if unpriced:  # the unrealized figure leaves these out: say so rather than show a false total
+                out.append(d.render.reply(f"Unrealized P&L is partial: no quote for {', '.join(unpriced)}."))
+            return out
         if command == "/pending":
             return await self._pending()
         if command == "/pause":
@@ -310,7 +336,8 @@ class Commands:
             return "Not paused."
         still = [a.switch for a in d.killswitches.active(d.run_id, self._session())]
         if still:
-            return f"Manual pause lifted.\nStill blocked by: {', '.join(still)}. Reset them in the web app."
+            notes = "\n".join(f"- {switch}: {_reset_hint(switch)}" for switch in still)
+            return f"Manual pause lifted.\nStill blocked by:\n{notes}"
         return "Manual pause lifted."
 
     async def confirm_pause(self, action: str) -> str:

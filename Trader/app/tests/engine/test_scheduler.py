@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -12,6 +13,8 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from tests.factories import add_run, add_symbol
+from trader.db import models as m
 from trader.db.models import EventLog, JobRun
 from trader.engine.scheduler import (
     DayPlan,
@@ -24,12 +27,16 @@ from trader.engine.scheduler import (
     event_job,
     fire_event,
     fired_keys,
+    live_day_plan,
+    report_plan_problems,
+    retry_backoff,
 )
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import FixedClock
 from trader.settings_store import RuntimeSettings
 from trader.strategies.base import ScheduledEvent, SessionOffset, Strategy
 from trader.strategies.orb_sip import OrbSip, OrbSipParams
+from trader.strategies.registry import StrategyRegistry
 from trader.strategies.spy_overlay import SpyOverlay
 
 ET = ZoneInfo("America/New_York")
@@ -351,8 +358,27 @@ async def test_8_runner_failure_is_recorded_and_retried(db_factory: sessionmaker
     assert job_rows(db_factory) == [("event:orb_open", "failed", "RuntimeError: engine blew up")]
     assert len(error_events(db_factory)) == 1
     h.runner.fail = False
+    # fix round 1: the retry waits out a 30 s backoff after the first failure
+    h.clock.advance(timedelta(seconds=29))
+    waiting = await h.fire("orb_open", TUE)
+    assert waiting.status == "skipped" and waiting.detail["reason"] == "retry backoff"
+    assert waiting.detail["attempts"] == 1 and len(h.runner.calls) == 1
+    h.clock.advance(timedelta(seconds=1))
     assert (await h.fire("orb_open", TUE)).status == "fired"
     assert len(h.runner.calls) == 2
+
+
+def test_retry_backoff_is_30_60_then_120_seconds() -> None:
+    assert [retry_backoff(n).total_seconds() for n in (1, 2, 3, 4, 9)] == [30, 60, 120, 120, 120]
+
+
+@pytestdb
+async def test_grace_is_compared_exactly_not_truncated(db_factory: sessionmaker[Session]) -> None:
+    late = utc(TUE, 13, 35, 5) + timedelta(seconds=120, milliseconds=900)
+    h = harness(db_factory, late)
+    out = await h.fire("orb_open", TUE)
+    assert out.status == "missed" and out.detail["late_seconds"] == 121
+    assert h.built == 0
 
 
 @pytestdb
@@ -372,12 +398,106 @@ async def test_12_missed_event_is_settled_after_one_alert(db_factory: sessionmak
 async def test_12_three_failures_settle_the_key(db_factory: sessionmaker[Session]) -> None:
     h = harness(db_factory, et(TUE, 9, 35, 5))
     h.runner.fail = True
-    for _ in range(3):
+    # attempts at +0 s, +30 s and +90 s (the 30 s and 60 s backoffs), all inside the 120 s grace;
+    # the rounds in between are skipped by the backoff and never run the engine
+    for wait in (30, 60, 0):
         assert [r.status for r in await h.worker_round(TUE)] == ["failed"]
-        h.clock.advance(timedelta(seconds=2))
+        for _ in range(3):
+            h.clock.advance(timedelta(seconds=wait / 4))
+            if wait:
+                assert [r.status for r in await h.worker_round(TUE)] == ["skipped"]
+        h.clock.advance(timedelta(seconds=wait / 4))
     assert "orb_open" in fired_keys(db_factory, TUE)
     assert await h.worker_round(TUE) == []
     assert len(h.runner.calls) == 3
+
+
+@pytestdb
+async def test_safety_key_keeps_retrying_with_backoff_until_the_close(
+    db_factory: sessionmaker[Session],
+) -> None:
+    # flatten at 15:50 ET, the close at 16:00: failures at 15:50:00, :30, 15:51:30, 15:53:30, 15:55:30, ...
+    h = harness(db_factory, et(TUE, 15, 50))
+    h.runner.fail = True
+    attempts = 0
+    while h.clock.now() < et(TUE, 16, 0):
+        results = await h.worker_round(TUE)
+        attempts += sum(1 for r in results if r.key == "flatten" and r.status == "failed")
+        h.clock.advance(timedelta(seconds=10))
+    # 15:50:00, 15:50:30, 15:51:30, then every 120 s: 15:53:30, 15:55:30, 15:57:30, 15:59:30
+    assert attempts == 7
+    assert "flatten" not in fired_keys(db_factory, TUE, always_fire_late=["flatten"])
+    assert "flatten" not in fired_keys(db_factory, TUE)  # from the stored (default) settings
+    out = await h.fire("flatten", TUE)  # at the close: missed, and settled
+    assert out.status == "missed"
+    assert "flatten" in fired_keys(db_factory, TUE)
+
+
+@pytestdb
+async def test_leftover_running_entry_event_is_settled_as_outcome_unknown_not_rerun(
+    db_factory: sessionmaker[Session],
+) -> None:
+    h = harness(db_factory, et(TUE, 9, 35, 30))
+    with db_factory() as s:  # a worker died mid-run (or its success could not be recorded)
+        s.add(
+            JobRun(job="event:orb_open", session_date=TUE, started_at=utc(TUE, 13, 35, 5), status="running")
+        )
+        s.commit()
+    out = await h.fire("orb_open", TUE)
+    assert out.status == "failed" and out.detail["error"] == "outcome unknown: not re-run automatically"
+    assert h.built == 0 and h.runner.calls == []
+    assert job_rows(db_factory) == [("event:orb_open", "failed", "outcome unknown: not re-run automatically")]
+    with db_factory() as s:
+        crit = s.execute(select(EventLog).where(EventLog.level == "critical")).scalars().all()
+    assert [e.source for e in crit] == ["job.event:orb_open"]
+    assert "orb_open" in fired_keys(db_factory, TUE)
+    h.clock.advance(timedelta(seconds=5))
+    assert await h.worker_round(TUE) == []
+    # an explicit `trader event orb_open --force` still runs it
+    assert (await h.fire("orb_open", TUE, force=True)).status == "fired"
+    assert len(h.runner.calls) == 1
+
+
+@pytestdb
+async def test_leftover_running_safety_event_is_rerun(db_factory: sessionmaker[Session]) -> None:
+    h = harness(db_factory, et(TUE, 15, 51))
+    with db_factory() as s:
+        s.add(JobRun(job="event:flatten", session_date=TUE, started_at=utc(TUE, 19, 50), status="running"))
+        s.commit()
+    assert (await h.fire("flatten", TUE)).status == "fired"
+    assert job_rows(db_factory) == [
+        ("event:flatten", "failed", "abandoned"),
+        ("event:flatten", "succeeded", None),
+    ]
+
+
+@pytestdb
+async def test_plan_problems_are_reported_once_per_session(db_factory: sessionmaker[Session]) -> None:
+    strategies: list[Strategy] = [
+        FakeStrategy("late_one", [ScheduledEvent("flatten", SessionOffset.parse("close-10m"))]),
+        FakeStrategy("early_one", [ScheduledEvent("flatten", SessionOffset.parse("close-15m"))]),
+        FakeStrategy("wordy", [ScheduledEvent("k" * 40, SessionOffset.parse("open+1m"))]),
+    ]
+    plan = day_plan(strategies, CAL, TUE, SETTINGS)
+    assert sorted(p.problem_id for p in plan.problems) == [
+        "key_time_conflict:flatten",
+        f"key_too_long:{'k' * 40}",
+    ]
+    clock = FixedClock(utc(TUE, 14, 0))
+    assert report_plan_problems(db_factory, clock, plan) == 2
+    for _ in range(5):
+        assert report_plan_problems(db_factory, clock, day_plan(strategies, CAL, TUE, SETTINGS)) == 0
+    # fire_event reports them too (still once)
+    h = harness(db_factory, et(TUE, 15, 45), strategies)
+    assert (await h.fire("flatten", TUE)).status == "fired"
+    rows = error_events(db_factory)
+    assert [(e.source, e.data["kind"]) for e in rows] == [
+        ("scheduler", "key_too_long"),
+        ("scheduler", "key_time_conflict"),
+    ]
+    # the next session reports again
+    wed = date(2026, 10, 7)
+    assert report_plan_problems(db_factory, clock, day_plan(strategies, CAL, wed, SETTINGS)) == 2
 
 
 @pytestdb
@@ -392,3 +512,57 @@ async def test_fired_keys_are_per_session_and_ignore_other_jobs(db_factory: sess
         s.add(JobRun(job="event:flatten", session_date=TUE, started_at=now, status="running"))
         s.commit()
     assert fired_keys(db_factory, TUE) == {"orb_open"}
+
+
+# --- P2-REVIEW: a disabled strategy that still owns something gets its safety events ------------
+
+
+def test_exits_only_strategies_contribute_only_their_safety_events() -> None:
+    plan = day_plan([SpyOverlay()], CAL, TUE, SETTINGS, exits_only=[OrbSip()])
+    by_key = {e.key: e for e in plan.events}
+    assert sorted(by_key) == ["entry_cancel", "flatten", "overlay_decision"]  # no orb_open entry
+    assert by_key["flatten"].strategies == ("orb_sip",) and by_key["flatten"].always_fire_late
+    # an exits-only strategy that is also enabled is just enabled
+    both = day_plan([OrbSip()], CAL, TUE, SETTINGS, exits_only=[OrbSip()])
+    assert both.events == day_plan([OrbSip()], CAL, TUE, SETTINGS).events
+
+
+@pytestdb
+def test_live_day_plan_keeps_a_disabled_owners_flatten(db_factory: sessionmaker[Session]) -> None:
+    clock = FixedClock(utc(TUE, 14, 0))
+    registry = StrategyRegistry(db_factory, clock)
+    registry.ensure_defaults()
+    registry.update("orb_sip", enabled=False, actor="test")
+    with db_factory() as s:
+        run_id = add_run(s)
+        symbol_id = add_symbol(s, "AAA")
+        s.commit()
+
+    def keys() -> list[str]:
+        return sorted(e.key for e in live_day_plan(db_factory, registry, run_id, CAL, TUE, SETTINGS).events)
+
+    assert "flatten" not in keys() and "orb_open" not in keys()  # disabled and owning nothing: not run
+    config_id = min(registry.config_ids("orb_sip"))  # the revision in force before it was disabled
+    with db_factory() as s:  # it still has a working entry stop from before it was disabled
+        s.add(
+            m.Order(
+                run_id=run_id,
+                symbol_id=symbol_id,
+                strategy_config_id=config_id,
+                position_id=None,
+                side="buy",
+                order_type="stop",
+                purpose="entry",
+                qty=10,
+                stop_price=Decimal("21.55"),
+                stop_loss=Decimal("21.41"),
+                tif="day",
+                status="working",
+                reason="orb breakout",
+                session_date=TUE,
+                submitted_at=clock.now(),
+                stale_alerted=False,
+            )
+        )
+        s.commit()
+    assert {"entry_cancel", "flatten"} <= set(keys()) and "orb_open" not in keys()

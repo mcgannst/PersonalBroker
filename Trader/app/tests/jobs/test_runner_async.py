@@ -160,6 +160,30 @@ def test_run_job_row_deleted_underneath_returns_failed(db_factory: sessionmaker[
         out = run_job(db_factory, CLOCK, "nightly", D, fn)
     _assert_unrecorded(out, {"n": 1}, "JobRunMissing")
     assert any(e["event"] == "job.record_success_failed" and e["log_level"] == "critical" for e in logs)
+    # fix round 1: a best-effort critical event, so the relay alerts Stephen
+    with db_factory() as s:
+        crit = s.execute(select(EventLog).where(EventLog.level == "critical")).scalars().all()
+    assert [(e.source, e.data["error_type"]) for e in crit] == [("job.nightly", "JobRunMissing")]
+
+
+async def test_rerun_abandoned_false_settles_a_leftover_running_row(
+    db_factory: sessionmaker[Session],
+) -> None:
+    with db_factory() as s:
+        s.add(JobRun(job="event:x", session_date=D, started_at=CLOCK.now(), status="running"))
+        s.commit()
+    calls: list[int] = []
+    out = await run_job_async(db_factory, CLOCK, "event:x", D, _body(calls), rerun_abandoned=False)
+    assert out == JobOutcome("failed", {"reason": "outcome unknown"}, error=runner.OUTCOME_UNKNOWN)
+    assert calls == []
+    with db_factory() as s:
+        rows = s.execute(select(JobRun.status, JobRun.error)).all()
+        crit = s.execute(select(EventLog.source).where(EventLog.level == "critical")).scalars().all()
+    assert [tuple(r) for r in rows] == [("failed", runner.OUTCOME_UNKNOWN)]
+    assert crit == ["job.event:x"]
+    # force runs it anyway
+    forced = await run_job_async(db_factory, CLOCK, "event:x", D, _body(calls), True, rerun_abandoned=False)
+    assert forced.status == "succeeded" and calls == [1]
 
 
 def test_run_job_db_failure_on_success_update_returns_failed(db_factory: sessionmaker[Session]) -> None:

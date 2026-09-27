@@ -37,6 +37,7 @@ from trader.engine.scheduler import (
     event_job,
     fire_event,
     fired_keys,
+    report_plan_problems,
 )
 from trader.jobs import runner as runner_mod
 from trader.market.calendar import SessionCalendar
@@ -127,7 +128,11 @@ class Sched:
 
     async def worker_round(self, d: date) -> list[FireResult]:
         deps = self.deps
-        due = due_events(deps.plan(d), self.clock.now(), fired_keys(self.factory, d))
+        plan = deps.plan(d)
+        # Fix round 1 harness adaptation: day_plan stays pure, and the worker step reports the plan's
+        # problems through the DB-aware report_plan_problems (fire_event also calls it).
+        report_plan_problems(self.factory, self.clock, plan)
+        due = due_events(plan, self.clock.now(), fired_keys(self.factory, d))
         return [await fire_event(deps, ev.key, d) for ev in due]
 
 

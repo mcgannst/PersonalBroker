@@ -11,7 +11,13 @@ only yields inside the body.
 
 If the body succeeded but that can't be recorded (a DB error, or the row deleted underneath), the run
 ends cleanly with a `failed` outcome instead of raising (P1-REVIEW should-fix 4), so a CLI prints one
-line and exits 1 rather than a traceback.
+line and exits 1 rather than a traceback. A best-effort `critical` event (source `job.<job>`, on a fresh
+session) is written too, so the relay alerts Stephen (P3 fix round 1).
+
+`rerun_abandoned=False` (P3 fix round 1, used by the scheduler for entry-type events): a leftover
+`running` row means an earlier run's outcome is unknown (it may have placed orders). Instead of running
+the body again, that row is settled as failed (OUTCOME_UNKNOWN) with one `critical` event, and the body
+is not run. `force` still runs it.
 """
 
 import hashlib
@@ -33,6 +39,7 @@ from trader.market.clock import Clock
 log = structlog.get_logger("jobs.runner")
 
 MAX_ERROR_CHARS = 2000
+OUTCOME_UNKNOWN = "outcome unknown: not re-run automatically"
 
 
 class JobRunMissing(RuntimeError):
@@ -107,6 +114,8 @@ def run_job(
     session_date: date,
     fn: Callable[[], dict[str, Any]],
     force: bool = False,
+    *,
+    rerun_abandoned: bool = True,
 ) -> JobOutcome:
     """Run `fn` for (job, session_date) unless it already succeeded (then `skipped`, unless `force`)
     or another process is running it right now (`skipped`, reason "already running").
@@ -115,11 +124,13 @@ def run_job(
     and returned. KeyboardInterrupt, CancelledError and other non-Exception errors are recorded the
     same way and then re-raised. If recording a failure itself fails, that is logged and the original
     outcome is still returned (or the original error re-raised). If recording the success fails, the
-    outcome is `failed` ("succeeded but could not be recorded: <type>") and nothing is raised."""
+    outcome is `failed` ("succeeded but could not be recorded: <type>"), a best-effort critical event
+    is written, and nothing is raised. With `rerun_abandoned=False` a leftover `running` row is settled
+    as failed (OUTCOME_UNKNOWN) and the body is not run."""
     with _single_flight(factory, job, session_date) as acquired:
         if not acquired:
             return JobOutcome("skipped", {"reason": "already running"})
-        started = _start(factory, clock, job, session_date, force)
+        started = _start(factory, clock, job, session_date, force, rerun_abandoned)
         if isinstance(started, JobOutcome):
             return started
         try:
@@ -136,13 +147,15 @@ async def run_job_async(
     session_date: date,
     fn: Callable[[], Awaitable[dict[str, Any]]],
     force: bool = False,
+    *,
+    rerun_abandoned: bool = True,
 ) -> JobOutcome:
     """run_job for an async body, with exactly run_job's semantics. A cancellation of the awaiting task
     (CancelledError) is recorded as a failure and re-raised, and the lock is released."""
     with _single_flight(factory, job, session_date) as acquired:
         if not acquired:
             return JobOutcome("skipped", {"reason": "already running"})
-        started = _start(factory, clock, job, session_date, force)
+        started = _start(factory, clock, job, session_date, force, rerun_abandoned)
         if isinstance(started, JobOutcome):
             return started
         try:
@@ -153,10 +166,17 @@ async def run_job_async(
 
 
 def _start(
-    factory: sessionmaker[Session], clock: Clock, job: str, session_date: date, force: bool
+    factory: sessionmaker[Session],
+    clock: Clock,
+    job: str,
+    session_date: date,
+    force: bool,
+    rerun_abandoned: bool = True,
 ) -> int | JobOutcome:
     """With the lock held: `skipped` if the run already succeeded (and not `force`), else mark any
-    leftover `running` row abandoned and insert this run's `running` row, returning its id."""
+    leftover `running` row abandoned and insert this run's `running` row, returning its id. With
+    `rerun_abandoned=False` (and not `force`) a leftover `running` row is settled as OUTCOME_UNKNOWN
+    with one critical event instead, and a `failed` outcome is returned without a new row."""
     same_run = (JobRun.job == job, JobRun.session_date == session_date)
     with session_scope(factory) as s:
         done = s.execute(
@@ -164,7 +184,31 @@ def _start(
         ).scalar_one_or_none()
         if done is not None and not force:
             return JobOutcome("skipped", {"reason": "already succeeded"})
-        # We hold the lock, so nobody else is running this: a `running` row is left over from a crash.
+        # We hold the lock, so nobody else is running this: a `running` row is left over from a crash
+        # (or from a success that could not be recorded).
+        if not rerun_abandoned and not force:
+            leftover = list(
+                s.execute(
+                    select(JobRun.id).where(*same_run, JobRun.status == "running").order_by(JobRun.id)
+                ).scalars()
+            )
+            if leftover:
+                s.execute(
+                    update(JobRun)
+                    .where(JobRun.id.in_(leftover))
+                    .values(status="failed", finished_at=clock.now(), error=OUTCOME_UNKNOWN)
+                )
+                log_event(
+                    s,
+                    clock,
+                    "critical",
+                    f"job.{job}",
+                    f"{job} for {session_date}: an earlier run's outcome is unknown, so it is not re-run "
+                    "automatically. Check the orders, then run it by hand with --force if needed.",
+                    {"job_run_ids": leftover, "session_date": session_date.isoformat()},
+                )
+                log.critical("job.outcome_unknown", job=job, session_date=session_date.isoformat())
+                return JobOutcome("failed", {"reason": "outcome unknown"}, error=OUTCOME_UNKNOWN)
         s.execute(
             update(JobRun)
             .where(*same_run, JobRun.status == "running")
@@ -214,10 +258,36 @@ def _record_success(
             run_id=run_id,
             error_type=type(exc).__name__,
         )
+        _alert_unrecorded_success(factory, clock, job, session_date, run_id, type(exc).__name__)
         return JobOutcome(
             "failed", detail, error=f"succeeded but could not be recorded: {type(exc).__name__}"
         )
     return JobOutcome("succeeded", detail)
+
+
+def _alert_unrecorded_success(
+    factory: sessionmaker[Session], clock: Clock, job: str, session_date: date, run_id: int, error_type: str
+) -> None:
+    """Best effort, on a fresh session: a critical event, so the relay tells Stephen the job ran but its
+    success is not in job_runs. Never raises."""
+    try:
+        with session_scope(factory) as s:
+            log_event(
+                s,
+                clock,
+                "critical",
+                f"job.{job}",
+                f"{job} for {session_date} succeeded but could not be recorded ({error_type})",
+                {"job_run_id": run_id, "session_date": session_date.isoformat(), "error_type": error_type},
+            )
+    except Exception as exc:
+        log.critical(
+            "job.alert_unrecorded_success_failed",
+            job=job,
+            session_date=session_date.isoformat(),
+            run_id=run_id,
+            error_type=type(exc).__name__,
+        )
 
 
 def _record_failure(

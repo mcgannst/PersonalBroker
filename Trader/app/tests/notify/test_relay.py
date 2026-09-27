@@ -7,6 +7,8 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+import structlog
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.factories import add_run, add_strategy_config, add_symbol
@@ -443,11 +445,13 @@ async def test_pump_twice_and_two_instances_send_each_row_once(world: World) -> 
 
     await relay_a.pump()
     await relay_a.pump()
+    assert len(world.render.calls) == 4  # the same instance doesn't even render a row twice
+    # a second instance (a restart) re-scans the last 2 minutes below the cursor for late commits: it
+    # re-renders those rows, but the notifier's dedupe keys drop every re-send
     await relay_b.pump()
 
     keys = [msg.dedupe_key for msg in world.notifier.sent]
     assert len(keys) == 4 and len(set(keys)) == 4
-    assert len(world.render.calls) == 4  # nothing was even rendered twice
 
 
 async def test_two_instances_racing_over_the_same_rows_send_once(world: World) -> None:
@@ -502,9 +506,10 @@ async def test_failing_notifier_does_not_stop_cursor_or_other_streams(world: Wor
 
 # --- 8. catch-up cap --------------------------------------------------------------------------------------
 async def test_catch_up_sends_at_most_the_cap_plus_one_summary(world: World) -> None:
-    relay = await started(world)
+    await started(world)
     ids = [add_event(world, "error", "engine", f"error {i}") for i in range(50)]
     world.settings = RuntimeSettings(telegram_relay_catchup_max=20)
+    relay = world.relay()  # the worker restarts after the outage: its first pump is a catch-up
 
     report = await relay.pump()
 
@@ -537,3 +542,87 @@ async def test_messenger_raising_does_not_stop_fills_and_events(world: World) ->
     assert report.fills == 2 and report.events == 1 and report.closed == 2
     assert world.messenger.sync_calls == 2  # once in started(), once here
     assert len(world.notifier.sent) == 3
+
+
+# --- fix round 1 ------------------------------------------------------------------------------------------
+async def test_cap_zero_means_no_cap(world: World) -> None:
+    await started(world)
+    ids = [add_event(world, "error", "engine", f"error {i}") for i in range(30)]
+    world.settings = RuntimeSettings(telegram_relay_catchup_max=0)
+    report = await world.relay().pump()  # a restart, so it would be a catch-up
+    assert report.events == 30 and report.skipped == 0
+    assert [msg.dedupe_key for msg in world.notifier.sent] == [f"event:{i}" for i in ids]
+    assert [v for v in rendered(world, "alert") if v.source == "relay"] == []
+
+
+async def test_a_fresh_burst_in_normal_running_is_not_capped(world: World) -> None:
+    relay = await started(world)  # this instance has pumped before: not a restart
+    world.settings = RuntimeSettings(telegram_relay_catchup_max=20)
+    ids = [add_event(world, "error", "engine", f"error {i}") for i in range(25)]
+    report = await relay.pump()
+    assert report.events == 25 and report.skipped == 0
+    assert [msg.dedupe_key for msg in world.notifier.sent] == [f"event:{i}" for i in ids]
+
+
+async def test_rows_waiting_past_the_backlog_age_are_capped_without_a_restart(world: World) -> None:
+    relay = await started(world)
+    world.settings = RuntimeSettings(telegram_relay_catchup_max=20)
+    for i in range(25):
+        add_event(world, "error", "engine", f"error {i}")  # ts = NOW
+    world.clock.advance(timedelta(minutes=10))  # the worker was stuck for 10 minutes
+    report = await relay.pump()
+    assert report.events == 20 and report.skipped == 5
+
+
+async def test_a_row_committed_below_the_cursor_is_still_relayed(world: World) -> None:
+    relay = await started(world)
+    slow = world.factory()
+    try:
+        row = m.EventLog(
+            ts=NOW, level="error", source="killswitch", run_id=world.run_id, message="slow", data={}
+        )
+        slow.add(row)
+        slow.flush()  # takes its id, not committed yet
+        fast = add_event(world, "error", "engine", "fast")
+        await relay.pump()
+        slow.commit()
+    finally:
+        slow.close()
+    world.clock.advance(timedelta(seconds=30))
+    await relay.pump()
+    await relay.pump()
+    assert sorted(msg.dedupe_key or "" for msg in world.notifier.sent) == sorted(
+        [f"event:{fast}", f"event:{row.id}"]
+    )
+    # outside the 2-minute window a row below the cursor is no longer looked for
+    world.notifier.sent.clear()
+    world.clock.advance(timedelta(minutes=3))
+    await world.relay().pump()
+    assert world.notifier.sent == []
+
+
+class PoisonRenderer(FakeRenderer):
+    def alert(self, v: AlertView) -> OutboundMessage:
+        if "poison" in v.message:
+            raise ValueError("cannot render")
+        return super().alert(v)
+
+
+async def test_an_unrenderable_row_is_skipped_logged_once_and_never_relayed(world: World) -> None:
+    await started(world)
+    world.render = PoisonRenderer()
+    relay = world.relay()
+    bad = add_event(world, "error", "engine", "poison row")
+    good = add_event(world, "error", "engine", "fine row")
+    with structlog.testing.capture_logs() as logs:
+        await relay.pump()
+    assert [msg.dedupe_key for msg in world.notifier.sent] == [f"event:{good}"]
+    assert cursor(world, "events") == good
+    assert any(e["event"] == "relay.row_failed" and e["error_type"] == "ValueError" for e in logs)
+    for _ in range(3):  # later pumps and a restarted relay meet it again in the re-scan window
+        await relay.pump()
+        await world.relay().pump()
+    with session_scope(world.factory) as s:
+        rows = s.execute(select(m.EventLog).where(m.EventLog.source == "notify.relay")).scalars().all()
+        assert [(r.level, r.data["row_id"]) for r in rows] == [("error", bad)]
+    assert [msg.dedupe_key for msg in world.notifier.sent] == [f"event:{good}"]  # its own error isn't relayed

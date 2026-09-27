@@ -287,7 +287,7 @@ def add_trade(env: Env, session_date: date, pnl: str, ticker: str = "TTT") -> No
         )
 
 
-def add_heartbeat(env: Env, beat_at: datetime) -> None:
+def add_heartbeat(env: Env, beat_at: datetime, phase: str = "session") -> None:
     with session_scope(env.factory) as s:
         s.add(
             m.WorkerHeartbeat(
@@ -297,7 +297,7 @@ def add_heartbeat(env: Env, beat_at: datetime) -> None:
                 started_at=beat_at - timedelta(hours=1),
                 beat_at=beat_at,
                 session_date=DAY,
-                phase="session",
+                phase=phase,
             )
         )
 
@@ -346,6 +346,12 @@ async def test_status_view_on_saturday(env: Env) -> None:
     assert v.session_date == date(2026, 10, 5)
     assert v.next_event_key is None and v.next_event_at is None
     assert v.heartbeat_age_seconds is None  # no worker heartbeat row
+
+
+async def test_status_view_a_stopped_worker_has_no_heartbeat(env: Env) -> None:
+    add_heartbeat(env, T10 - timedelta(seconds=3), phase="stopped")  # a clean shutdown 3 s ago
+    v = await status_view(env.deps())
+    assert v.heartbeat_age_seconds is None
 
 
 async def test_status_view_after_close_has_no_next_event(env: Env) -> None:
@@ -424,6 +430,19 @@ async def test_position_lines_quote_failure_gives_no_last(env: Env) -> None:
     assert line.last is None and line.unrealized_pnl is None
     (line,) = await position_lines(env.deps(with_quotes=False))
     assert line.last is None
+
+
+async def test_pnl_says_unrealized_is_partial_when_a_position_has_no_quote(env: Env) -> None:
+    _, sym = add_position(env)
+    env.quotes = {sym: quote(sym, "20.75")}
+    env.quotes_raise = True
+    out = await Commands(env.deps()).handle("/pnl")
+    assert len(out) == 2
+    assert env.renderer.calls[-2][0] == "pnl"
+    method, args = env.renderer.calls[-1]
+    assert method == "reply" and args[0].startswith("Unrealized P&L is partial: no quote for ")
+    env.quotes_raise = False
+    assert len(await Commands(env.deps()).handle("/pnl")) == 1  # priced: just the P&L
 
 
 async def test_position_lines_skip_closed_positions_and_other_runs(env: Env) -> None:
@@ -541,10 +560,29 @@ async def test_resume_lifts_manual_pause_only(env: Env) -> None:
     method, args = env.renderer.calls[-1]
     assert method == "reply"
     assert args[0].startswith("Manual pause lifted.")
-    assert "Still blocked by: max_drawdown_pct. Reset them in the web app." in args[0]
+    assert "Still blocked by:\n- max_drawdown_pct: reset it in the web app (with a reason)" in args[0]
     assert env.killswitches.blocking(env.run_id, DAY) == "max_drawdown_pct"
     active = {a.switch for a in env.killswitches.active(env.run_id, DAY)}
     assert active == {"max_drawdown_pct"}
+
+
+async def test_resume_words_each_switch_by_how_it_clears(env: Env) -> None:
+    env.killswitches.pause(env.run_id, DAY, actor="test")
+    with session_scope(env.factory) as s:
+        s.add(
+            m.KillSwitchEvent(
+                run_id=env.run_id,
+                switch="daily_loss_pct",
+                session_date=DAY,
+                tripped_at=T10,
+                value=Decimal("0.03"),
+                threshold=Decimal("0.02"),
+            )
+        )
+    await Commands(env.deps()).handle("/resume")
+    text = env.renderer.calls[-1][1][0]
+    assert "- daily_loss_pct: clears by itself at the next session" in text
+    assert "web app" not in text
 
 
 async def test_resume_plain(env: Env) -> None:

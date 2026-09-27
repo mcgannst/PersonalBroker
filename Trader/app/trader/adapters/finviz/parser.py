@@ -10,12 +10,10 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
-from zoneinfo import ZoneInfo
 
 from selectolax.parser import HTMLParser, Node
 
-# TODO(P1-T4): import ET from trader.market.clock once that module is on trunk.
-ET = ZoneInfo("America/New_York")
+from trader.market.clock import ET
 
 BASE = "https://finviz.com"
 _TOTAL_RE = re.compile(r"/\s*([\d,]+)\s*Total")

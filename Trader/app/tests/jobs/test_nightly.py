@@ -342,6 +342,72 @@ async def test_forced_rerun_replaces_the_day(db_factory: sessionmaker[Session]) 
     assert set(snapshot(db_factory, date(2026, 9, 25))) == {"AAPL", "MSFT", "SPY"}  # other days untouched
 
 
+def universe_rows(factory: sessionmaker[Session], day: date) -> list[tuple[Any, ...]]:
+    with factory() as s:
+        return [
+            tuple(r)
+            for r in s.execute(
+                select(
+                    UniverseSnapshot.symbol_id,
+                    UniverseSnapshot.price,
+                    UniverseSnapshot.avg_volume,
+                    UniverseSnapshot.atr14,
+                    UniverseSnapshot.source,
+                )
+                .where(UniverseSnapshot.session_date == day)
+                .order_by(UniverseSnapshot.symbol_id)
+            )
+        ]
+
+
+def open_bar_rows(factory: sessionmaker[Session], day: date) -> list[tuple[Any, ...]]:
+    with factory() as s:
+        return [
+            tuple(r)
+            for r in s.execute(
+                select(OpenBarStat.symbol_id, OpenBarStat.avg_open_vol_14d, OpenBarStat.atr14)
+                .where(OpenBarStat.session_date == day)
+                .order_by(OpenBarStat.symbol_id)
+            )
+        ]
+
+
+def test_forced_rerun_with_finviz_blocked_keeps_the_good_day(db_factory: sessionmaker[Session]) -> None:
+    """P1-REVIEW should-fix 1: a forced re-run must not downgrade a day that FinViz already filled.
+    The day's rows stay identical (source finviz), nothing is written, and the job is failed."""
+    m = StableMarket()
+    asyncio.run(run_nightly(deps(db_factory, FakeFinviz(["AAPL", "MSFT"]), m), date(2026, 9, 25)))
+    asyncio.run(run_nightly(deps(db_factory, FakeFinviz(["NVDA", "AMD"]), m), TARGET))
+    rows_before, stats_before = universe_rows(db_factory, TARGET), open_bar_rows(db_factory, TARGET)
+    counts_before = table_counts(db_factory)
+    assert {r[-1] for r in rows_before} == {"finviz"}
+
+    d = deps(db_factory, FakeFinviz(None, FinvizBlocked("HTTP 403")), m)
+    out = run_job(db_factory, CLOCK, "nightly", TARGET, lambda: asyncio.run(run_nightly(d, TARGET)))
+
+    assert out.status == "failed"
+    assert out.error is not None and out.error.startswith("FinvizBlocked: ")
+    assert universe_rows(db_factory, TARGET) == rows_before
+    assert open_bar_rows(db_factory, TARGET) == stats_before
+    assert table_counts(db_factory) == counts_before
+    [(level, data)] = event_rows(db_factory, f"FinViz failed; keeping existing finviz universe for {TARGET}")
+    assert level == "error"
+    assert data["session_date"] == TARGET.isoformat()
+    assert event_rows(db_factory, "FinViz failed; using previous universe") == []
+
+
+async def test_blocked_finviz_still_falls_back_over_a_fallback_day(db_factory: sessionmaker[Session]) -> None:
+    """The keep-the-day rule applies only to a FinViz day: a day that holds a fallback is re-run
+    with the fallback as before."""
+    m = StableMarket()
+    blocked = FakeFinviz(None, FinvizBlocked("HTTP 403"))
+    await run_nightly(deps(db_factory, FakeFinviz(["AAPL", "MSFT"]), m), date(2026, 9, 25))
+    await run_nightly(deps(db_factory, blocked, m), TARGET)
+    detail = await run_nightly(deps(db_factory, blocked, m), TARGET)
+    assert detail["source"] == "fallback"
+    assert {src for src, _ in snapshot(db_factory, TARGET).values()} == {"fallback"}
+
+
 async def test_reused_ticker_moves_old_row_aside_keeping_its_history(
     db_factory: sessionmaker[Session],
 ) -> None:

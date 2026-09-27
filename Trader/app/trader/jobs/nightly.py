@@ -9,6 +9,10 @@ transaction as the upserts).
 is NULL unless at least MIN_OPENING_BARS opening bars were found (or every lookback session, when
 `open_bar.lookback_sessions` is below that), so a thin history never passes for a real average.
 
+When FinViz fails, the previous stored universe is used as a fallback, EXCEPT when `session_date`
+already has a universe from FinViz (a forced re-run of a good day): then an error event is logged,
+the FinvizError is re-raised (run_job marks the job failed) and nothing is written.
+
 A degenerate result is a failure, not a thin success: `NightlyDegenerate` is raised (so run_job marks
 the job failed) and NOTHING is written, not even the day-replacement deletes, when the resolved
 universe is empty (not counting `universe.extra_symbols`), or more than MAX_UNRESOLVED_FRACTION of the
@@ -110,8 +114,19 @@ async def _universe(deps: NightlyDeps, session_date: date) -> _Universe:
         return _Universe(rows, "finviz")
     except FinvizError as exc:
         with session_scope(deps.factory) as s:
-            prev = repo.latest_universe_tickers(s, before=session_date)
-            if prev is None:
+            # A forced re-run must never downgrade a good day: keep the day's FinViz universe as it is.
+            keep = repo.has_finviz_universe(s, session_date)
+            prev = None if keep else repo.latest_universe_tickers(s, before=session_date)
+            if keep:
+                log_event(
+                    s,
+                    deps.clock,
+                    "error",
+                    "job.nightly",
+                    f"FinViz failed; keeping existing finviz universe for {session_date}",
+                    {"error": str(exc), "session_date": session_date.isoformat()},
+                )
+            elif prev is None:
                 log_event(
                     s,
                     deps.clock,

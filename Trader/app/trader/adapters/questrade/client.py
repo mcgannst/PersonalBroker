@@ -25,6 +25,8 @@ NAMES_PER_CALL = 100
 MAX_ATTEMPTS = 5
 MAX_CANDLES_PER_REQUEST = 20_000
 MAX_429_PAUSE = 30.0
+# A cached access token is reused until this long before it expires (by the client's clock).
+TOKEN_REUSE_MARGIN = timedelta(seconds=120)
 Category = Literal["market", "account"]
 
 INTERVAL_LENGTH: dict[Interval, timedelta] = {
@@ -124,6 +126,9 @@ class QuestradeClient:
       data that Questrade still has (or keep windows it no longer has).
     - Questrade returns at most 20,000 candles per request. Keep windows small; `candles()` raises
       ValueError when the window could hold more bars than that (e.g. OneMinute over ~14 days).
+    - The access token is cached in the client and reused until TOKEN_REUSE_MARGIN before it
+      expires (by the injected clock); an asyncio.Lock makes concurrent requests fetch it once. A 401
+      force-refreshes it (once per request, and only if no other request already replaced it).
     """
 
     def __init__(
@@ -146,6 +151,8 @@ class QuestradeClient:
             "account": TokenBucket(account_rps, sleep=sleep),
         }
         self.rate_limit_remaining: dict[Category, int] = {}
+        self._token: AccessToken | None = None
+        self._token_lock = asyncio.Lock()
 
     async def __aenter__(self) -> Self:
         return self
@@ -166,6 +173,22 @@ class QuestradeClient:
         text: str = str(exc).replace(token.token, "<token>").replace(token.api_base, "<api>")
         return f"{type(exc).__name__}: {text}"[:300]
 
+    async def _access(self) -> AccessToken:
+        """The cached access token, fetched from the TokenSource only when missing or near expiry."""
+        async with self._token_lock:
+            token = self._token
+            if token is None or token.expires_at - TOKEN_REUSE_MARGIN <= self._clock.now():
+                token = await asyncio.to_thread(self._tokens.access)
+                self._token = token
+            return token
+
+    async def _refresh_after_401(self, rejected: AccessToken) -> None:
+        """Force a refresh and cache the new token, unless another request already replaced the
+        rejected one (then that newer token is used instead)."""
+        async with self._token_lock:
+            if self._token is None or self._token is rejected:
+                self._token = await asyncio.to_thread(self._tokens.force_refresh)
+
     async def _get(self, path: str, params: dict[str, str], category: Category) -> Any:
         refreshed = False
         last_status: int = 0
@@ -173,7 +196,7 @@ class QuestradeClient:
         for attempt in range(MAX_ATTEMPTS):
             final: bool = attempt == MAX_ATTEMPTS - 1
             await self._buckets[category].acquire()
-            token: AccessToken = await asyncio.to_thread(self._tokens.access)
+            token: AccessToken = await self._access()
             try:
                 resp: httpx.Response = await self._http.get(
                     token.api_base + path,
@@ -193,7 +216,7 @@ class QuestradeClient:
                 return json.loads(resp.text, parse_float=Decimal)
             if resp.status_code == 401 and not refreshed:
                 refreshed = True
-                await asyncio.to_thread(self._tokens.force_refresh)
+                await self._refresh_after_401(token)
                 continue
             if resp.status_code == 429:
                 if not final:

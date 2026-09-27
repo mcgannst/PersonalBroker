@@ -201,6 +201,16 @@ def latest_universe_tickers(session: Session, before: date) -> tuple[date, list[
     return last, list(tickers)
 
 
+def has_finviz_universe(session: Session, session_date: date) -> bool:
+    """True when `session_date` already has a universe snapshot that came from FinViz."""
+    row = session.execute(
+        select(UniverseSnapshot.symbol_id)
+        .where(UniverseSnapshot.session_date == session_date, UniverseSnapshot.source == "finviz")
+        .limit(1)
+    ).scalar_one_or_none()
+    return row is not None
+
+
 def delete_session_rows_except(session: Session, session_date: date, keep: Collection[int]) -> int:
     """Remove universe_snapshots and open_bar_stats rows of `session_date` whose symbol isn't in
     `keep`, so a re-run replaces the day instead of leaving the previous run's extra symbols."""

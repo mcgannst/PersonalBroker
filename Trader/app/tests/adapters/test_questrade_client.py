@@ -1,13 +1,21 @@
 import asyncio
+import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import httpx
 import pytest
 import respx
 
 from trader.adapters.questrade.auth import AccessToken
-from trader.adapters.questrade.client import MAX_ATTEMPTS, QuestradeApiError, QuestradeClient, TokenBucket
+from trader.adapters.questrade.client import (
+    MAX_ATTEMPTS,
+    TOKEN_REUSE_MARGIN,
+    QuestradeApiError,
+    QuestradeClient,
+    TokenBucket,
+)
 from trader.adapters.questrade.models import CandleRequest
 from trader.market.clock import FixedClock
 
@@ -459,3 +467,102 @@ async def test_server_time_without_time_raises_api_error() -> None:
     async with client() as c:
         with pytest.raises(QuestradeApiError):
             await c.server_time()
+
+
+class CountingTokens:
+    """A TokenSource that counts calls. Each fetched token lives 30 minutes from the clock's now,
+    and access() is slow enough that unguarded concurrent callers would all reach it."""
+
+    def __init__(self, clock: FixedClock) -> None:
+        self.clock = clock
+        self.n = 0
+        self.accessed = 0
+        self.forced = 0
+
+    def _new(self) -> AccessToken:
+        self.n += 1
+        return AccessToken(f"tok-{self.n}", BASE, self.clock.now() + timedelta(minutes=30))
+
+    def access(self) -> AccessToken:
+        self.accessed += 1
+        time.sleep(0.01)
+        return self._new()
+
+    def force_refresh(self) -> AccessToken:
+        self.forced += 1
+        return self._new()
+
+
+def bearer(call: Any) -> str:
+    return str(call.request.headers["Authorization"])
+
+
+def ok_time(_: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json={"time": "2026-09-27T08:00:00.000000-04:00"})
+
+
+def reject_tok_1(request: httpx.Request) -> httpx.Response:
+    if request.headers["Authorization"] == "Bearer tok-1":
+        return httpx.Response(401, json={"code": 1017, "message": "Access token is invalid"})
+    return ok_time(request)
+
+
+@respx.mock
+async def test_concurrent_requests_fetch_the_access_token_once() -> None:
+    """P1-REVIEW should-fix 2: 50 concurrent candle requests share one access() call."""
+    clock = FixedClock(NOW)
+    tokens = CountingTokens(clock)
+    route = respx.get(url__regex=BASE + r"markets/candles/\d+").mock(
+        return_value=httpx.Response(200, json={"candles": []})
+    )
+    reqs = [CandleRequest(i, NOW - timedelta(days=1), NOW, "FiveMinutes") for i in range(50)]
+    async with QuestradeClient(tokens, clock, sleep=no_sleep) as c:
+        got = await c.candles_many(reqs)
+    assert all(v == [] for v in got.values())
+    assert route.call_count == 50
+    assert tokens.accessed == 1
+    assert {bearer(call) for call in route.calls} == {"Bearer tok-1"}
+
+
+@respx.mock
+async def test_expired_cached_token_is_fetched_again_exactly_once() -> None:
+    clock = FixedClock(NOW)
+    tokens = CountingTokens(clock)
+    route = respx.get(BASE + "time").mock(side_effect=ok_time)
+    async with QuestradeClient(tokens, clock, sleep=no_sleep) as c:
+        await c.server_time()
+        expires = NOW + timedelta(minutes=30)
+        clock.set(expires - TOKEN_REUSE_MARGIN - timedelta(seconds=1))  # still reusable
+        await c.server_time()
+        assert tokens.accessed == 1
+        clock.set(expires - TOKEN_REUSE_MARGIN)  # reuse window over: fetch once, then reuse again
+        await asyncio.gather(*(c.server_time() for _ in range(10)))
+        await c.server_time()
+    assert tokens.accessed == 2
+    assert tokens.forced == 0
+    assert [bearer(call) for call in route.calls] == ["Bearer tok-1"] * 2 + ["Bearer tok-2"] * 11
+
+
+@respx.mock
+async def test_401_replaces_the_cached_token() -> None:
+    clock = FixedClock(NOW)
+    tokens = CountingTokens(clock)
+    route = respx.get(BASE + "time").mock(side_effect=reject_tok_1)
+    async with QuestradeClient(tokens, clock, sleep=no_sleep) as c:
+        await c.server_time()
+        await c.server_time()  # uses the refreshed token straight from the cache
+    assert tokens.accessed == 1
+    assert tokens.forced == 1
+    assert [bearer(call) for call in route.calls] == ["Bearer tok-1", "Bearer tok-2", "Bearer tok-2"]
+
+
+@respx.mock
+async def test_concurrent_401s_force_one_refresh() -> None:
+    """Requests rejected with the same stale token share one forced refresh."""
+    clock = FixedClock(NOW)
+    tokens = CountingTokens(clock)
+    respx.get(BASE + "time").mock(side_effect=reject_tok_1)
+    async with QuestradeClient(tokens, clock, sleep=no_sleep) as c:
+        await asyncio.gather(*(c.server_time() for _ in range(10)))
+    assert tokens.accessed == 1
+    assert tokens.forced == 1

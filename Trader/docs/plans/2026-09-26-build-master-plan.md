@@ -313,6 +313,8 @@ Requirements: BRD BR-30–34, BR-60; SPEC §1 (processes), §4.4, §9; spike S6 
 | P3-T8 | Crontab | `docker/crontab`, `tests/test_crontab.py` | Every line matches the SPEC §9 table and parses; `CRON_TZ=America/New_York`; every command exists in the CLI | T6, T7 |
 | P3-T9 | Integration: worker day with fake Telegram | `tests/integration/test_worker_day.py` | Manual approval mode through a fake Telegram: proposal message, tap Approve, fill, stop, overlay decision, flatten, daily summary, all in order and on time with a fake clock | T2–T8 |
 
+- **Also in P3-T2:** Unify logging: configure structlog and route stdlib logging (FinViz scraper) through it; make a failure to mark job_runs succeeded exit cleanly (P1-REVIEW should-fix 3 and 4).
+
 ### 7.4 Phase 4: API, web app and deployment
 
 Requirements: BRD BR-50–56, BR-62 (export route); SPEC §4.2 (manual CSV upload), §11, §12, §14, §15.

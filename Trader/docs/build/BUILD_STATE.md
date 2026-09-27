@@ -7,9 +7,9 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 1 |
-| Current task | T2/T3 fixing, T5/T6 verifying |
+| Current task | T3 fixing, T6 B+review, T7 building |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-27T04:41:00Z |
+| Last updated (UTC) | 2026-09-27T04:44:00Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
 | Token last refreshed (UTC) | 2026-09-27T04:39:34Z (P1-T6 LIVE) |
@@ -23,7 +23,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | ID | Title | Depends on | Status | Attempt | Stage results | Last commit |
 |---|---|---|---|---|---|---|
 | P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | accepted | 2 | V✅ B✅ S✅ C✅ (fix review ✅) | 3a3a50f |
-| P1-T2 | Database models, migration 0001, test database fixture | T1 | gauntlet | 2 | V✅ B❌ S✅ C✅ → fix 5e8a594 (verify+review running) | 5e8a594 |
+| P1-T2 | Database models, migration 0001, test database fixture | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 5e8a594 |
 | P1-T3 | Crypto and runtime settings store | T2 | fixing | 2 | V✅ B❌ S✅ C✅(should-fix) | f5ad3a4 |
 | P1-T4 | Market types, clock and session calendar | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 4af1355 |
 | P1-T5 | FinViz parser and scraper | T1 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | b1d45e5 |
@@ -449,3 +449,12 @@ None open.
 - Gate: check.sh ruff, format and mypy clean. pytest 172 passed, 2 failed, both in tests/gauntlet/test_p1_t3_breaker.py (known, P1-T3 fix round). No P1-T5 or P1-T8 breaker failures. P1-T2 breaker 8/8 and test_migration 10/10 pass
 - LIVE (read-only): alembic current shows 0001 (head). alembic check finds no new operations. All 31 monthly partition bounds on trader_dev are midnight UTC, plus the default
 - Findings: every attempt-1 finding is fixed with a regression test. The search_path=public deviation is safe because every op in 0001 names schema trader and make_engine only pins TimeZone. Nits only: the plan's test_migration.py code block doesn't include the six new tests, which are named in prose, and the partition filter is duplicated between env.py and the test
+
+### 2026-09-27T04:43:11Z · P1-T6 · Spec+Code reviewer · attempt 1 · started
+- Result: reviewing 0f4e1f7, d922a9c
+
+### 2026-09-27T04:43:13Z · P1-T7 · Builder · attempt 1 · started
+- Notes: worktree agent-afc4ffb6ac2ab36aa, synced to 84da865
+
+### 2026-09-27T04:43:15Z · P1-T6 · Breaker · attempt 1 · started
+- Notes: writing tests/gauntlet/test_p1_t6_breaker.py against questrade/auth.py (respx + testcontainers only)

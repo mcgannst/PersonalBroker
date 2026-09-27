@@ -31,7 +31,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | f14f4fa |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 42bd500 |
-| P1-REVIEW | Phase 1 whole-phase review | all P1 | building | 1 |  |  |
+| P1-REVIEW | Phase 1 whole-phase review | all P1 | fixing | 2 | review ✅ (2 must-fix fixed 47aade8); should-fix round running | 47aade8 |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | todo | 0 | | |
 
 ## Escalations
@@ -621,3 +621,12 @@ None open.
 - Commits: reviewed 42bd500 at trunk 6224a9b
 - Gate: check.sh green (ruff, format, mypy, 316 passed), breaker 9/9, plan boxes all ticked, tree clean
 - Findings: nits only. Pre-existing, not from the fix: an empty or mostly unresolved Questrade result still succeeds with only an info event. Lock-release tests retry in the same process, where locks are re-entrant. A pg_locks probe confirmed the locks are released.
+
+### 2026-09-27T05:48:46Z · P1-REVIEW · Phase reviewer · attempt 1 · started
+- Notes: whole-phase review of d64518b..trunk plus must-fix items (nightly degenerate result, runner lock)
+
+### 2026-09-27T05:56:24Z · P1-REVIEW · Phase reviewer · attempt 1 · finished
+- Result: done. Must-fix items fixed with regression tests: nightly fails on a degenerate result (empty universe, more than 5% unresolved, more than 5% candle errors), runner lock windows closed (pg_locks tests). No further must-fix found in the whole-phase diff.
+- Commits: 47aade8
+- Gate: check.sh passed (327 tests, 21 s)
+- Findings: should-fix: forced re-run with FinViz down downgrades the day's FinViz universe to an older fallback. Access token read from the DB per Questrade request. FinViz uses stdlib logging, the rest structlog, and structlog is never configured. Nits logged in the report. SPEC 4.2, 9, 10 and 13 synced.

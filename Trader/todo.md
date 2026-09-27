@@ -19,12 +19,13 @@
 - [ ] Create a **Telegram bot for dev** with @BotFather, and get your chat ID.
 - [x] Create the **`trader_dev` database** and roles `trader_dev_owner` / `trader_dev_app` on `192.168.68.86`. Done 2026-09-26: schema `trader` owned by `trader_dev_owner`; the app role gets read/write on new tables through default privileges and can't create or drop tables. Connection URLs are in `docker/.env.dev` (git-ignored).
 - [x] Add a **Pi-hole v6 Local DNS record**: `trader-dev.sunspinner.ca` → `192.168.68.73`. Done 2026-09-26 on Pi-hole (Proxmox LXC 102, `192.168.68.84`); resolves correctly.
-- [ ] Add an **NPM proxy host** for `trader-dev.sunspinner.ca`, with an Access List allowing only `192.168.68.0/22` (the home LAN is a /22, not a /24).
+- [x] Add an **NPM proxy host** for `trader-dev.sunspinner.ca`, with an Access List allowing only `192.168.68.0/22` (the home LAN is a /22, not a /24). Done 2026-09-26: proxy host 4 → `http://trader-dev:8000`, access list 1 "Home LAN only", websockets on, block exploits on. Returns 502 until the container exists.
+- [ ] Add the **TLS certificate** for `trader-dev.sunspinner.ca` in NPM (edit proxy host 4 → SSL → request new → DNS challenge, Cloudflare), then turn on Force SSL and HTTP/2. The NPM API doesn't expose the stored Cloudflare token, so this needs the Cloudflare API token or doing it in the NPM UI.
 - [x] Confirm the existing Postgres **backup** will include the new `trader_dev` database. Yes: the Postgres host is backed up as a whole Proxmox VM (per Stephen, 2026-08-31, recorded in RetirementPlanner's TODO), so every database on it is included.
 
 ## Separate security note (FinanceTracker, not Trader)
 
-- [ ] Check whether FinanceTracker's **production** `backend/.env.prod` still has the placeholder `SECRET_KEY`. That key protects the stored Questrade and Anthropic tokens. If it does, change it, then paste a new Questrade refresh token into FinanceTracker, because changing the key makes the stored tokens unreadable.
+- [x] Checked 2026-09-26: FinanceTracker's production `SECRET_KEY` is a 64-character hex key with no placeholder text, so it looks like a real random key and nothing needs changing. Original item: check whether FinanceTracker's **production** `backend/.env.prod` still has the placeholder `SECRET_KEY`. That key protects the stored Questrade and Anthropic tokens. If it does, change it, then paste a new Questrade refresh token into FinanceTracker, because changing the key makes the stored tokens unreadable.
 
 ## Phase 0 spikes (SPEC §17)
 

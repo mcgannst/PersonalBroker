@@ -627,14 +627,14 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - **Reports** (`?week=YYYY-MM-DD`, default the current week): the Monday–Friday trading week containing that date: its metrics (`api.metrics({from, to})`), the week's trades, and each day's journal answer; a heading "Week of <Mon> to <Fri>"; previous/next week links. A note line says the Claude commentary arrives with the weekly report (P5-T6), without any other content in its place.
 
 **Acceptance tests:**
-- [ ] 1. The trade list renders fixture trades with `fmtMoney`/`fmtR`; Next requests `offset=50`.
-- [ ] 2. `/trades?position=3` renders the detail chain: signal evidence values, two proposals with decided-via, three orders, fills with the quote snapshot bid and ask.
-- [ ] 3. `TradeChart` receives the candles and draws reference lines for entry, stop and exit (asserted through rendered SVG elements or the component's props); `chart_error` shows "Chart unavailable".
-- [ ] 4. Performance renders the tiles from `MetricsOut` (win rate as a percentage, expectancy as R); changing the range calls `metrics` and `equity` with `from`/`to`; the Export link carries the same filters.
-- [ ] 5. Journal: `?date=2026-10-06` opens that editor; choosing Yes and typing a note then Save calls `putJournal("2026-10-06", {rules_followed: true, notes: "..."})`; the counter blocks more than 5,000 characters.
-- [ ] 6. Reports `?week=2026-10-09` requests metrics from 2026-10-05 to 2026-10-09 and shows "Week of 2026-10-05 to 2026-10-09"; previous week links to `?week=2026-10-02`.
-- [ ] 7. Empty metrics show "No trades yet" without errors.
-- [ ] 8. Gate and commit `P4-T14: ...`.
+- [x] 1. The trade list renders fixture trades with `fmtMoney`/`fmtR`; Next requests `offset=50`.
+- [x] 2. `/trades?position=3` renders the detail chain: signal evidence values, two proposals with decided-via, three orders, fills with the quote snapshot bid and ask.
+- [x] 3. `TradeChart` receives the candles and draws reference lines for entry, stop and exit (asserted through rendered SVG elements or the component's props); `chart_error` shows "Chart unavailable".
+- [x] 4. Performance renders the tiles from `MetricsOut` (win rate as a percentage, expectancy as R); changing the range calls `metrics` and `equity` with `from`/`to`; the Export link carries the same filters.
+- [x] 5. Journal: `?date=2026-10-06` opens that editor; choosing Yes and typing a note then Save calls `putJournal("2026-10-06", {rules_followed: true, notes: "..."})`; the counter blocks more than 5,000 characters.
+- [x] 6. Reports `?week=2026-10-09` requests metrics from 2026-10-05 to 2026-10-09 and shows "Week of 2026-10-05 to 2026-10-09"; previous week links to `?week=2026-10-02`.
+- [x] 7. Empty metrics show "No trades yet" without errors.
+- [x] 8. Gate and commit `P4-T14: ...`.
 
 ---
 

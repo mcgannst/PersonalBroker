@@ -101,7 +101,7 @@ Path: `Trader/docs/build/BUILD_STATE.md`. It is the single source of truth for w
   EOF
   ```
 
-- Entry heading format: `### <UTC ISO time> · <task ID> · <role> · attempt <n> · <started|finished|failed>`. Body: `Result`, `Commits`, `Gate`, `Findings` (gauntlet roles), `Notes`. Keep entries short.
+- Entry heading format: `### <Mountain time, e.g. 2026-09-27 00:14 MT> · <task ID> · <role> · attempt <n> · <started|finished|failed>` (get it with `TZ=America/Edmonton date '+%Y-%m-%d %H:%M'`). Stephen asked for all times in Mountain Time; entries before 2026-09-27 00:05 MT are UTC. Body: `Result`, `Commits`, `Gate`, `Findings` (gauntlet roles), `Notes`. Keep entries short.
 - **Never** edit or delete earlier log entries. **Never** write secrets into the file.
 
 ### 3.2a Live per-agent logs
@@ -126,7 +126,7 @@ Each running agent keeps `Trader/docs/build/agents/<TASK_ID>-<role>-a<attempt>.m
 - [ ] **Gauntlet.** When the Builder finishes, set `gauntlet` and run the stages in §5.
 - [ ] **Accept.** When every stage passes, set `accepted`, record the last commit, commit and push the state file, and append an orchestrator log entry.
 - [ ] **Phase end.** When every task in a phase is `accepted`, spawn a **phase reviewer** (a Code reviewer with the whole phase diff: `git diff <phase-start-commit>..HEAD`). Treat its findings like gauntlet findings on a synthetic task `Pn-REVIEW`. Then write the next phase's plan (task `P<n+1>-T0`).
-- [ ] **Phase start estimate.** When a phase starts (its `Pn-T0` or first task), tell Stephen the estimated duration and expected finish time (UTC), with the reasoning: the critical path of dependent tasks × about 30–45 min per task (build + gauntlet), plus ~30% for fix rounds, plus ~45 min for the phase review and next plan. Record the estimate in the header. Revise it in progress reports when the actual pace differs.
+- [ ] **Phase start estimate.** All times given to Stephen (reports, Telegram, estimates) are Mountain Time (America/Edmonton), labelled MT. When a phase starts (its `Pn-T0` or first task), tell Stephen the estimated duration and expected finish time (UTC), with the reasoning: the critical path of dependent tasks × about 30–45 min per task (build + gauntlet), plus ~30% for fix rounds, plus ~45 min for the phase review and next plan. Record the estimate in the header. Revise it in progress reports when the actual pace differs.
 - [ ] **Telegram progress.** Stephen asked (2026-09-27) for progress on Telegram as things complete: after every task acceptance (and each escalation or phase start/end), send one short line through the dev bot (@StephenTraderDevBot) with `python3 Trader/build/notify.py "<text>"` (or `trader-dev.sh notify` once P1-T9 is accepted), e.g. "✅ P1-T6 accepted (7/9 in Phase 1). Next: ...". Batch acceptances that land together into one message.
 - [ ] **Notify.** At each phase end, and on every escalation, send Stephen a Telegram message through the dev bot: `bash Trader/app/scripts/trader-dev.sh notify "<text>"` once P1-T9 is accepted, otherwise `python3 Trader/build/notify.py "<text>"` (created in P1-T1).
 
@@ -174,7 +174,7 @@ LIVE PROGRESS LOG (required): also keep your own running log at
 /Users/stephen/Documents/Code/Claude Code/Trader/Trader/docs/build/agents/<TASK_ID>-<role>-a<attempt>.md
 (e.g. P2-T3-builder-a1.md; create the agents/ folder with mkdir -p if missing). Append ONE line after
 every plan step, test run, commit, push, LIVE action or blocker, in the form
-`- <UTC time from date -u +%H:%M:%SZ> <what you just did> | next: <what you will do next>`.
+`- <Mountain time from TZ=America/Edmonton date +%H:%M:%S> MT <what you just did> | next: <what you will do next>`.
 First line: `# <TASK_ID> <role> attempt <n>`. Use a single `printf '%s\n' "..." >> <path>` call per line.
 Keep it factual and short, never include secrets. The orchestrator reads these files to answer
 "what is agent X doing?" and commits them with the state file. If you receive a message asking for a

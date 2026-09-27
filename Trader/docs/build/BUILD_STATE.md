@@ -6,15 +6,17 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 
 | Field | Value |
 |---|---|
-| Current phase | 1 |
-| Current task | P1-REVIEW (whole-phase review), P2-T0 planning |
+| Current phase | 2 (P2-T0 planning finishing) |
+| Current task | P2-T0 |
 | Gauntlet stage | Breaker + reviewers |
 | Last updated (UTC) | 2026-09-27T04:44:00Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
 | Token last refreshed (UTC) | 2026-09-27T04:39:34Z (P1-T6 LIVE) |
 | Phase 1 start commit | d64518b |
-| Phase 1 estimate | Revised 04:41Z: finish ~05:30Z (started 04:13Z; 3/9 accepted after 28 min). Earlier header times were estimates, not clock readings. |
+| Phase 1 estimate | COMPLETE at 00:08 MT Sep 27 (started 22:13 MT Sep 26): 1 h 55 min |
+| Times | Mountain Time (America/Edmonton, currently MDT = UTC−6) from 00:05 MT Sep 27; earlier entries are UTC |
+| Phase 2 estimate | Given late at 00:02 MT (P2-T0 started ~23:06 MT Sep 26): building from ~00:20 MT, finish ~04:30–05:30 MT. Critical path T1→T2→T3/T4→T5→T10→T11→T13→T15 × ~35 min + review |
 
 ## Task board
 
@@ -31,7 +33,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-T7 | Questrade data client and `questrade-check` CLI | T6 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | f14f4fa |
 | P1-T8 | Indicators | T4 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 358296f |
 | P1-T9 | Job runner, repository, nightly job, `notify` CLI | T5, T7, T8 | accepted | 2 | V✅ B✅ S✅ C✅ (fix verified) | 42bd500 |
-| P1-REVIEW | Phase 1 whole-phase review | all P1 | fixing | 2 | review ✅ (2 must-fix fixed 47aade8); should-fix round running | 47aade8 |
+| P1-REVIEW | Phase 1 whole-phase review | all P1 | accepted | 2 | review ✅ + should-fix round ✅ (orchestrator ran check.sh: 333 passed) | ad82bfa |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | building | 1 |  |  |
 
 ## Escalations
@@ -639,3 +641,8 @@ None open.
 - Commits: ad82bfa
 - Gate: check.sh passed (333 tests, 6 new)
 - Notes: 401 refresh is skipped when another request already replaced the rejected token, so concurrent 401s force one refresh
+
+### 2026-09-27 00:08 MT · P1-REVIEW · Orchestrator · attempt 2 · finished
+- Result: ACCEPTED. PHASE 1 COMPLETE. All 9 tasks plus the phase review accepted, 333 tests green (checked on trunk by the orchestrator)
+- Commits: ad82bfa (should-fix round), 47aade8 (review fixes). Tagged phase-1-complete
+- Notes: live trader_dev holds the Questrade chain and Monday 2026-09-28 universe (543 symbols)

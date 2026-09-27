@@ -130,6 +130,24 @@ Each running agent keeps `Trader/docs/build/agents/<TASK_ID>-<role>-a<attempt>.m
 - [ ] **Telegram progress.** Stephen asked (2026-09-27) for progress on Telegram as things complete: after every task acceptance (and each escalation or phase start/end), send one short line through the dev bot (@StephenTraderDevBot) with `python3 Trader/build/notify.py "<text>"` (or `trader-dev.sh notify` once P1-T9 is accepted), e.g. "✅ P1-T6 accepted (7/9 in Phase 1). Next: ...". Batch acceptances that land together into one message.
 - [ ] **Notify.** At each phase end, and on every escalation, send Stephen a Telegram message through the dev bot: `bash Trader/app/scripts/trader-dev.sh notify "<text>"` once P1-T9 is accepted, otherwise `python3 Trader/build/notify.py "<text>"` (created in P1-T1).
 
+### 4.1 Phase 2 batch mode (Stephen's decision, 2026-09-27 00:25 MT)
+
+Phase 2's plan already contains all the code, so building task by task is mostly copying. Phase 2 therefore runs
+in four BATCHES along its dependency lanes (P2-T1 was already built on its own):
+
+| Batch | Tasks | Area | Needs |
+|---|---|---|---|
+| B1 | P2-T2, T3, T4, T5 | runs/settings, T+1 ledger, fill model, simulated broker | P2-T1 |
+| B2 | P2-T6, T7, T8, T9 | strategy framework, market data service, orb_sip, spy_overlay | B1 (T4 types) |
+| B3 | P2-T10, T11, T12 | risk and kill switches, proposal service, Claude catalysts | B1, B2 (T6 intents) |
+| B4 | P2-T13, T14, T15 | engine orchestrator, pre-market job (LIVE), full simulated day | B1–B3 |
+
+- One Builder per batch applies the plan's tasks in order, committing each task separately (`P2-Tn: ...`).
+- The gauntlet then runs once per BATCH: Verifier, then Breaker and Spec+Code reviewer in parallel, then one
+  combined fix round, then a verify+fix review. Breaker tests go in `tests/gauntlet/test_p2_b<k>_breaker.py`.
+- A batch's Builder may start once the previous batch has passed its Verifier (its gauntlet can still be running).
+- Phases 3+ use specification plans (§6.6), so task-by-task building applies again there.
+
 ## 5. The gauntlet
 
 Every task, including each phase's planning task `Pn-T0`, must pass every stage in order. A failure at any stage sends the task back to the Builder with the findings (status `fixing`). After the Builder's fix, the gauntlet restarts **from the Verifier**.

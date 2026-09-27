@@ -7,7 +7,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 2 (P2-T0 planning finishing) |
-| Current task | P2-T0 (plan review), P2-T1 (building) |
+| Current task | P2-T1 Verifier, P2-T0 plan fix round; then P2-B1 |
 | Gauntlet stage | Breaker + reviewers |
 | Last updated (UTC) | 2026-09-27T04:44:00Z |
 | Last pushed commit | d64518b |
@@ -16,7 +16,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Phase 1 start commit | d64518b |
 | Phase 1 estimate | COMPLETE at 00:08 MT Sep 27 (started 22:13 MT Sep 26): 1 h 55 min |
 | Times | Mountain Time (America/Edmonton, currently MDT = UTC−6) from 00:05 MT Sep 27; earlier entries are UTC |
-| Phase 2 estimate | Given late at 00:02 MT (P2-T0 started ~23:06 MT Sep 26): building from ~00:20 MT, finish ~04:30–05:30 MT. Critical path T1→T2→T3/T4→T5→T10→T11→T13→T15 × ~35 min + review |
+| Phase 2 estimate | Revised 00:25 MT for batch mode: finish ~02:30–03:00 MT (4 batches, gauntlet per batch) |
 
 ## Task board
 
@@ -36,6 +36,10 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P1-REVIEW | Phase 1 whole-phase review | all P1 | accepted | 2 | review ✅ + should-fix round ✅ (orchestrator ran check.sh: 333 passed) | ad82bfa |
 | P2-T0 | Write the Phase 2 plan | P1-REVIEW | fixing | 2 | V+S ❌ (M1 dep, S1 overnight-hold) | 89356c6 |
 | P2-T1 | Migration 0002: trading tables, views, ledger trigger, factories | P1 | gauntlet | 1 |  | 2cab471 |
+| P2-B1 | Batch 1: T2 runs/settings, T3 ledger, T4 fill model, T5 sim broker | P2-T1, plan fix | todo | 0 | | |
+| P2-B2 | Batch 2: T6 framework, T7 market data, T8 orb_sip, T9 spy_overlay | B1 V✅ | todo | 0 | | |
+| P2-B3 | Batch 3: T10 risk/kill switches, T11 proposals, T12 Claude catalysts | B2 V✅ | todo | 0 | | |
+| P2-B4 | Batch 4: T13 orchestrator, T14 premarket (LIVE), T15 full day | B3 V✅ | todo | 0 | | |
 | P2-T2 | Runs, sim account, full runtime settings | T1 | todo | 0 | | |
 | P2-T3 | Ledger with T+1 settlement | T1, T2 | todo | 0 | | |
 | P2-T4 | Broker value types + quote fill model | T2 | todo | 0 | | |
@@ -689,3 +693,16 @@ None open.
 - Result: FAIL (1 must-fix)
 - Findings: must-fix: task table line 28, P2-T10 uses EnterLong/Exit/Cancel from P2-T6 but does not depend on T6. should-fix: expired cancel proposals just expire, so a late entry fill can be held overnight in manual mode (BR-42, RF4). Staleness from last_trade_time is an unconfirmed SPEC reading. SimBroker is tied to QuoteFillModel and QtQuote, so the P5 candle fill model cannot plug in. No step updates master plan 7.1 for the refined contracts. P2-T14 Files omits tests/test_cli.py. Plus nits.
 - Notes: no placeholders. Every task has Files, Interfaces, TDD code and a commit step. Coverage of BR/SPEC items complete. Review Focus 1-5 each pinned by named tests. Claude model IDs and prices, httpx2 and output_config verified against the claude-api skill.
+
+### 2026-09-27 00:13 MT · P2-T1 · Verifier · attempt 1 · finished
+- Result: PASS
+- Commits: verified trunk at 7eb386d (task commits e73ac57, 2cab471)
+- Gate: check.sh green (ruff, format, mypy, 353 passed), git status clean
+- Notes: P2-T1 steps 1-8 all ticked, all 5 task files on trunk, LIVE alembic current on trader_dev = 0002 (head)
+
+### 2026-09-27 00:13 MT · P2-T0 · Planner · attempt 2 · started
+- Result: fixing plan-review findings M1, S1-S5
+
+### 2026-09-27 00:25 MT · PHASE 2 · Orchestrator · attempt 1 · finished
+- Result: Stephen chose batch mode (B). P2-T2..T15 now build as 4 batches (master plan §4.1); the per-task rows below stay for reference and are ticked as each batch lands.
+- Notes: Phase 2 estimate revised to finish ~02:30-03:00 MT.

@@ -1115,7 +1115,7 @@ git pull --rebase --autostash origin trunk
 git push origin HEAD:trunk
 ```
 
-- [ ] **Step 8: LIVE: apply migration 0002 to `trader_dev`**
+- [x] **Step 8: LIVE: apply migration 0002 to `trader_dev`**
 
 From your worktree (the env file lives only in the main checkout; `--env-file` is resolved from `Trader/app`):
 `uv --directory Trader/app run --env-file ../../../../../Trader/docker/.env.dev alembic upgrade head`

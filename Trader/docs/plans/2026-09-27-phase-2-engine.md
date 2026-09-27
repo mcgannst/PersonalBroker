@@ -1883,7 +1883,7 @@ git push origin HEAD:trunk
     | sell stop-limit | as sell stop, then only if `bid − slip(bid) ≥ limit` (else `below_limit`) | `bid − slip(bid)` | `slip(bid)` |
     | buy limit / sell limit | `ask ≤ limit` / `bid ≥ limit` | the limit | 0 |
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `Trader/app/tests/broker/test_fill_model.py`:
 ```python
@@ -2113,12 +2113,12 @@ def test_order_spec_json_round_trip() -> None:
     assert spec.to_json()["stop"] == "10.01"
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `uv --directory Trader/app run pytest tests/broker/test_fill_model.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.broker.fill_model'` (or `trader.broker` if P2-T3 hasn't landed yet).
 
-- [ ] **Step 3: Implement `trader/broker/types.py`**
+- [x] **Step 3: Implement `trader/broker/types.py`**
 
 Create `Trader/app/trader/broker/__init__.py` (empty) if it doesn't exist.
 
@@ -2329,7 +2329,7 @@ class AccountState:
     equity: Decimal
 ```
 
-- [ ] **Step 4: Implement `trader/broker/fill_model.py`**
+- [x] **Step 4: Implement `trader/broker/fill_model.py`**
 
 ```python
 """Quote-based fill model for live simulation (SPEC §7.2, BR-20).
@@ -2488,12 +2488,12 @@ class QuoteFillModel:
         return bid - s, s, "stop_limit"
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `uv --directory Trader/app run pytest tests/broker/test_fill_model.py -q`
 Expected: all pass. If `test_sell_stop_limit_refused_below_the_limit` reports `not_triggered`, check the fixture: bid 9.94 ≤ stop 10.00 triggers, and 9.94 − 0.01 = 9.93 < 9.95.
 
-- [ ] **Step 6: Run the gate, commit and push**
+- [x] **Step 6: Run the gate, commit and push**
 
 Run: `uv --directory Trader/app run ruff format .` then `bash Trader/app/scripts/check.sh` → all pass.
 ```bash

@@ -3067,7 +3067,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 git pull --rebase && git push
 ```
 
-- [ ] **Step 8: LIVE: smoke-test against Questrade**
+- [x] **Step 8: LIVE: smoke-test against Questrade**
 
 Run: `bash scripts/trader-dev.sh questrade-check`
 Expected: three lines (server time, an SPY quote with `delay=0`, and remaining limits). Record the output in the activity log.

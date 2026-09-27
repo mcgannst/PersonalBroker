@@ -456,13 +456,13 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - **Strategies PUT:** `registry.update(key, params=..., enabled=..., actor=actor(user))` (a new versioned, audited revision); `ValidationError` → 422 with field messages; unknown key → 404; an empty body → 422. Disabling a strategy that owns positions is allowed (it runs exits-only, P2-REVIEW); the response's `owns_open_positions` lets the web warn.
 
 **Acceptance tests:**
-- [ ] 1. `GET /api/settings` lists every `RuntimeSettings` DB key once, with `approval_mode` as `enum` [`manual`, `auto`], `risk_pct` as `decimal` with maximum `"0.10"`, `quote_poll_seconds` as `number`, `scheduler.always_fire_late` as `string_list`, `markets_enabled` as `enum_list`, `cash_account_mode` as `boolean`, each in its group.
-- [ ] 2. `PUT /api/settings/approval_mode {"value": "auto"}` stores it, the audit row has actor `web:stephen` and before `manual`; `GET` then shows `is_default` false and `updated_by` `web:stephen`.
-- [ ] 3. `PUT /api/settings/risk_pct {"value": "0.5"}` → 422 with a field message and nothing stored; an unknown key → 404.
-- [ ] 4. `GET /api/strategies` returns `orb_sip` and `spy_overlay` with their versions, JSON Schemas and `fields` (`entry_cancel_at` nullable string, `stale_universe` enum [`skip`, `trade`]).
-- [ ] 5. `PUT /api/strategies/orb_sip {"params": {"top_n": 10}}` creates revision n+1 with the other params unchanged and an audit row; `{"params": {"top_n": -1}}` → 422, no new revision; `{"enabled": false}` with an open position of `orb_sip` → 200 with `owns_open_positions` true.
-- [ ] 6. `field_out` unit cases for each kind, including an `exclusive_minimum` (`gt=0`) and a nullable Literal.
-- [ ] 7. Gate and commit `P4-T8: ...`.
+- [x] 1. `GET /api/settings` lists every `RuntimeSettings` DB key once, with `approval_mode` as `enum` [`manual`, `auto`], `risk_pct` as `decimal` with maximum `"0.10"`, `quote_poll_seconds` as `number`, `scheduler.always_fire_late` as `string_list`, `markets_enabled` as `enum_list`, `cash_account_mode` as `boolean`, each in its group.
+- [x] 2. `PUT /api/settings/approval_mode {"value": "auto"}` stores it, the audit row has actor `web:stephen` and before `manual`; `GET` then shows `is_default` false and `updated_by` `web:stephen`.
+- [x] 3. `PUT /api/settings/risk_pct {"value": "0.5"}` → 422 with a field message and nothing stored; an unknown key → 404.
+- [x] 4. `GET /api/strategies` returns `orb_sip` and `spy_overlay` with their versions, JSON Schemas and `fields` (`entry_cancel_at` nullable string, `stale_universe` enum [`skip`, `trade`]).
+- [x] 5. `PUT /api/strategies/orb_sip {"params": {"top_n": 10}}` creates revision n+1 with the other params unchanged and an audit row; `{"params": {"top_n": -1}}` → 422, no new revision; `{"enabled": false}` with an open position of `orb_sip` → 200 with `owns_open_positions` true.
+- [x] 6. `field_out` unit cases for each kind, including an `exclusive_minimum` (`gt=0`) and a nullable Literal.
+- [x] 7. Gate and commit `P4-T8: ...`.
 
 ---
 

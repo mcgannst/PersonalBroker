@@ -332,7 +332,9 @@ def test_upgrade_at_head_is_a_noop(pg_url: str, db_factory: sessionmaker[Session
     after = snapshot()
 
     assert before == after
-    assert after[0] == ["0001"]
+    from alembic.script import ScriptDirectory
+
+    assert after[0] == [ScriptDirectory.from_config(cfg).get_current_head()]
     assert after[1] == EXPECTED_PARTITIONS
     with db_factory() as s:
         assert s.scalars(select(Symbol.ticker)).all() == ["KEEP"]

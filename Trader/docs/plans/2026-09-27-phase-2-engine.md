@@ -144,7 +144,7 @@ The five engine failure modes most likely to hurt Stephen, most likely first. Ea
 
 Cross-row references between `proposals`, `orders` and `positions` (`position_id`, `order_id`, `cancel_order_id`, `entry_order_id`, `stop_order_id`) are plain `bigint` columns without foreign keys, to avoid circular foreign keys. Every other reference has a foreign key.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `Trader/app/tests/factories.py`:
 ```python
@@ -410,12 +410,12 @@ def test_created_at_round_trips_in_utc(db_factory: sessionmaker[Session]) -> Non
     assert started.started_at.hour == 13
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `uv --directory Trader/app run pytest tests/db/test_migration_0002.py -q`
 Expected: FAIL. The table tests fail because the tables don't exist; the others with `AttributeError: module 'trader.db.models' has no attribute 'Run'` (or `Position`).
 
-- [ ] **Step 3: Add the trading models to `trader/db/models.py`**
+- [x] **Step 3: Add the trading models to `trader/db/models.py`**
 
 Change the import block at the top of `Trader/app/trader/db/models.py` to:
 ```python
@@ -706,7 +706,7 @@ class KillSwitchEvent(Base):
     reset_by: Mapped[str | None] = mapped_column(String(50))
 ```
 
-- [ ] **Step 4: Write migration `0002_trading.py`**
+- [x] **Step 4: Write migration `0002_trading.py`**
 
 `Trader/app/trader/db/migrations/versions/0002_trading.py`:
 ```python
@@ -1091,7 +1091,7 @@ def downgrade() -> None:
 
 If `test_models_match_migrated_schema` reports a difference, the model and the migration disagree: fix whichever side differs from the Interfaces list above (nullability, a named constraint or index, a type). Do not filter the comparison.
 
-- [ ] **Step 5: Stop a Phase 1 gauntlet test from pinning the head revision**
+- [x] **Step 5: Stop a Phase 1 gauntlet test from pinning the head revision**
 
 `tests/gauntlet/test_p1_t2_breaker.py::test_upgrade_at_head_is_a_noop` ends with `assert after[0] == ["0001"]`, which every new migration breaks. Replace that one line with a check against the script directory's head, so it keeps testing what it meant (upgrading at head changes nothing):
 ```python
@@ -1100,12 +1100,12 @@ If `test_models_match_migrated_schema` reports a difference, the model and the m
     assert after[0] == [ScriptDirectory.from_config(cfg).get_current_head()]
 ```
 
-- [ ] **Step 6: Run the new and the Phase 1 migration tests**
+- [x] **Step 6: Run the new and the Phase 1 migration tests**
 
 Run: `uv --directory Trader/app run pytest tests/db tests/gauntlet/test_p1_t2_breaker.py -q`
 Expected: all pass, including P1's `test_models_match_migrated_schema`, `test_alembic_check_through_env_sees_no_changes`, `test_downgrade_and_upgrade_again` and `test_upgrade_at_head_is_a_noop`.
 
-- [ ] **Step 7: Run the gate, commit and push**
+- [x] **Step 7: Run the gate, commit and push**
 
 Run: `uv --directory Trader/app run ruff format .` then `bash Trader/app/scripts/check.sh` → all pass.
 ```bash

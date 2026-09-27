@@ -24,7 +24,7 @@ from tests.api.conftest import DEFAULT_USER
 from tests.api.test_feed import add_proposal, seed, settings_with
 from tests.fakes_api import FakeFeed, make_services, test_core
 from trader.api.deps import FeedMessage, current_user
-from trader.api.errors import install_error_handlers
+from trader.api.errors import ApiError, install_error_handlers
 from trader.api.feed import WATERMARK_TOPICS, PollingChangeFeed
 from trader.api.routers import stream
 from trader.api.schemas import StreamHello
@@ -327,3 +327,56 @@ def test_real_server_new_proposal_within_2s_and_shutdown_within_5s(db_factory: s
         live.thread.join(WAIT)
         assert not live.thread.is_alive()
         assert time.monotonic() - t1 < 5.0 + 1
+
+
+# --- fix round 1: the stream limit reserves a slot before any await ---------------------------------------
+
+
+@pytest.mark.db
+async def test_stream_slots_are_reserved_before_the_await_and_released(
+    db_factory: sessionmaker[Session],
+) -> None:
+    feed = FakeFeed()
+    services = make_services(test_core(db_factory, RealClock()), feed=feed)
+    results = await asyncio.gather(
+        *(stream.stream(services, DEFAULT_USER) for _ in range(stream.MAX_STREAMS + 1)),
+        return_exceptions=True,
+    )
+    opened = [r for r in results if not isinstance(r, BaseException)]
+    assert len(opened) == stream.MAX_STREAMS
+    # a response that never ran still gives its slot back through its background task
+    assert opened[0].background is not None
+    await opened[0].background()
+    extra = await stream.stream(services, DEFAULT_USER)
+    # a stream that ran to its end gives its slot back too
+    body: AsyncIterator[str] = extra.body_iterator  # type: ignore[assignment]
+    assert (await take(body, 1))[0].startswith("retry:")
+    feed.close()
+    async for _ in body:
+        pass
+    assert feed.subscriber_count() == 0
+    again = await stream.stream(services, DEFAULT_USER)
+    for r in [*opened[1:], again]:
+        assert r.background is not None
+        await r.background()
+    assert stream._reserved.get(feed, 0) == 0
+
+
+class _FillsUpWhileWaiting(FakeFeed):
+    """Reports no subscribers at the first check and a full house afterwards (streams opened elsewhere)."""
+
+    calls = 0
+
+    def subscriber_count(self) -> int:
+        self.calls += 1
+        return 0 if self.calls == 1 else stream.MAX_STREAMS
+
+
+@pytest.mark.db
+async def test_stream_limit_is_checked_again_after_the_await(db_factory: sessionmaker[Session]) -> None:
+    feed = _FillsUpWhileWaiting()
+    services = make_services(test_core(db_factory, RealClock()), feed=feed)
+    with pytest.raises(ApiError) as caught:
+        await stream.stream(services, DEFAULT_USER)
+    assert caught.value.status == 429
+    assert stream._reserved.get(feed, 0) == 0  # the refused request released its slot

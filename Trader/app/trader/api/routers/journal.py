@@ -5,14 +5,19 @@ trades (`v_daily_pnl`); the default range is the last 30 sessions up to today (E
 row: the day must be a session on or before today (ET), else 422. Only the fields sent change, so a notes
 edit never overwrites the "Rules followed?" answer given on Telegram; `rules_followed: null` clears the
 answer. Sending `rules_followed` sets `answered_via = "web"`. Every PUT writes an `audit_log` row
-`journal.update` with the row before and after.
+`journal.update` with the row before and after. The first PUT of a day inserts with `ON CONFLICT DO NOTHING`
+and otherwise locks the existing row before reading it, so two PUTs racing for a new day both audit the
+true "before" (the first `null`, the second the first's result).
+
+Dates outside the market calendar's range (2020-2030) are never a 500: a PUT refuses them (422) and the
+list's default range falls back to calendar days.
 """
 
 from datetime import date, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
-from sqlalchemy import Date, bindparam, select, text
+from sqlalchemy import Date, bindparam, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -53,9 +58,16 @@ def _days(s: Session, run_id: int, date_from: date, date_to: date) -> list[Journ
 
 def _default_from(cal: SessionCalendar, today: date) -> date:
     """The first of the last `DEFAULT_SESSIONS` sessions up to and including `today`."""
-    if cal.is_session(today):
-        return cal.sessions_before(today, DEFAULT_SESSIONS - 1)[0]
-    return cal.sessions_before(today, DEFAULT_SESSIONS)[0]
+    try:
+        if cal.is_session(today):
+            return cal.sessions_before(today, DEFAULT_SESSIONS - 1)[0]
+        return cal.sessions_before(today, DEFAULT_SESSIONS)[0]
+    except (ValueError, OverflowError):  # outside the calendar's range: fall back to calendar days
+        pass
+    try:
+        return today - timedelta(days=DEFAULT_SESSIONS * 7 // 5)
+    except OverflowError:  # before year 1
+        return date.min
 
 
 def _snapshot(row: m.Journal | None) -> dict[str, Any] | None:
@@ -79,7 +91,7 @@ def _check_day(cal: SessionCalendar, day: date, today: date) -> None:
         raise refuse("The date is in the future")
     try:
         is_session = cal.is_session(day)
-    except ValueError:  # outside the calendar's range
+    except (ValueError, OverflowError):  # outside the calendar's range (far dates overflow pandas)
         is_session = False
     if not is_session:
         raise refuse("The date is not a trading session")
@@ -97,10 +109,7 @@ def list_journal(
     run_id = live_run_id(services)
     end = date_to or et_date(core.clock.now())
     if date_from is None:
-        try:
-            date_from = _default_from(core.calendar, end)
-        except ValueError:  # `to` outside the calendar's range: fall back to calendar days
-            date_from = end - timedelta(days=DEFAULT_SESSIONS * 7 // 5)
+        date_from = _default_from(core.calendar, end)
     with core.factory() as s:
         return Items[JournalDayOut](items=_days(s, run_id, date_from, end))
 
@@ -124,9 +133,16 @@ def put_journal(session_date: date, body: JournalIn, user: CsrfUser, services: S
     run_id = live_run_id(services)
     key = (m.Journal.run_id == run_id, m.Journal.session_date == session_date)
     with session_scope(core.factory) as s:
-        before = _snapshot(s.scalars(select(m.Journal).where(*key).with_for_update()).one_or_none())
-        stmt = insert(m.Journal).values(run_id=run_id, session_date=session_date, **values)
-        s.execute(stmt.on_conflict_do_update(index_elements=["run_id", "session_date"], set_=values))
+        created = s.execute(
+            insert(m.Journal)
+            .values(run_id=run_id, session_date=session_date, **values)
+            .on_conflict_do_nothing(index_elements=["run_id", "session_date"])
+            .returning(m.Journal.run_id)
+        ).first()
+        before: dict[str, Any] | None = None
+        if created is None:  # the row exists (perhaps just committed by a racing PUT): lock, read, update
+            before = _snapshot(s.scalars(select(m.Journal).where(*key).with_for_update()).one())
+            s.execute(update(m.Journal).where(*key).values(**values))
         s.expire_all()
         row = s.scalars(select(m.Journal).where(*key)).one()
         after = _snapshot(row)

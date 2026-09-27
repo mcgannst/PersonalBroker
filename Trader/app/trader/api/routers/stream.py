@@ -11,6 +11,12 @@ uvicorn server begins to exit. The last one matters because uvicorn waits for op
 the lifespan shutdown, so the feed's stop event alone would hold a graceful shutdown for its whole timeout:
 `uvicorn.Server.handle_exit` (what SIGTERM and SIGINT call) is wrapped once at import to mark the server's
 event loop as exiting, and every stream on that loop ends within a second.
+
+The `MAX_STREAMS` limit counts reserved slots, not only subscriptions: the route reserves a slot
+synchronously before its first `await` (so eleven requests arriving together can't all pass the check while
+none has subscribed yet), checks the feed's subscriber count again after the await, and releases the slot on
+every exit path (a refusal or error before the response, the stream's end, a disconnect, a response that
+never started). `_Slot.release` is idempotent.
 """
 
 import asyncio
@@ -92,6 +98,35 @@ def _install_exit_hook() -> None:
 
 
 _install_exit_hook()
+
+
+# --- the stream limit ---------------------------------------------------------------------------------------
+
+_reserved: "weakref.WeakKeyDictionary[ChangeFeed, int]" = weakref.WeakKeyDictionary()
+
+
+class _Slot:
+    """One reserved stream slot of a feed; `release()` gives it back once, however often it is called."""
+
+    def __init__(self, feed: ChangeFeed) -> None:
+        self._feed: ChangeFeed | None = feed
+        _reserved[feed] = _reserved.get(feed, 0) + 1
+
+    def release(self) -> None:
+        feed, self._feed = self._feed, None
+        if feed is not None:
+            _reserved[feed] = max(0, _reserved.get(feed, 0) - 1)
+
+
+def reserve_slot(feed: ChangeFeed) -> _Slot:
+    """Reserve a stream slot (synchronous: call it before any await), else ApiError 429."""
+    if max(_reserved.get(feed, 0), feed.subscriber_count()) >= MAX_STREAMS:
+        raise _too_many()
+    return _Slot(feed)
+
+
+def _too_many() -> ApiError:
+    return ApiError(429, "too_many_requests", "Too many live update streams are open")
 
 
 # --- sessions -----------------------------------------------------------------------------------------------
@@ -195,22 +230,42 @@ def _idle_hours(services: Services) -> int:
     return settings.web_session_idle_hours
 
 
+async def _guarded(body: AsyncGenerator[str, None], slot: _Slot) -> AsyncGenerator[str, None]:
+    try:
+        async for chunk in body:
+            yield chunk
+    finally:
+        slot.release()
+        await body.aclose()
+
+
 @router.get("/stream", response_class=StreamingResponse)
 async def stream(services: Services, user: CurrentUser) -> StreamingResponse:
     """Live updates for the signed-in browser (EventSource sends the cookie; a GET needs no CSRF)."""
     feed = services.feed
-    if feed.subscriber_count() >= MAX_STREAMS:
-        raise ApiError(429, "too_many_requests", "Too many live update streams are open")
-    core = services.core
-    idle_hours = await asyncio.to_thread(_idle_hours, services)
+    slot = reserve_slot(feed)  # before any await
+    try:
+        core = services.core
+        idle_hours = await asyncio.to_thread(_idle_hours, services)
+        if feed.subscriber_count() >= MAX_STREAMS:  # subscribed elsewhere while this request waited
+            raise _too_many()
 
-    async def still_valid() -> bool:
-        return await asyncio.to_thread(session_valid, core.factory, core.clock, user.session_id, idle_hours)
+        async def still_valid() -> bool:
+            return await asyncio.to_thread(
+                session_valid, core.factory, core.clock, user.session_id, idle_hours
+            )
 
-    body = event_stream(feed, hello=StreamHello(server_time=core.clock.now()), session_valid=still_valid)
+        inner = event_stream(feed, hello=StreamHello(server_time=core.clock.now()), session_valid=still_valid)
+        body = _guarded(inner, slot)
+        weakref.finalize(body, slot.release)  # last resort: a response that is dropped without running
+    except BaseException:
+        slot.release()
+        raise
+
+    async def close() -> None:  # runs after a disconnect too: always unsubscribes and frees the slot
+        slot.release()  # an unstarted generator's aclose() never runs its finally
+        await body.aclose()
+
     return StreamingResponse(
-        body,
-        media_type="text/event-stream",
-        headers=STREAM_HEADERS,
-        background=BackgroundTask(body.aclose),  # runs after a disconnect too: always unsubscribes
+        body, media_type="text/event-stream", headers=STREAM_HEADERS, background=BackgroundTask(close)
     )

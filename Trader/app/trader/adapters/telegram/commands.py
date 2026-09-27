@@ -8,11 +8,10 @@ state, through KillSwitches (which writes the audit rows). /resume never resets 
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, timedelta
-from decimal import Decimal
+from datetime import date
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from trader.adapters.questrade.auth import TokenHealth
@@ -22,7 +21,7 @@ from trader.db import models as m
 from trader.engine.killswitch import KillSwitches
 from trader.engine.scheduler import DayPlan
 from trader.market.calendar import SessionCalendar
-from trader.market.clock import Clock, et_date
+from trader.market.clock import Clock
 from trader.market.sessions import current_session
 from trader.notify import views
 from trader.notify.types import Button, OutboundMessage, PnlView, PositionLine, Renderer, StatusView
@@ -90,53 +89,16 @@ async def status_view(deps: CommandDeps) -> StatusView:
     )
 
 
-def _trade_pnl(s: Session, run_id: int, since: date, until: date | None = None) -> Decimal:
-    q = select(func.coalesce(func.sum(m.Trade.pnl), 0)).where(
-        m.Trade.run_id == run_id, m.Trade.session_date >= since
-    )
-    if until is not None:
-        q = q.where(m.Trade.session_date <= until)
-    return Decimal(s.execute(q).scalar_one())
-
-
 async def pnl_view(deps: CommandDeps, lines: Sequence[PositionLine] | None = None) -> PnlView:
     """Today's realized P&L, the unrealized P&L of open positions, the week to date (from the Monday of the
-    current ET week) and equity/drawdown from the latest snapshot (or the starting cash when none).
-    Positions without a quote are left out of `unrealized` (the /pnl handler then says it is partial).
-    `lines` reuses already-built position lines (one quote fetch per command)."""
+    current ET week) and equity/drawdown from the latest snapshot (or the starting cash when none): the
+    shared `trader.notify.views.pnl_view` (the web dashboard uses it too). Positions without a quote are
+    left out of `unrealized` (the /pnl handler then says it is partial). `lines` reuses already-built
+    position lines (one quote fetch per command)."""
     now = deps.clock.now()
-    session_date = current_session(deps.calendar, now)
-    today = et_date(now)
-    monday = today - timedelta(days=today.weekday())
-    with deps.factory() as s:
-        realized = _trade_pnl(s, deps.run_id, session_date, session_date)
-        week = _trade_pnl(s, deps.run_id, monday)
-        snap = s.execute(
-            select(m.EquitySnapshot)
-            .where(m.EquitySnapshot.run_id == deps.run_id)
-            .order_by(m.EquitySnapshot.ts.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-        if snap is not None:
-            equity, peak, drawdown = snap.equity, snap.peak_equity, snap.drawdown_pct
-        else:
-            cash = s.execute(
-                select(m.SimAccount.starting_cash).where(m.SimAccount.run_id == deps.run_id)
-            ).scalar_one_or_none()
-            equity = peak = cash if cash is not None else Decimal(0)
-            drawdown = Decimal(0)
     if lines is None:
         lines = await position_lines(deps)
-    unrealized = sum((ln.unrealized_pnl for ln in lines if ln.unrealized_pnl is not None), Decimal(0))
-    return PnlView(
-        session_date=session_date,
-        realized_today=realized,
-        unrealized=unrealized,
-        week_to_date=week,
-        equity=equity,
-        peak_equity=peak,
-        drawdown_pct=drawdown,
-    )
+    return views.pnl_view(deps.factory, deps.calendar, now, deps.run_id, lines)
 
 
 # --- command handler -------------------------------------------------------------------------------------

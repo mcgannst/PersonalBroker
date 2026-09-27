@@ -1,5 +1,6 @@
 """P4-T7 acceptance tests 1-5 and 8: `GET /api/metrics`, `GET /api/equity`, `GET /api/export/trades.csv`."""
 
+import inspect
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -18,7 +19,7 @@ from trader.api.schemas import HistogramBinOut
 from trader.db import models as m
 from trader.engine.runs import get_live_run
 from trader.market.clock import FixedClock
-from trader.reports.export import TRADE_CSV_COLUMNS
+from trader.reports.export import TRADE_CSV_COLUMNS, trades_csv
 from trader.settings_store import RuntimeSettings
 
 NOW = datetime(2026, 10, 9, 21, 0, tzinfo=UTC)  # Friday 17:00 ET
@@ -283,3 +284,23 @@ def test_export_trades_csv(db_factory: sessionmaker[Session]) -> None:
     whole = client.get("/api/export/trades.csv")
     assert whole.headers["content-disposition"] == f'attachment; filename="trades-{run_id}-all-all.csv"'
     assert len(whole.text.splitlines()) == 1 + 5
+
+
+# --- fix round 1 ------------------------------------------------------------------------------------------
+
+
+@pytest.mark.db
+async def test_an_unfinished_export_is_closed_at_once(db_factory: sessionmaker[Session]) -> None:
+    """A client that disconnects mid-export: the stream wrapper closes the generator, which closes its
+    server-side cursor and returns the connection (the transaction ends) without waiting for GC."""
+    run_id = _live(db_factory)
+    _seed_four(db_factory, run_id)
+    engine = db_factory.kw["bind"]
+    lines = trades_csv(db_factory, run_id, None, None)
+    stream = performance.close_when_done(lines)
+    assert (await stream.__anext__()).startswith("trade_id,")
+    await stream.__anext__()  # the first row: the cursor and its transaction are open
+    assert engine.pool.checkedout() == 1
+    await stream.aclose()
+    assert inspect.getgeneratorstate(lines) == inspect.GEN_CLOSED
+    assert engine.pool.checkedout() == 0

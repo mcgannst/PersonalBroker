@@ -172,11 +172,15 @@ def live_run_id(services: Services) -> int:
     return get_live_run(core.factory, core.clock, _settings(services)).id
 
 
+MAX_ID = 2**63 - 1  # the largest bigint: an id above it can't exist (and would fail in PostgreSQL)
+
+
 def resolve_run(services: Services, run: str = "live") -> int:
-    """`live` (the live run) or the id of an existing run (for example a replay), else 404."""
+    """`live` (the live run) or the id of an existing run (for example a replay), else 404. Only ASCII
+    digits count as an id (`str.isdigit` also accepts "²" and Arabic-Indic digits), bounded to a bigint."""
     if run == "live":
         return live_run_id(services)
-    if run.isdigit() and len(run) <= 18:  # fits a bigint
+    if run.isascii() and run.isdigit() and len(run) <= 19 and 1 <= int(run) <= MAX_ID:
         with services.core.factory() as s:
             if s.get(m.Run, int(run)) is not None:
                 return int(run)

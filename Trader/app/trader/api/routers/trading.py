@@ -7,24 +7,26 @@ come from `trader.notify.views.position_lines`, the builder behind Telegram's `/
 Telegram show the same numbers. A symbol missing from the database shows ticker `?`.
 
 Routes that need quotes or candles are `async` and run their database work in a worker thread; the quote
-fetch itself runs on the event loop (`anyio.from_thread.run`), so the shared `CachedQuotes` stays on one
-loop.
+and candle fetches run on the event loop, so the shared `CachedQuotes` stays on one loop. The candle fallback
+of the position detail is bounded by `CANDLE_TIMEOUT_SECONDS` (a timeout is a `chart_error`).
+
+Integer query and path values are bounded (`MAX_OFFSET`, `MAX_ID`) so none can overflow a bigint.
 """
 
+import asyncio
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from typing import Annotated, Any, Literal
 
 import anyio
-import anyio.from_thread
 import anyio.to_thread
 import structlog
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from trader.api.deps import ApiServices, Services, current_user, live_run_id, resolve_run
+from trader.api.deps import MAX_ID, ApiServices, Services, current_user, live_run_id, resolve_run
 from trader.api.errors import ApiError
 from trader.api.schemas import (
     CandidateOut,
@@ -54,7 +56,11 @@ router = APIRouter(tags=["trading"], dependencies=[Depends(current_user)])
 
 UNKNOWN_TICKER = "?"
 CANDLE_INTERVAL = "5m"
+CANDLE_TIMEOUT_SECONDS = 10.0  # the position chart's candle fallback; slower is a chart_error
+MAX_OFFSET = 1_000_000  # the deepest page of /trades (bounded so it can never overflow a bigint)
 Limit = Annotated[int, Query(ge=1, le=500)]
+Offset = Annotated[int, Query(ge=0, le=MAX_OFFSET)]
+PositionId = Annotated[int, Path(ge=1, le=MAX_ID)]
 RunId = Annotated[int, Depends(resolve_run)]
 
 
@@ -197,30 +203,40 @@ class OpenPositions:
     positions: tuple[PositionOut, ...]
 
 
-def _open_positions_blocking(services: ApiServices, run_id: int) -> OpenPositions:
+@dataclass(frozen=True, slots=True)
+class _OpenRows:
+    rows: views.OpenPositionRows
+    positions: dict[int, m.Position]
+    keys: dict[int, str]
+
+
+def _open_rows_blocking(services: ApiServices, run_id: int) -> _OpenRows:
     core = services.core
-    lines = anyio.from_thread.run(views.position_lines, core.factory, core.clock, run_id, services.quotes)
-    with core.factory() as s:
-        rows = {
-            p.id: p
-            for p in s.execute(
-                select(m.Position).where(m.Position.id.in_([ln.position_id for ln in lines]))
-            ).scalars()
-        }
-        keys = strategy_keys(s, (p.strategy_config_id for p in rows.values()))
-    out = []
-    for ln in lines:
-        p = rows.get(ln.position_id)
-        if p is None:  # deleted in between: never a 500
-            continue
-        key = keys.get(p.strategy_config_id, "") if p.strategy_config_id is not None else ""
-        out.append(PositionOut.from_line(ln, symbol_id=p.symbol_id, strategy_key=key, opened_at=p.opened_at))
-    return OpenPositions(lines, tuple(out))
+    rows = views.open_position_rows(core.factory, run_id)
+    positions = {p.id: p for p, _ in rows.positions}
+    keys: dict[int, str] = {}
+    if positions:
+        with core.factory() as s:
+            keys = strategy_keys(s, (p.strategy_config_id for p in positions.values()))
+    return _OpenRows(rows, positions, keys)
 
 
 async def open_positions(services: ApiServices, run_id: int) -> OpenPositions:
-    """Open positions of the run with their last prices (quotes may be missing or fail: `last` null)."""
-    return await anyio.to_thread.run_sync(_open_positions_blocking, services, run_id)
+    """Open positions of the run with their last prices (quotes may be missing or fail: `last` null).
+
+    The same three steps as `views.position_lines` (Telegram's `/positions`), so the numbers are identical:
+    the database rows in a worker thread, the quotes on the event loop (the shared `CachedQuotes` stays on
+    one loop), then the lines."""
+    now = services.core.clock.now()
+    got = await anyio.to_thread.run_sync(_open_rows_blocking, services, run_id)
+    prices = await views.last_prices(services.quotes, got.rows.symbol_ids)
+    lines = views.lines_from(got.rows, prices, now)
+    out = []
+    for ln in lines:
+        p = got.positions[ln.position_id]
+        key = got.keys.get(p.strategy_config_id, "") if p.strategy_config_id is not None else ""
+        out.append(PositionOut.from_line(ln, symbol_id=p.symbol_id, strategy_key=key, opened_at=p.opened_at))
+    return OpenPositions(lines, tuple(out))
 
 
 # --- candidates ---------------------------------------------------------------------------------------------
@@ -534,7 +550,7 @@ def _detail_blocking(services: ApiServices, position_id: int) -> _Detail:
 
 
 @router.get("/positions/{position_id}", response_model=PositionDetailOut)
-async def get_position(services: Services, position_id: int) -> PositionDetailOut:
+async def get_position(services: Services, position_id: PositionId) -> PositionDetailOut:
     """One position of the live run with its whole chain and the session's 5-minute chart."""
     d = await anyio.to_thread.run_sync(_detail_blocking, services, position_id)
     position = stored_position_out(d.position, d.ticker, d.strategy_key)
@@ -545,7 +561,9 @@ async def get_position(services: Services, position_id: int) -> PositionDetailOu
     candles, chart_error = d.candles, None
     if not candles and services.candles is not None:
         try:
-            got = await services.candles(d.position.symbol_id, *d.window)
+            got = await asyncio.wait_for(
+                services.candles(d.position.symbol_id, *d.window), CANDLE_TIMEOUT_SECONDS
+            )
             candles = [
                 CandleOut(start=c.start, open=c.open, high=c.high, low=c.low, close=c.close, volume=c.volume)
                 for c in got
@@ -575,7 +593,7 @@ def get_trades(
     from_: Annotated[date | None, Query(alias="from")] = None,
     to: date | None = None,
     limit: Limit = 100,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    offset: Offset = 0,
 ) -> Items[TradeOut]:
     """Closed trades of the run (`live` or a run id), newest first, filtered by session date."""
     q = (

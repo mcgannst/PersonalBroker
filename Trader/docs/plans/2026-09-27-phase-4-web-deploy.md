@@ -378,6 +378,13 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - [x] 10. `CachedQuotes`: two calls within the TTL fetch once; after the TTL, again; two concurrent calls share one fetch; a failed fetch is retried on the next call.
 - [x] 11. Gate and commit `P4-T5: ...`.
 
+**Fix round 1 (P4-BA gauntlet, 2026-09-27):**
+- Integer inputs are bounded so none can overflow a bigint: `/trades` `offset` is `0..MAX_OFFSET` (1,000,000), `/positions/{id}` is `1..deps.MAX_ID` (2^63-1), else 422. `deps.resolve_run` (shared with T7) takes `live` or ASCII digits only (`str.isdigit` also accepts `²` and Arabic-Indic digits, which crashed `int()`) within `1..MAX_ID`, else 404.
+- Open positions no longer run database work on the event loop: `trader.notify.views.position_lines` is now `open_position_rows` (sync, database), `last_prices` (async, quotes) and `lines_from` (pure), and `trading.open_positions` runs the first in a worker thread, the quotes on the loop and the third after, so the numbers stay identical to Telegram's `/positions`.
+- The candle fallback of the position detail is bounded by `CANDLE_TIMEOUT_SECONDS` (10 s, `asyncio.wait_for`); a timeout is `chart_error: "TimeoutError"`.
+- The dashboard P&L is `trader.notify.views.pnl_view` (sync), which `trader.adapters.telegram.commands.pnl_view` now also calls, so the private `_trade_pnl` is no longer imported across packages.
+- `GET /api/dashboard` takes `run=live` (SPEC §11 lists it, and it is the default); any other value is 422, because the dashboard is live-only.
+
 ---
 
 ### Task P4-T6: Decisions: proposals (list, get, approve, reject), kill switches (state, reset, pause, resume), decision time in Telegram
@@ -448,6 +455,12 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - **R histogram wire format:** always 18 bins in order: the open-ended first bin `{"lo": "-Infinity", "hi": "-3.0"}`, sixteen `[lo, hi)` bins of 0.5 R from `-3.0` to `5.0`, and the open-ended last bin `{"lo": "5.0", "hi": "Infinity"}` (5 R exactly lands there). The open ends are the Decimal sentinels `-Infinity`/`Infinity`, which the web's `histogramLabel` reads as `< -3` / `≥ 5`. `HistogramBinOut` (T1) refuses non-finite Decimals on validation, so `performance.histogram_bins` builds the two open bins with `model_construct` and `GET /api/metrics` returns its JSON itself (the response model stays `MetricsOut` in the OpenAPI). Anything that re-validates `MetricsOut` from JSON (a future Python client) needs `allow_inf_nan=True` on `HistogramBinOut.lo/hi` (T1's file; a one-line follow-up for T18).
 - Additive names: `trader.reports.export.safe_cell` and `FORMULA_STARTS` (the guard also covers a leading tab and carriage return); `trader.api.routers.performance.compute_metrics`, `histogram_bins`, `thin`, `check_range`, `MAX_EQUITY_POINTS`; `tests/reports.add_trade` (a closed position plus its trade).
 - The PUT path is declared `/journal/{session_date}` (same URL as `{date}`). A PUT with neither field → 422; a `from` after `to` → 422 on every T7 route. "On or before today's session" is read as on or before today's ET date (a Saturday cannot answer next Monday). The CSV file name uses `all` for an open bound: `trades-<run id>-<from|all>-<to|all>.csv`.
+
+**Fix round 1 (P4-BA gauntlet, 2026-09-27):**
+- `run` takes `live` or ASCII digits within the bigint range only (see T5's fix-round note), else 404.
+- Journal: dates outside the calendar's range (2020-2030) are never a 500. pandas raises `OverflowError` (not `ValueError`) for years like 1 and 9999, so a PUT catches both and answers 422, and the GET's default range falls back to calendar days (and to `date.min` below year 1).
+- Journal PUT race: the first PUT of a day inserts with `ON CONFLICT DO NOTHING ... RETURNING`. When the row already exists (maybe just committed by a racing writer, whose uncommitted insert the PUT waits for), it locks the row (`FOR UPDATE`), snapshots it as the audit's `before` and updates only the sent fields.
+- CSV export: `trades_csv` closes its server-side cursor in a `finally`, and the route streams it through `performance.close_when_done`, which closes the generator on every exit (end, error, client disconnect). So an unfinished export releases its connection and transaction at once, not when the generator is garbage-collected.
 
 ---
 
@@ -573,6 +586,8 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - **Plan bug, fixed inside T11's files:** uvicorn waits for open connections to close *before* it runs the lifespan shutdown, so the feed's stop event (set in T3's lifespan shutdown) cannot end open streams in time: without help a graceful stop waits the full `timeout_graceful_shutdown` (10 s) and then cancels. `trader.api.routers.stream` therefore wraps `uvicorn.Server.handle_exit` once at import (what SIGTERM/SIGINT call; the approach sse-starlette uses) to mark that server's event loop as exiting, and every stream on it ends within a second (`server_exiting()`). The stop event still ends every stream too. T3 and T18 need nothing extra as long as uvicorn is started through `uvicorn.run`/`uvicorn.Server`.
 - The baseline is read when the first subscriber arrives (inside `subscribe()`, before the stream sends its full `invalidate`), not on the next loop poll, so a change made between the client's resync refetch and the next poll cannot be missed. Leaving the last subscription drops the baseline (idle again).
 - Additive names: `feed.full_invalidate()`, `PollingChangeFeed.publish(msg)` and `.poll()`, `feed.MAX_EVENTS = 50` (the newest 50, oldest first), `stream.event_stream(feed, *, hello, session_valid, sleep, exiting)`, `stream.session_valid(factory, clock, session_id, idle_hours)` (the same rules as `auth.authenticate`, read from `web_sessions` by `AuthUser.session_id`), `STREAM_HEADERS`, `TICK_SECONDS = 1`. After an overflow a subscriber keeps only the full `invalidate` and drops later messages until it reads it. The stream limit uses `feed.subscriber_count()` (nothing to leak if a response never starts).
+
+**Fix round 1 (P4-BA gauntlet, 2026-09-27):** the limit counts *reserved slots* per feed (a `WeakKeyDictionary`), not only subscriptions: eleven requests arriving together all passed the old check, because none had subscribed yet. `stream.reserve_slot(feed)` runs synchronously before the route's first await (429 when `max(reserved, subscriber_count()) >= MAX_STREAMS`). The route checks `subscriber_count()` again after its await, and the slot is released, idempotently, on every exit path: an error or refusal before the response, the stream's end (a `finally` in the wrapping generator), the response's background task (a response that never started iterating, whose `aclose()` would skip a `finally`), and a `weakref.finalize` as a last resort.
 
 ---
 

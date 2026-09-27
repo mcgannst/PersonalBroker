@@ -413,3 +413,15 @@ def test_timeline_times_are_utc_from_et_wall_clock(db_factory: sessionmaker[Sess
     assert timeline["nightly"]["at"] == datetime.combine(
         date(2026, 11, 30), time(20, 0), tzinfo=ET
     ).astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def test_dashboard_takes_run_live_only(db_factory: sessionmaker[Session]) -> None:
+    """SPEC §11 lists `?run=live`; the dashboard is live-only, so any other run is a 422."""
+    client = _client(db_factory, FixedClock(NOW))
+    live = client.get("/api/dashboard", params={"run": "live"})
+    assert live.status_code == 200
+    assert live.json()["run_id"] == client.get("/api/dashboard").json()["run_id"]
+    for other in ("1", "replay", "LIVE", ""):
+        resp = client.get("/api/dashboard", params={"run": other})
+        assert resp.status_code == 422, other
+        assert resp.json()["error"]["code"] == "validation"

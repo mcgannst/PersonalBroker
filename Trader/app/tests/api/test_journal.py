@@ -1,10 +1,13 @@
 """P4-T7 acceptance tests 6 and 7: `GET /api/journal` and `PUT /api/journal/{date}`."""
 
+import threading
+import time
 from datetime import UTC, date, datetime
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.api.conftest import make_client
@@ -177,3 +180,59 @@ def test_get_range_and_default_last_30_sessions(db_factory: sessionmaker[Session
     ranged = client.get("/api/journal", params={"from": "2026-08-01", "to": "2026-08-31"}).json()["items"]
     assert [i["session_date"] for i in ranged] == ["2026-08-25", "2026-08-24"]
     assert client.get("/api/journal", params={"from": "2026-09-01", "to": "2026-08-01"}).status_code == 422
+
+
+# --- fix round 1 ------------------------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_dates_outside_the_calendar_are_never_a_500(db_factory: sessionmaker[Session]) -> None:
+    """The calendar covers 2020-2030; pandas overflows on year 1 or 9999 (OverflowError, not ValueError)."""
+    _live(db_factory)
+    client = _client(db_factory)
+    for to in ("0001-01-01", "0001-01-02", "1900-01-02", "2019-12-31", "9999-12-31"):
+        assert client.get("/api/journal", params={"to": to}).status_code == 200, to
+    for day in ("0001-01-01", "1900-01-02", "2019-12-31"):
+        assert client.put(f"/api/journal/{day}", json={"notes": "x"}).status_code == 422, day
+
+
+def _lock_waiters(factory: sessionmaker[Session]) -> int:
+    with factory() as s:
+        return int(
+            s.execute(
+                text("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'")
+            ).scalar_one()
+        )
+
+
+@pytest.mark.db
+def test_first_put_racing_another_writer_audits_the_true_before(db_factory: sessionmaker[Session]) -> None:
+    """Another writer (a racing PUT, Telegram) inserts the day's row but has not committed: the PUT waits for
+    it, then audits that row as its "before" instead of null."""
+    run_id = _live(db_factory)
+    day = date(2026, 10, 5)
+    client = _client(db_factory)
+    writer = db_factory()
+    writer.add(
+        m.Journal(
+            run_id=run_id, session_date=day, rules_followed=True, answered_via="telegram", updated_at=NOW
+        )
+    )
+    writer.flush()
+    result: dict[str, Any] = {}
+    thread = threading.Thread(
+        target=lambda: result.update(resp=client.put(f"/api/journal/{day}", json={"notes": "web note"}))
+    )
+    thread.start()
+    deadline = time.monotonic() + 10
+    while _lock_waiters(db_factory) == 0 and thread.is_alive():
+        assert time.monotonic() < deadline, "the PUT never waited for the uncommitted row"
+        time.sleep(0.05)
+    writer.commit()
+    writer.close()
+    thread.join(10)
+    assert result["resp"].status_code == 200, result["resp"].text
+    (audit,) = _audits(db_factory)
+    assert audit.before is not None
+    assert audit.before["rules_followed"] is True and audit.before["answered_via"] == "telegram"
+    assert audit.after["notes"] == "web note" and audit.after["rules_followed"] is True

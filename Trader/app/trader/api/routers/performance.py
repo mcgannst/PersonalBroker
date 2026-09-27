@@ -1,7 +1,8 @@
 """GET /api/metrics, GET /api/equity, GET /api/export/trades.csv (BR-51, BR-52, BR-62; SPEC §11, §12).
 
-Every route takes `run` (`live` or a run id, else 404) and an optional inclusive `from`/`to` date range
-(trades and journal days by session date, equity snapshots by their America/New_York date).
+Every route takes `run` (`live` or an existing run id in ASCII digits, else 404) and an optional inclusive
+`from`/`to` date range (trades and journal days by session date, equity snapshots by their America/New_York
+date). The CSV export is closed as soon as its response ends (`close_when_done`).
 
 Metrics are simple SQL for now (P5-T1 may move them into `trader/reports/metrics.py` behind this route):
 - Without a range: the run's `v_trade_metrics` row, plus `total_pnl` and the R histogram.
@@ -17,15 +18,18 @@ on validation, so these bins are built with `model_construct` and the metrics ro
 itself (a returned `Response` is not re-validated); the documented response model stays `MetricsOut`.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncGenerator, Generator, Mapping, Sequence
 from datetime import date
 from decimal import Decimal
 from typing import Annotated, Any
 
+import anyio
+import anyio.to_thread
 from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy import Date, bindparam, text
 from sqlalchemy.orm import Session, sessionmaker
+from starlette.concurrency import iterate_in_threadpool
 
 from trader.api.deps import CurrentUser, Services, resolve_run
 from trader.api.errors import ApiError
@@ -204,6 +208,18 @@ def equity(
     return EquityOut(run_id=run_id, points=points)
 
 
+async def close_when_done(lines: Generator[str, None, None]) -> AsyncGenerator[str, None]:
+    """Stream a blocking line generator from worker threads, and close it on every exit (the end, an error,
+    a client disconnect), so an unfinished export releases its cursor and transaction at once instead of
+    whenever the generator is garbage-collected."""
+    try:
+        async for line in iterate_in_threadpool(lines):
+            yield line
+    finally:
+        with anyio.CancelScope(shield=True):
+            await anyio.to_thread.run_sync(lines.close)
+
+
 @router.get("/export/trades.csv", response_class=StreamingResponse)
 def export_trades(
     _user: CurrentUser, services: Services, run_id: RunId, date_from: DateFrom = None, date_to: DateTo = None
@@ -211,7 +227,7 @@ def export_trades(
     check_range(date_from, date_to)
     name = f"trades-{run_id}-{date_from or 'all'}-{date_to or 'all'}.csv"
     return StreamingResponse(
-        trades_csv(services.core.factory, run_id, date_from, date_to),
+        close_when_done(trades_csv(services.core.factory, run_id, date_from, date_to)),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{name}"'},
     )

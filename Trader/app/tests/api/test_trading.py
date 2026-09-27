@@ -5,6 +5,8 @@ The seed helpers here (`seed_closed_trade`, `seed_open_position`, `live_run`) ar
 `test_dashboard.py`.
 """
 
+import asyncio
+import time as time_module
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
@@ -24,6 +26,7 @@ from trader.db import models as m
 from trader.engine.runs import get_live_run
 from trader.market.clock import ET, FixedClock
 from trader.market.types import Candle
+from trader.notify import views
 from trader.settings_store import RuntimeSettings
 
 DAY = date(2026, 10, 6)  # a Tuesday session
@@ -626,3 +629,79 @@ def test_orders_and_fills_for_a_date(db_factory: sessionmaker[Session]) -> None:
     assert exit_fill["quote_snapshot"]["bid"] == "22.81" and exit_fill["slippage"] == "0.0100"
     assert client.get("/api/fills", params={"limit": 501}).status_code == 422
     assert client.get("/api/orders", params={"limit": 501}).status_code == 422
+
+
+# --- fix round 1 ------------------------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_offsets_and_ids_are_bounded_so_nothing_overflows_a_bigint(db_factory: sessionmaker[Session]) -> None:
+    clock = FixedClock(NOW)
+    live_run(db_factory, clock)
+    client = client_for(db_factory, clock)
+    assert client.get("/api/trades", params={"offset": trading.MAX_OFFSET}).status_code == 200
+    for offset in (trading.MAX_OFFSET + 1, 2**63, -1):
+        assert client.get("/api/trades", params={"offset": offset}).status_code == 422, offset
+    for pid in (0, -1, 2**63, 10**20):
+        assert client.get(f"/api/positions/{pid}").status_code == 422, pid
+    assert client.get(f"/api/positions/{2**63 - 1}").status_code == 404
+
+
+@pytest.mark.db
+def test_run_takes_only_ascii_digits_within_a_bigint(db_factory: sessionmaker[Session]) -> None:
+    clock = FixedClock(NOW)
+    live_run(db_factory, clock)
+    client = client_for(db_factory, clock)
+    # superscript two, Arabic-Indic and fullwidth digits pass str.isdigit() but are not ids
+    for bad in ("²", "١٢", "９", "0", str(2**63), "9" * 19, "+1", "1_0"):
+        assert client.get("/api/trades", params={"run": bad}).status_code == 404, bad
+
+
+@pytest.mark.db
+def test_candle_fallback_is_bounded_by_a_timeout(
+    db_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(trading, "CANDLE_TIMEOUT_SECONDS", 0.1)
+    clock = FixedClock(NOW)
+    run_id = live_run(db_factory, clock)
+    with db_factory() as s:
+        chain = seed_open_position(s, run_id)
+        s.commit()
+
+    async def hangs(symbol_id: int, start: datetime, end: datetime) -> list[Candle]:
+        await asyncio.sleep(30)
+        return []
+
+    client = client_for(db_factory, clock, candles=hangs)
+    t0 = time_module.monotonic()
+    body = client.get(f"/api/positions/{chain.position_id}").json()
+    assert time_module.monotonic() - t0 < 5
+    assert body["candles"] == [] and body["chart_error"] == "TimeoutError"
+
+
+@pytest.mark.db
+def test_open_positions_read_the_database_off_the_event_loop(
+    db_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = FixedClock(NOW)
+    run_id = live_run(db_factory, clock)
+    with db_factory() as s:
+        chain = seed_open_position(s, run_id)
+        s.commit()
+    on_loop: list[bool] = []
+    real = views.open_position_rows
+
+    def spy(factory: sessionmaker[Session], run: int) -> views.OpenPositionRows:
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return real(factory, run)
+
+    monkeypatch.setattr(views, "open_position_rows", spy)
+    quotes = fake_quotes({chain.symbol_id: Decimal("20.40")})
+    client = client_for(db_factory, clock, quotes=quotes)
+    for path in ("/api/positions", f"/api/positions/{chain.position_id}", "/api/dashboard"):
+        assert client.get(path).status_code == 200, path
+    assert on_loop == [False, False, False]

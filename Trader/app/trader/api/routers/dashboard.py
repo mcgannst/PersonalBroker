@@ -2,8 +2,11 @@
 P&L, kill switches, events, token, worker, top candidates). SPEC §11, §12 (Dashboard); BR-50, BR-33.
 
 The numbers are the ones Telegram shows: positions from `trader.notify.views.position_lines` (`/positions`),
-the P&L computed exactly as `trader.adapters.telegram.commands.pnl_view` (`/pnl`), pending proposals through
+the P&L from `trader.notify.views.pnl_view` (what `/pnl` shows), pending proposals through
 `notify.views.proposal_view`, kill switches, token and worker through `trader.api.views`.
+
+The dashboard is live-only: it takes `run=live` (SPEC §11 lists the parameter; it is also the default) and
+answers 422 for any other value, since a replay run has no "today".
 
 The timeline (session days only) lists the crontab's day-level jobs (`DAY_JOBS`, checked against
 `docker/crontab` by a test) and the day plan's events, each with its status from `job_runs`; the first
@@ -13,15 +16,13 @@ upcoming item at or after now is `next`.
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
-from decimal import Decimal
-from typing import Any
+from typing import Annotated, Any, Literal
 
 import anyio.to_thread
 import structlog
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 
-from trader.adapters.telegram.commands import _trade_pnl  # the /pnl sums, shared
 from trader.api import views as api_views
 from trader.api.deps import ApiServices, Services, _settings, current_user, live_run_id
 from trader.api.routers.trading import candidate_out, open_positions
@@ -42,7 +43,7 @@ from trader.db import models as m
 from trader.engine.scheduler import EVENT_JOB_PREFIX, MISSED_PREFIX, DayPlan, event_job
 from trader.logging_setup import redact_text
 from trader.market.calendar import SessionCalendar
-from trader.market.clock import ET, et_date
+from trader.market.clock import ET
 from trader.market.sessions import current_session, session_phase
 from trader.notify import views
 
@@ -206,11 +207,6 @@ class _Stored:
     approval_mode: Any
     timeline: list[TimelineItemOut]
     pending: list[ProposalOut]
-    realized_today: Decimal
-    week_to_date: Decimal
-    equity: Decimal
-    peak_equity: Decimal
-    drawdown_pct: Decimal
     killswitches: list[KillSwitchOut]
     events: list[EventOut]
     token: TokenOut
@@ -263,9 +259,6 @@ def _stored(services: ApiServices, now: datetime) -> _Stored:
             ]
         timeline = build_timeline(cal, day, now, plan, fired, runs)
 
-    # the /pnl rule (commands.pnl_view): today = the current session, the week from the ET Monday
-    today = et_date(now)
-    monday = today - timedelta(days=today.weekday())
     with core.factory() as s:
         pending_rows = s.execute(
             select(m.Proposal)
@@ -273,22 +266,6 @@ def _stored(services: ApiServices, now: datetime) -> _Stored:
             .order_by(m.Proposal.created_at, m.Proposal.id)
         ).scalars()
         pending = [ProposalOut.from_view(views.proposal_view(s, p), p) for p in pending_rows]
-        realized = _trade_pnl(s, run_id, day, day)
-        week = _trade_pnl(s, run_id, monday)
-        snap = s.execute(
-            select(m.EquitySnapshot)
-            .where(m.EquitySnapshot.run_id == run_id)
-            .order_by(m.EquitySnapshot.ts.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-        if snap is not None:
-            equity, peak, drawdown = snap.equity, snap.peak_equity, snap.drawdown_pct
-        else:
-            cash = s.execute(
-                select(m.SimAccount.starting_cash).where(m.SimAccount.run_id == run_id)
-            ).scalar_one_or_none()
-            equity = peak = cash if cash is not None else Decimal(0)
-            drawdown = Decimal(0)
         events = [
             api_views.event_out(e)
             for e in s.execute(
@@ -318,11 +295,6 @@ def _stored(services: ApiServices, now: datetime) -> _Stored:
         approval_mode=settings.approval_mode,
         timeline=timeline,
         pending=pending,
-        realized_today=realized,
-        week_to_date=week,
-        equity=equity,
-        peak_equity=peak,
-        drawdown_pct=drawdown,
         killswitches=api_views.killswitch_states(services.killswitches, core.factory, run_id, day),
         events=events,
         token=api_views.token_out(services.credentials.health, now),
@@ -333,11 +305,16 @@ def _stored(services: ApiServices, now: datetime) -> _Stored:
 
 
 @router.get("/dashboard", response_model=DashboardOut)
-async def get_dashboard(services: Services) -> DashboardOut:
-    now = services.core.clock.now()
+async def get_dashboard(
+    services: Services, run: Annotated[Literal["live"], Query(description="Only `live`")] = "live"
+) -> DashboardOut:
+    core = services.core
+    now = core.clock.now()
     st = await anyio.to_thread.run_sync(_stored, services, now)
     live = await open_positions(services, st.run_id)
-    unrealized = sum((ln.unrealized_pnl for ln in live.lines if ln.unrealized_pnl is not None), Decimal(0))
+    pnl = await anyio.to_thread.run_sync(
+        views.pnl_view, core.factory, core.calendar, now, st.run_id, live.lines
+    )
     return DashboardOut(
         server_time=now,
         run_id=st.run_id,
@@ -348,14 +325,14 @@ async def get_dashboard(services: Services) -> DashboardOut:
         pending=st.pending,
         positions=list(live.positions),
         pnl=PnlOut(
-            session_date=st.session.date,
-            realized_today=st.realized_today,
-            unrealized=unrealized,
+            session_date=pnl.session_date,
+            realized_today=pnl.realized_today,
+            unrealized=pnl.unrealized,
             unrealized_partial=any(ln.unrealized_pnl is None for ln in live.lines),
-            week_to_date=st.week_to_date,
-            equity=st.equity,
-            peak_equity=st.peak_equity,
-            drawdown_pct=st.drawdown_pct,
+            week_to_date=pnl.week_to_date,
+            equity=pnl.equity,
+            peak_equity=pnl.peak_equity,
+            drawdown_pct=pnl.drawdown_pct,
         ),
         killswitches=st.killswitches,
         events=st.events,

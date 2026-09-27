@@ -4,11 +4,14 @@
 session-date range (inclusive). Times are UTC ISO (`...Z`), Decimals exactly as stored, a missing value is
 an empty cell. Text cells that a spreadsheet would read as a formula (starting with `=`, `+`, `-`, `@`, a tab
 or a carriage return) get a leading `'` (CSV injection guard); numbers are never changed.
+
+Rows are read through a server-side cursor. Closing the generator early (the API closes it when a client
+disconnects) closes the cursor and ends the read transaction at once.
 """
 
 import csv
 import io
-from collections.abc import Iterator
+from collections.abc import Generator
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -62,7 +65,7 @@ def _line(values: tuple[object, ...] | list[object]) -> str:
 
 def trades_csv(
     factory: sessionmaker[Session], run_id: int, date_from: date | None, date_to: date | None
-) -> Iterator[str]:
+) -> Generator[str, None, None]:
     """CSV lines, the header first; UTC ISO times; Decimals as stored."""
     yield _line(TRADE_CSV_COLUMNS)
     t = m.Trade
@@ -96,5 +99,9 @@ def trades_csv(
     if date_to is not None:
         stmt = stmt.where(t.session_date <= date_to)
     with factory() as s:
-        for row in s.execute(stmt):
-            yield _line([_cell(v) for v in row])
+        result = s.execute(stmt)
+        try:
+            for row in result:
+                yield _line([_cell(v) for v in row])
+        finally:  # also on close() of an unfinished export: the cursor, then (with) the transaction
+            result.close()

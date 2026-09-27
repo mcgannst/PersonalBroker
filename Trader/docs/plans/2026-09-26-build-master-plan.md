@@ -32,7 +32,8 @@ Every task's requirements implicitly include this section.
 - **FinViz politeness:** at most 1 request per 2 s, a browser User-Agent, 12-hour cache (SPEC §4.2).
 - **Questrade limits:** market data 20 req/s, account 30 req/s (SPEC §4.1). Intraday candles exist only ~3 months back; candles include 04:00–20:00 ET, so filter to regular hours explicitly.
 - **FinViz universe filters default:** `ind_stocksonly,sh_price_5to50,sh_avgvol_o1000,ta_averagetruerange_o0.5,geo_usa`. SPY is always added separately.
-- **Quality gate** (run by every builder before committing and by the Verifier): `bash Trader/app/scripts/check.sh` = `ruff check`, `ruff format --check`, `mypy trader`, `pytest -q`. All must pass.
+- **Quality gate** (run by every builder before committing and by the Verifier): `bash Trader/app/scripts/check.sh` = `ruff check`, `ruff format --check`, `mypy trader`, `pytest -q`, plus the web check. All must pass.
+- **Shared test lane (Stephen, 2026-09-27):** the Mac has 8 cores and 16 GB, and 8 agents running the full suite at once overloaded it (each full run went from ~4 to ~15 min). So: **while working, run only targeted tests** (`uv --directory <worktree>/Trader/app run pytest <your test files> -q`, `npm --prefix <worktree>/Trader/web exec vitest run <files>`, `ruff`/`mypy` on your files). **For the full gate, always run `bash Trader/build/gate.sh`** from your worktree root, never `check.sh` directly. It queues on a machine-wide lock so only one full gate runs at a time, then runs your checkout's `check.sh`, and its exit code is the gate result. Run the full gate once, just before committing (and once more only if the rebase brought in code that touches yours). Agents keep working in parallel; only the full gate is serialised.
 - **Commits:** message starts with the task ID (`P1-T4: ...`), ends with the trailer `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`. Stage files by explicit path, never `git add -A` or `git add .`. `git pull --rebase` then `git push` after every commit.
 
 ## Review Focus
@@ -220,7 +221,7 @@ say so in your report rather than editing that code.
 Implement the task. For full-code plans (Phases 1–2) follow its steps in order; for specification
 plans (Phase 3+) design the code yourself to meet its Interfaces, Behaviour and Acceptance tests,
 matching the style of the existing code. Tick the plan's checkboxes as you go (commit the plan file
-with your code). Use TDD: write each acceptance test first, run it and see it fail, then implement. Run `bash Trader/app/scripts/check.sh` before every commit.
+with your code). Use TDD: write each acceptance test first, run it and see it fail, then implement. While working run only targeted tests; before every commit run the full gate once via the shared test lane: `bash Trader/build/gate.sh` (never `check.sh` directly; see Global Constraints).
 Commit and push after every green step (`git pull --rebase --autostash origin trunk`, then `git push origin HEAD:trunk`).
 If a step is impossible as written (wrong API, spec conflict), do not improvise a different design:
 stop, log "failed" with the reason, and report back.
@@ -230,7 +231,7 @@ Report: commits, test count, anything surprising.
 
 ### 6.2 Verifier
 ```
-Read-only. Run `git pull --rebase`, `git status` (must be clean), then `bash Trader/app/scripts/check.sh`.
+Read-only. Run `git pull --rebase`, `git status` (must be clean), then the full gate via the shared test lane: `bash Trader/build/gate.sh`.
 Confirm every checkbox of the task in the plan is ticked. Report PASS or FAIL with the exact failing output.
 ```
 

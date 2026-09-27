@@ -4,3 +4,4 @@
 - 13:38:04 MT wrote tests/api/test_feed.py (9 tests) and tests/api/test_stream.py (9 tests); red as expected (NotImplementedError) | next: implement trader/api/feed.py
 - 13:41:05 MT implemented feed.py and routers/stream.py; 18/18 new tests green; verified the uvicorn exit hook is needed (without it shutdown waits the 10 s graceful timeout) | next: ruff/mypy, full check.sh
 - 13:52:20 MT ruff+mypy clean, plan boxes ticked with build notes, pulled trunk; check.sh running (long, backgrounded) | next: commit and push when green
+- 13:58:29 MT check.sh green (1736 pytest, 288 vitest); committed and pushed e456eb7 | next: log finished to BUILD_STATE, report

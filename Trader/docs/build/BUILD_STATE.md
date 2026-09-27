@@ -7,9 +7,9 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 4 (Phase 3 COMPLETE ~13:45 MT Sep 27, tag phase-3-complete) |
-| Current task | P4 wave 1 backend (T3,T4,T5,T6,T7,T11,T17) + T12 shell; web pages gauntlet; T8,T9,T10 queued |
+| Current task | P4 gauntlets (auth, group A, group B); P5-T0 planning |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-27T19:55:33Z |
+| Last updated (UTC) | 2026-09-27T20:21:25Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
 | Token last refreshed (UTC) | 2026-09-27T17:21:56Z (re-seeded from Stephen's new token after .env.dev rebuild; token removed from .env.dev) |
@@ -23,6 +23,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Backlog | P2: cash sizing ignores slippage/ECN on gapped stop entries (SPEC 6.1 change); confirm FinViz 'yesterday' on Monday 2026-09-28 premarket; cash_ledger sign CHECK + ensure_sim_account via Ledger.record; event_log indexes for kill-switch/Claude-budget lookups |
 | Phase 4 planning | P4-T0 plan written (836a484: 19 tasks, width 15, crit path 4); verify+fix running |
 | Phase 4 started | 12:48 MT Sep 27; estimate ~5-5.5 h (contracts, 2 waves of builders, gauntlets, wiring, deploy + LIVE): finish ~18:00-18:30 MT |
+| Phase 5 planning | P5-T0 planner started (overlaps P4 gauntlets/wiring) |
 
 ## Task board
 
@@ -77,22 +78,22 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P3-T13 | Integration: worker day with fake Telegram | P3-T12 | accepted | 2 | integration day 8/8 (outage xfail now passes after 707ef23); 1580 green | 707ef23 |
 | P3-REVIEW | Phase 3 review | P3-T13 | accepted | 1 | PASS; 409 alert relayed, safety-event alert cap, masked stored errors; + second flatten cron backup (12:58/15:58) | b3b9c38 |
 | P4-T1 | Backend contracts, migration 0005 (LIVE), fakes | P3 | accepted | 1 | contracts + migration 0005 on trunk | b461e62 |
-| P4-T2 | Web contracts (Vite, types, ApiClient, UI) | P3 | gauntlet | 1 | built (40 web tests); gauntlet batched with web pages | 7abefd6 |
+| P4-T2 | Web contracts (Vite, types, ApiClient, UI) | P3 | accepted | 2 | web gauntlet 40/40 after fix round; 354 web tests green | ebe2497 |
 | P4-T3 | API core, health, SPA serving | T1 | gauntlet | 1 | built (65 tests) | 26e2b78 |
-| P4-T4 | Auth (Argon2, sessions, CSRF, lockout, TOTP) | T1 | building | 1 | builder running | - |
-| P4-T5 | Dashboard and trading reads | T1 | building | 1 | builder running | - |
-| P4-T6 | Decisions (approve/reject, kill switches) | T1 | building | 1 | builder running | - |
+| P4-T4 | Auth (Argon2, sessions, CSRF, lockout, TOTP) | T1 | gauntlet | 1 | built (34 tests, 403 ruling applied); own gauntlet running | 030aa00 |
+| P4-T5 | Dashboard and trading reads | T1 | gauntlet | 1 | built (35 tests); shares views with Telegram | 6a8e042 |
+| P4-T6 | Decisions (approve/reject, kill switches) | T1 | gauntlet | 1 | built (48 tests); web approvals only via build_decider, race web vs Telegram = one decision | eb748b5 |
 | P4-T7 | Performance, journal, CSV export | T1 | gauntlet | 1 | built (32 tests); T18 note: HistogramBinOut lo/hi need allow_inf_nan | eb6b57b |
-| P4-T8 | Settings and strategies | T1 | building | 1 | builder running | - |
-| P4-T9 | System, jobs, token paste, Telegram test | T1 | building | 1 | builder running | - |
-| P4-T10 | Watchlist CSV upload | T1 | building | 1 | builder running | - |
-| P4-T11 | Change feed and SSE | T1 | building | 1 | builder running | - |
-| P4-T12 | Web shell | T2 | gauntlet | 1 | built (75 tests); safe next, CSRF, 15s fallback; added to web gauntlet | 8246838 |
-| P4-T13 | Web Dashboard and Candidates | T2 | gauntlet | 1 | built (37 tests); one-tap approvals, safe links; 15s fallback moved to T12 | 6d00b00 |
-| P4-T14 | Web Trades, Performance, Journal, Reports | T2 | gauntlet | 1 | built (32 tests); note for P4-T7: histogram open-ended bin wire format | 8a5feb2 |
-| P4-T15 | Web Settings | T2 | gauntlet | 1 | built (57 tests) | 42d9d49 |
-| P4-T16 | Web System | T2 | fixing | 2 | web gauntlet: V✅ B❌ (38/40: secrets in mutation cache, candidates date) review 3 must-fix -> web fix round a2 | 02fca8a |
-| P4-T17 | Docker image, supervisord, deploy scripts | T1, T2 | building | 1 | builder running | - |
+| P4-T8 | Settings and strategies | T1 | gauntlet | 1 | built (29 tests); audited settings/strategy writes | 1eadb5f |
+| P4-T9 | System, jobs, token paste, Telegram test | T1 | gauntlet | 1 | built (39 tests); group B gauntlet running | d3e9b01 |
+| P4-T10 | Watchlist CSV upload | T1 | gauntlet | 1 | built; manual list replaces FinViz in nightly; T18 note: cap username so 'web:'+name fits varchar(50) | 7334cee |
+| P4-T11 | Change feed and SSE | T1 | gauntlet | 1 | built (18 tests, real-server SSE <2s); review: global uvicorn handle_exit monkeypatch for clean shutdown | e456eb7 |
+| P4-T12 | Web shell | T2 | accepted | 2 | web gauntlet 40/40 after fix round; 354 web tests green | ebe2497 |
+| P4-T13 | Web Dashboard and Candidates | T2 | accepted | 2 | web gauntlet 40/40 after fix round; 354 web tests green | ebe2497 |
+| P4-T14 | Web Trades, Performance, Journal, Reports | T2 | accepted | 2 | web gauntlet 40/40 after fix round; 354 web tests green | ebe2497 |
+| P4-T15 | Web Settings | T2 | accepted | 2 | web gauntlet 40/40 after fix round; 354 web tests green | ebe2497 |
+| P4-T16 | Web System | T2 | accepted | 2 | web gauntlet 40/40 after fix round; 354 web tests green | ebe2497 |
+| P4-T17 | Docker image, supervisord, deploy scripts | T1, T2 | gauntlet | 1 | built; image 141MB, all local container checks pass; T19 notes added (docker creds helper workaround) | d1e79f3 |
 | P4-T18 | Wiring | T3-T17 | todo | 1 | - | - |
 | P4-T19 | End to end + deploy trader-dev (LIVE) | T18 | todo | 1 | - | - |
 | P4-REVIEW | Phase 4 review | T19 | todo | 1 | - | - |
@@ -1481,3 +1482,78 @@ None open.
 - Commits: 26e2b78
 - Gate: check.sh passed (1783 pytest, 214 vitest), 65 new T3 tests
 - Notes: SPA served through the 404 handler (no catch-all route), so unknown /api paths are a JSON 404 for any method and wrong methods stay 405. Unhandled 500s are rendered in the request-log middleware so they carry X-Request-ID and the security headers. Additive names: main.request_log_level, is_api_path, RequestLogMiddleware, default_services, FEED_STOP_SECONDS, meta.db_check, meta.tz_iana_version. OpenAPI and docs are off.
+
+### 2026-09-27 13:56 MT · P4-T10 · Builder · attempt 1 · started
+- Watchlist CSV upload and the nightly manual source
+
+### 2026-09-27 14:16 MT · P4-T11 · Builder · attempt 1 · finished
+- Result: done. PollingChangeFeed and GET /api/stream per plan. Plan boxes 1-10 ticked
+- Commits: e456eb7
+- Gate: check.sh passed, 1736 pytest and 288 vitest. 18 new tests in tests/api/test_feed.py and tests/api/test_stream.py, including a real uvicorn server
+- Notes: plan bug fixed inside T11 files. uvicorn waits for open connections before the lifespan shutdown, so the feed stop event alone held shutdown for the 10 s graceful timeout, verified. stream.py wraps uvicorn.Server.handle_exit at import so streams end within 1 s on SIGTERM. See the T11 build notes in the plan
+
+### 2026-09-27 14:32 MT · P4-T8 · Builder · attempt 1 · finished
+- Result: done. forms.field_out/model_fields_out/group_of, GET/PUT /api/settings, GET/PUT /api/strategies. Plan boxes 1-7 ticked
+- Commits: 1eadb5f
+- Gate: check.sh passed (1747 pytest, 288 Vitest), 29 new T8 tests
+- Notes: settings are sorted by group in SETTING_GROUPS order (Approvals, Account, Risk...), then by key. owns_open_positions checks the live run only. Strategy 422 locs are params.FIELD. A corrupt stored setting row is shown as stored (is_default false). An empty strategies PUT body, including empty params, gets 422, and a missing settings row gets 409
+
+### 2026-09-27 14:20 MT · P4-T5 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-11 ticked
+- Commits: 6a8e042
+- Gate: check.sh passed (1753 pytest, 288 vitest), re-ran tests/api (256) and mypy after the final rebase
+- Notes: 31 new tests (quotes 9, trading 13, dashboard 13 incl. crontab check). Both routers carry a router-level current_user dependency. GET /positions with status=open and no date lists all open positions (other statuses default to the current session). Timeline puts an event before a job at the same minute (entry_cancel and the 11:30 check-in)
+
+### 2026-09-27 14:10 MT · P4-T4 · Builder · attempt 1 · finished
+- Result: done, all 14 boxes ticked, tests written first
+- Commits: 030aa00
+- Gate: check.sh passed (1752 pytest, 288 vitest), 34 auth tests
+- Notes: wrong password or code while signed in answers 403 bad_credentials (orchestrator ruling), not counted toward the lockout. Additive names and error codes are in the plan's T4 build notes (CLEAR_COOKIE, check_origin, client_ip, login_limiter on app.state, cookie_max_age, session_info). Login lower-cases the username. ensure_admin also writes a critical event_log row on rejected.
+
+### 2026-09-27 14:08 MT · P4-T17 · Builder · attempt 1 · finished
+- Result: done, tests 1-9 ticked, LIVE 1-4 done locally (amd64 image 141 MB, no deploy)
+- Commits: d1e79f3
+- Gate: check.sh passed (1756 pytest incl. 38 new, 214 vitest)
+- Notes: Docker's `desktop` credsStore helper hangs in the agent sandbox (pull/build stuck at resolve image config). Workaround: a scratch DOCKER_CONFIG without credsStore plus DOCKER_HOST=unix:///Users/stephen/.docker/run/docker.sock. T19 needs the same. Supercronic sums per arch (smoke builds arm64).
+
+### 2026-09-27 14:05 MT · P4-BA · Gauntlet (Verifier+Breaker+Spec/Code) · attempt 1 · started
+- Scope: P4-T3, T5, T7, T8, T11 (backend group A)
+
+### 2026-09-27 14:04 MT · P4-T4 · Gauntlet (Verifier+Breaker+Spec/Code review) · attempt 1 · started
+- Notes: Review Focus 2 (auth holes), tests in tests/gauntlet/test_p4_t4_breaker.py
+
+### 2026-09-27 14:32 MT · P4-T6 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-11 ticked
+- Commits: eb748b5
+- Gate: check.sh passed (1765 tests, web check green), 48 new T6 tests
+- Notes: decision time shown only for human decisions. "Approved (auto)" keeps P3 wording because test_worker_day pins it. status=all lists newest first.
+
+### 2026-09-27 14:22 MT · P4-T10 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-6 ticked
+- Commits: 7334cee
+- Gate: ruff, format, mypy clean, pytest 1860 passed. The web step fails only in Trader/web/src/gauntlet/web_pages_breaker.test.tsx (P4-BW, 02fca8a): 2 tests on Settings secrets and Candidates malformed date, not T10 code
+- Notes: added WatchlistError and clean_filename to trader.market.watchlist. POST is multipart only (415 otherwise). run_nightly while nightly is running stores the list and returns launched=false
+
+### 2026-09-27 14:24 MT · P4-WEB · Builder · attempt 2 · finished
+- Result: done. All 7 must/should-fix items and all nits fixed except the tab-bar disclosure (the gauntlet file requires role=menu/menuitem)
+- Commits: ebe2497
+- Gate: npm check green (34 files, 354 tests, gauntlet 40/40), check.sh green (1718 pytest + 354 web)
+- Notes: added vi.setConfig testTimeout 20 s in src/test/setup.ts, since the 1000-row phone test timed out at 5 s under parallel load
+
+### 2026-09-27 14:16 MT · P5-T0 · Planner · attempt 1 · started
+- Notes: writing Trader/docs/plans/2026-09-27-phase-5-replay-reports.md (spec plan), reading trunk code only, no test runs
+
+### 2026-09-27 14:21 MT · P4-T9 · Builder · attempt 1 · finished
+- Result: done. System, events, jobs (history, manual run, SubprocessJobLauncher), Questrade token paste, Telegram test. Plan boxes 1-7 ticked
+- Commits: d3e9b01
+- Gate: check.sh python 2055 passed (ruff, format, mypy clean). The web step failed only in the gauntlet web_pages_breaker.test.tsx before P4-WEB's fix (ebe2497). On trunk after that fix the web check passed: 354 tests. 39 P4-T9 tests
+- Notes: JobLaunchOut.session_date is null for token-refresh, but web types.ts has it as non-null IsoDate (T18 contract check). Additive: launcher.check_request/command/already_running/children(). Token paste codes are 422 token_rejected and 502 upstream for a non-auth failure. Telegram test writes audit telegram.test
+
+### 2026-09-27 14:22 MT · P4-BB · Gauntlet (Verifier, Breaker, Spec+Code review) · attempt 1 · started
+- Notes: backend group B (T6, T9, T10, T17). Tests in Trader/app/tests/gauntlet/test_p4_backend_b_breaker.py
+
+### 2026-09-27 14:21 MT · P4-T4 · Gauntlet (Verifier+Breaker+Spec/Code review) · attempt 1 · finished
+- Result: Verifier PASS (clean, T4 boxes ticked, gate green apart from the new breaker tests). Breaker FAIL 14/16. Review: 0 must-fix, 4 should-fix, several nits
+- Commits: f0d9b8e (P4-B4: auth gauntlet tests)
+- Gate: 2075 passed, 2 failed (test_x_forwarded_for_cannot_dodge_the_per_ip_limit, test_username_case_whitespace_and_hostile_names)
+- Findings: forwarded_allow_ips=* in api/__main__.py lets a client choose its X-Forwarded-For IP, bypassing the per-IP limit and forging audit IPs. A NUL byte in the username gives a 500. No rate limit on wrong current passwords from a signed-in session. T18 user-password must revoke sessions

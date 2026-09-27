@@ -3,3 +3,4 @@
 - 13:38:48 MT wrote tests (forms, settings, strategies); they fail on the stubs | next: implement forms.py
 - 13:41:00 MT implemented forms.py and both routers, 29 T8 tests green | next: tick plan boxes, run check.sh
 - 13:51:33 MT ticked boxes 1-6, check.sh running (ruff and mypy clean) | next: commit and push once green
+- 13:58:45 MT committed and pushed 1eadb5f (check.sh green: 1747 pytest, 288 Vitest) | next: log finished, report

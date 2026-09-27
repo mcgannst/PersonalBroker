@@ -521,15 +521,32 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - Phone layout: single column at 390 px; tables scroll horizontally inside their card.
 
 **Acceptance tests (Vitest with `FakeApiClient` and fixtures):**
-- [ ] 1. The list renders the fixtures in order with status badges, the biased badge and MT times; tapping a row navigates to `?id=`.
-- [ ] 2. The form's defaults come from `replayOptions`; submitting with one changed setting (`risk_pct` "0.01") and one changed strategy param (`top_n` 10) calls `startReplay` with only those in `overrides` and `strategies`, then navigates to the new id.
-- [ ] 3. `offline_now: true` checks and locks the Offline box and shows the market-hours note; `busy: true` disables "New replay" with the reason.
-- [ ] 4. A 422 with `fields` for `overrides.risk_pct` shows the message under that input; a 409 shows the server message.
-- [ ] 5. The running fixture shows the progress bar (3 of 10) and a Cancel button that, after confirmation, calls `cancelReplay(id)` once.
-- [ ] 6. The completed fixture shows the comparison with replay, live and difference for each metric (win rate as a percentage, expectancy as R), the biased-days warning, the trades table and the events.
-- [ ] 7. The catalyst-mode `unknown` override with `require_catalyst` on shows the "no entries will be taken" warning.
-- [ ] 8. At 390 px no element is wider than the viewport (the page container test used in P4) and every button is at least 44 px tall.
-- [ ] 9. Gate and commit `P5-T8: ...`.
+- [x] 1. The list renders the fixtures in order with status badges, the biased badge and MT times; tapping a row navigates to `?id=`.
+- [x] 2. The form's defaults come from `replayOptions`; submitting with one changed setting (`risk_pct` "0.01") and one changed strategy param (`top_n` 10) calls `startReplay` with only those in `overrides` and `strategies`, then navigates to the new id.
+- [x] 3. `offline_now: true` checks and locks the Offline box and shows the market-hours note; `busy: true` disables "New replay" with the reason.
+- [x] 4. A 422 with `fields` for `overrides.risk_pct` shows the message under that input; a 409 shows the server message.
+- [x] 5. The running fixture shows the progress bar (3 of 10) and a Cancel button that, after confirmation, calls `cancelReplay(id)` once.
+- [x] 6. The completed fixture shows the comparison with replay, live and difference for each metric (win rate as a percentage, expectancy as R), the biased-days warning, the trades table and the events.
+- [x] 7. The catalyst-mode `unknown` override with `require_catalyst` on shows the "no entries will be taken" warning.
+- [x] 8. At 390 px no element is wider than the viewport (the page container test used in P4) and every button is at least 44 px tall.
+- [x] 9. Gate and commit `P5-T8: ...`.
+
+**Build notes (P5-T8 builder, 2026-09-27; trunk 6ea87b5):**
+- Default range: the web has no session calendar, so "the 20 sessions before `latest_allowed`" is the 20
+  weekdays ending at `latest_allowed` (holidays not skipped; the server validates the range).
+- 422 messages are matched by joining each `loc` after `body` with dots (`overrides.fees.commission`,
+  `strategies.orb_sip.params.top_n`, `date_to`), as P5-T7 builds `loc`; unplaced ones (for example `strategies`)
+  show with the server message above the Start button.
+- The list's summary has no progress, so the (single) running row fetches its detail for "3/10".
+- Replay trades and equity never move the trading-topic SSE watermarks (T7), so the detail invalidates its
+  trades and equity queries whenever the replay's status or `sessions_done` changes.
+- Comparison differences are exact BigInt decimal subtractions (`replay/shared.ts` `decimalDiff`); win rate and
+  drawdown differences are percentage points. Cancel uses an inline confirm ("Stop replay" / "Keep running")
+  rather than `settings/Confirm`, whose fixed "Cancel" label would read ambiguously next to "Cancel replay".
+- The catalyst warning shows when the effective `replay.catalyst_mode` is `unknown` and any enabled strategy's
+  effective params have `require_catalyst: true` (only when `settings()` has that descriptor).
+- Reused P4 pieces unmodified: `FieldInput`, `EquityChart`, `strategyChanges` (StrategyForms), `validate.ts`;
+  `MetricTiles` was not used (the comparison table replaces it on this page).
 
 ---
 

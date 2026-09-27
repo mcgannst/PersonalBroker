@@ -104,6 +104,10 @@ Path: `Trader/docs/build/BUILD_STATE.md`. It is the single source of truth for w
 - Entry heading format: `### <UTC ISO time> · <task ID> · <role> · attempt <n> · <started|finished|failed>`. Body: `Result`, `Commits`, `Gate`, `Findings` (gauntlet roles), `Notes`. Keep entries short.
 - **Never** edit or delete earlier log entries. **Never** write secrets into the file.
 
+### 3.2a Live per-agent logs
+
+Each running agent keeps `Trader/docs/build/agents/<TASK_ID>-<role>-a<attempt>.md` with one timestamped line per action (see the §6 preamble). To check on an agent, read its file; to ask for an update, message it (SendMessage) and it replies with its latest line. The orchestrator commits these files together with `BUILD_STATE.md`.
+
 ### 3.3 Commit and push policy
 
 - **Builders** commit after each green step in their plan (at least every 30 minutes of work) and push immediately (`git pull --rebase && git push`).
@@ -166,6 +170,15 @@ Log to the SHARED state file in the main checkout, by absolute path:
 /Users/stephen/Documents/Code/Claude Code/Trader/Trader/docs/build/BUILD_STATE.md
 Append a "started" entry now and a "finished"/"failed" entry at the end, each ONE `cat >> ... <<'EOF'`
 command (§3.2). Never edit or stage the worktree's own copy of BUILD_STATE.md.
+LIVE PROGRESS LOG (required): also keep your own running log at
+/Users/stephen/Documents/Code/Claude Code/Trader/Trader/docs/build/agents/<TASK_ID>-<role>-a<attempt>.md
+(e.g. P2-T3-builder-a1.md; create the agents/ folder with mkdir -p if missing). Append ONE line after
+every plan step, test run, commit, push, LIVE action or blocker, in the form
+`- <UTC time from date -u +%H:%M:%SZ> <what you just did> | next: <what you will do next>`.
+First line: `# <TASK_ID> <role> attempt <n>`. Use a single `printf '%s\n' "..." >> <path>` call per line.
+Keep it factual and short, never include secrets. The orchestrator reads these files to answer
+"what is agent X doing?" and commits them with the state file. If you receive a message asking for a
+status update, reply with your latest log line and continue.
 Secrets: docker/.env.dev exists only in the main checkout. For LIVE steps use
 `uv --directory <your worktree>/Trader/app run --env-file ../../../../../Trader/docker/.env.dev ...`
 (uv splits --env-file values on spaces, so use this RELATIVE path, which resolves from a worktree's

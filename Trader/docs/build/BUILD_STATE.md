@@ -580,3 +580,12 @@ None open.
 
 ### 2026-09-27T05:24:01Z · P1-T9 · Spec+Code reviewer · attempt 1 · started
 - Notes: reviewing 348ac1e, 4adc532, f9d089f
+
+### 2026-09-27T05:24:25Z · P1-T7 · Verifier+Fix reviewer · attempt 2 · started
+- Notes: verifying after fix commit f14f4fa, read-only
+
+### 2026-09-27T05:27:56Z · P1-T7 · Verifier+Fix reviewer · attempt 2 · finished
+- Result: PASS
+- Commits: reviewed f14f4fa (trunk HEAD 27eb29d)
+- Gate: check.sh clean (ruff, format, mypy), 281 passed. All 9 test_p1_t7_breaker.py tests pass, and so do all 22 client and 5 CLI tests. test_p1_t9_breaker.py is not on trunk yet. Steps 1-8 ticked, tree clean
+- Findings: all 10 findings fixed, each with a test. pause_until is sound: waits are time-based only, so no wake-up can be lost. Slots only move forward, and a caller whose slot falls inside a pause re-queues after it. A 60-caller stress run with random pauses had 0 dispatches inside a pause and every caller finished. Nightly peak is 30 OneDay bars and at most about 13k FiveMinutes bars (lookback le=30), so it stays under the 20k guard. The clamp test change to FifteenMinutes is justified. Nits only: (1) httpx.DecodingError and TooManyRedirects are not TransportError, so they escape candles_many. (2) A non-JSON 200 from quotes, symbols or time raises ValueError, not QuestradeApiError, and questrade-check shows a traceback for it. (3) The clamped startTime is still +00:00, which is safe because httpx encodes it as %2B. (4) Redaction covers the token and api_base but not the bare host. (5) Scheduler jitter can bring real dispatches closer than 1/rate even though the slots are spaced correctly (this predates the fix)

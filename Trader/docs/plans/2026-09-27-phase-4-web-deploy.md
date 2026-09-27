@@ -598,15 +598,15 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - **Candidates page** (`?date=` optional, a date picker defaulting to the current session): the pre-market brief (preformatted text), catalyst cards (ticker, type, direction, quality, confirmed, reason, gap %, earnings date, up to 5 headlines with links opening in a new tab with `rel="noopener noreferrer"`; a headline URL is scraped third-party data, so it is a link only when it starts with `https://` or `http://`, otherwise plain text), and the ranking table (rank, ticker, rvol, passed ✓ or the reject reason, strategy), horizontally scrollable on a phone.
 
 **Acceptance tests (Vitest with `FakeApiClient` and fixtures):**
-- [ ] 1. The dashboard renders the session phase, `MANUAL` badge, timeline items in order with MT times (fixed −360 mode: 13:35:05Z → `07:35 MT`) and the `next` item highlighted.
-- [ ] 2. A pending entry card shows ticker, qty, buy stop, stop loss, risk dollars, reason and a countdown; tapping Approve calls `approve(id)` once, disables both buttons while busy, then shows the returned message.
-- [ ] 3. A `DecisionOut` with `blocked` shows `Entry blocked: ...`; an `ApiError` shows its message and re-enables the buttons.
-- [ ] 4. With fake timers, the countdown reaches zero and both buttons become disabled with the expired text.
-- [ ] 5. `/dashboard?proposal=<pending id>` highlights that card; `?proposal=<decided id>` renders the panel with status, `decided_at` in MT and `decided_via`.
-- [ ] 6. A position with `stop_working` false shows "(no stop order)" and the unprotected time; `last` null shows `n/a`.
-- [ ] 7. Kill-switch lights: `max_drawdown_pct` tripped shows red with its `clears` text; `telegram_configured` false shows the notice.
-- [ ] 8. Candidates: the brief, catalyst cards with headline links (`rel` set; a `javascript:alert(1)` URL renders as text with no `href`), and the ranking rows in rank order with reject reasons; changing the date refetches with that date.
-- [ ] 9. Gate and commit `P4-T13: ...`.
+- [x] 1. The dashboard renders the session phase, `MANUAL` badge, timeline items in order with MT times (fixed −360 mode: 13:35:05Z → `07:35 MT`) and the `next` item highlighted.
+- [x] 2. A pending entry card shows ticker, qty, buy stop, stop loss, risk dollars, reason and a countdown; tapping Approve calls `approve(id)` once, disables both buttons while busy, then shows the returned message.
+- [x] 3. A `DecisionOut` with `blocked` shows `Entry blocked: ...`; an `ApiError` shows its message and re-enables the buttons.
+- [x] 4. With fake timers, the countdown reaches zero and both buttons become disabled with the expired text.
+- [x] 5. `/dashboard?proposal=<pending id>` highlights that card; `?proposal=<decided id>` renders the panel with status, `decided_at` in MT and `decided_via`.
+- [x] 6. A position with `stop_working` false shows "(no stop order)" and the unprotected time; `last` null shows `n/a`.
+- [x] 7. Kill-switch lights: `max_drawdown_pct` tripped shows red with its `clears` text; `telegram_configured` false shows the notice.
+- [x] 8. Candidates: the brief, catalyst cards with headline links (`rel` set; a `javascript:alert(1)` URL renders as text with no `href`), and the ranking rows in rank order with reject reasons; changing the date refetches with that date.
+- [x] 9. Gate and commit `P4-T13: ...`.
 
 ---
 

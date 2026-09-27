@@ -1,0 +1,214 @@
+/* Dashboard and Candidates pages (P4-T13). Builds on src/styles.css tokens; phone first. */
+
+.text-tone {
+  color: var(--tone);
+}
+
+.section-title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.plain-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ticker {
+  font-size: 1.1rem;
+}
+
+.link-touch {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch);
+}
+
+.notice {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
+  background: var(--tone-bg);
+  font-weight: 600;
+}
+
+.dash-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.dash-header .row {
+  justify-content: space-between;
+}
+
+/* ---------------------------------------------------------------- proposals */
+
+.proposal-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  scroll-margin-top: var(--space-6);
+}
+
+.proposal-card p {
+  margin: 0;
+}
+
+.proposal-card.is-highlighted {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--info-bg);
+}
+
+.proposal-reason {
+  overflow-wrap: anywhere;
+}
+
+.proposal-actions .btn {
+  flex: 1 1 0;
+  min-width: 120px;
+}
+
+.countdown {
+  font-weight: 600;
+}
+
+.outcome {
+  font-weight: 600;
+}
+
+.decision {
+  gap: var(--space-3);
+}
+
+.decisions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* ---------------------------------------------------------------- positions, tiles, switches */
+
+.position-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.position-card p {
+  margin: 0;
+}
+
+.tiles {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+}
+
+.killswitch {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.killswitch:last-child {
+  border-bottom: none;
+}
+
+.killswitch p {
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------- timeline */
+
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.timeline-item {
+  display: grid;
+  grid-template-columns: 5.5em 1fr auto;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.timeline-item:last-child {
+  border-bottom: none;
+}
+
+.timeline-item.tone-bad .timeline-label {
+  color: var(--bad);
+}
+
+.timeline-item.is-next {
+  background: var(--info-bg);
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.timeline-time {
+  color: var(--text-muted);
+}
+
+.timeline-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- events */
+
+.event {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.event:last-child {
+  border-bottom: none;
+}
+
+.event-message {
+  margin: var(--space-1) 0 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- candidates */
+
+.chip {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.brief {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.catalyst-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.catalyst-reason {
+  margin: 0;
+}
+
+.headlines {
+  margin: 0;
+  padding-left: var(--space-4);
+  overflow-wrap: anywhere;
+}
+
+.headlines li {
+  padding: var(--space-1) 0;
+}

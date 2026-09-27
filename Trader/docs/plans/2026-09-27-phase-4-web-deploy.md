@@ -570,16 +570,16 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - **Time display:** after login the shell fetches `/api/meta`, compares `zoneOffsetMinutes(meta.tz_display, meta.server_time)` with `meta.tz_offset_minutes`; equal → `setDisplayZone({ zone: meta.tz_display }, check)`; different → `setDisplayZone({ fixedOffsetMinutes: meta.tz_offset_minutes, label: "MT" }, check)`, where `check` carries both offsets, so `displayZoneInfo()` gives the System page its warning. The server clock skew (`server_time − Date.now()`) is kept for countdowns.
 
 **Acceptance tests (Vitest + Testing Library with `FakeApiClient`; the HTTP client against a mocked `fetch`):**
-- [ ] 1. `createHttpClient`: `approve(5)` sends `POST /api/proposals/5/approve` with the CSRF header and `credentials: "same-origin"`; a 422 body becomes an `ApiError` with `fields`; a network failure becomes code `network`.
-- [ ] 2. A 401 calls `onUnauthorized`; a 403 `csrf` refreshes `/auth/me` and retries once (two `fetch` calls for the request), and a second 403 surfaces as an error.
-- [ ] 3. Visiting `/dashboard?proposal=12` logged out redirects to `/login?next=%2Fdashboard%3Fproposal%3D12`; after a successful login it lands on `/dashboard?proposal=12`. A `next` of `https://evil.example` lands on `/dashboard`.
-- [ ] 4. Each deep link route (`/trades?position=3`, `/journal?date=2026-10-06`, `/reports?week=2026-10-09`, `/system`) renders its page component when logged in.
-- [ ] 5. Login shows the server's 429 message; the code field is sent only when filled.
-- [ ] 6. `useLiveUpdates` with a fake `EventSource`: `invalidate {topics: ["proposals"]}` invalidates the dashboard and proposal queries only; `hello` sets connected; an error sets not connected.
-- [ ] 7. On unmount and on logout the `EventSource` is closed.
-- [ ] 8. With `meta.tz_offset_minutes` −360 and the browser zone data giving −420 for the same instant (stubbed `zoneOffsetMinutes`), the shell switches to fixed-offset mode and `fmtTime` shows the −360 time.
-- [ ] 9. The header shows `DEV` for `app_env: "dev"` and not for `prod`; Logout calls `logout()` and returns to `/login`.
-- [ ] 10. Gate (`check.sh`, which runs `npm run check`) and commit `P4-T12: ...`.
+- [x] 1. `createHttpClient`: `approve(5)` sends `POST /api/proposals/5/approve` with the CSRF header and `credentials: "same-origin"`; a 422 body becomes an `ApiError` with `fields`; a network failure becomes code `network`.
+- [x] 2. A 401 calls `onUnauthorized`; a 403 `csrf` refreshes `/auth/me` and retries once (two `fetch` calls for the request), and a second 403 surfaces as an error.
+- [x] 3. Visiting `/dashboard?proposal=12` logged out redirects to `/login?next=%2Fdashboard%3Fproposal%3D12`; after a successful login it lands on `/dashboard?proposal=12`. A `next` of `https://evil.example` lands on `/dashboard`.
+- [x] 4. Each deep link route (`/trades?position=3`, `/journal?date=2026-10-06`, `/reports?week=2026-10-09`, `/system`) renders its page component when logged in.
+- [x] 5. Login shows the server's 429 message; the code field is sent only when filled.
+- [x] 6. `useLiveUpdates` with a fake `EventSource`: `invalidate {topics: ["proposals"]}` invalidates the dashboard and proposal queries only; `hello` sets connected; an error sets not connected.
+- [x] 7. On unmount and on logout the `EventSource` is closed.
+- [x] 8. With `meta.tz_offset_minutes` −360 and the browser zone data giving −420 for the same instant (stubbed `zoneOffsetMinutes`), the shell switches to fixed-offset mode and `fmtTime` shows the −360 time.
+- [x] 9. The header shows `DEV` for `app_env: "dev"` and not for `prod`; Logout calls `logout()` and returns to `/login`.
+- [x] 10. Gate (`check.sh`, which runs `npm run check`) and commit `P4-T12: ...`.
 
 ---
 

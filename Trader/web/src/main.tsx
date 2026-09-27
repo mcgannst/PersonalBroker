@@ -1,4 +1,4 @@
-// Stub (P4-T2): T12 replaces it with the real entry point (providers, router, live updates).
+// Entry point (P4-T12): renders the app (providers, router, auth, live updates) into #root.
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 

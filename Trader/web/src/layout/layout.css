@@ -1,0 +1,164 @@
+/* The app frame (P4-T12): header, side list on wide screens, bottom tab bar on phones. Colours and
+   spacing come from the variables in src/styles.css. */
+
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.shell-title {
+  font-weight: 700;
+  font-size: 1.15rem;
+  color: var(--text);
+  text-decoration: none;
+  min-height: var(--touch);
+  display: inline-flex;
+  align-items: center;
+}
+
+.shell-actions {
+  flex-wrap: nowrap;
+}
+
+.shell-body {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+}
+
+.shell-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  min-height: var(--touch);
+  padding: 0 var(--space-3);
+  border-radius: 8px;
+  color: var(--text);
+  text-decoration: none;
+  font: inherit;
+  font-weight: 600;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.nav-link.is-active {
+  color: var(--accent);
+  background: var(--surface-2);
+}
+
+.side-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 190px;
+  flex: none;
+  padding: var(--space-4) var(--space-2);
+  border-right: 1px solid var(--border);
+}
+
+.tab-bar {
+  display: none;
+}
+
+.tab-more {
+  position: relative;
+  display: flex;
+}
+
+.tab-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + var(--space-2));
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+
+@media (max-width: 719px) {
+  .shell-header {
+    padding: var(--space-1) var(--space-3);
+  }
+
+  .side-nav {
+    display: none;
+  }
+
+  .shell-main {
+    /* Room for the fixed tab bar. */
+    padding-bottom: calc(var(--touch) + var(--space-4) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .tab-bar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    padding: var(--space-1) var(--space-1) calc(var(--space-1) + env(safe-area-inset-bottom, 0px));
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+  }
+
+  .tab-bar .nav-link {
+    justify-content: center;
+    padding: 0 var(--space-1);
+    font-size: 0.8rem;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tab-bar .tab-menu .nav-link {
+    justify-content: flex-start;
+    font-size: 1rem;
+    padding: 0 var(--space-3);
+  }
+}
+
+/* ---------------------------------------------------------------- login and not found */
+
+.login-page {
+  max-width: 420px;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.login-form label {
+  display: flex;
+}
+
+.login-form input {
+  width: 100%;
+}

@@ -1,8 +1,9 @@
 """Cash ledger with T+1 settlement (SPEC §7.3, BR-21).
 
 Rows are append-only: the database refuses UPDATE and DELETE (trigger cash_ledger_append_only, migration
-0002) and TRUNCATE (trigger cash_ledger_no_truncate, migration 0003). Settled cash counts every debit at once but a credit only from its settle date, so money from a sale
-can't be spent until it settles, and settled money can't be spent twice.
+0002) and TRUNCATE (trigger cash_ledger_no_truncate, migration 0003). Settled cash counts every debit at
+once but a credit only from its settle date, so money from a sale can't be spent until it settles, and
+settled money can't be spent twice.
 """
 
 from dataclasses import dataclass

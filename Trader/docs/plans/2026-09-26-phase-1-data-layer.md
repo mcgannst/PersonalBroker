@@ -1773,7 +1773,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 git pull --rebase && git push
 ```
 
-- [ ] **Step 7: Write the failing scraper tests**
+- [x] **Step 7: Write the failing scraper tests**
 
 `Trader/app/tests/adapters/test_finviz_scraper.py`:
 ```python
@@ -1873,12 +1873,12 @@ def test_cache_avoids_second_request(tmp_path: Path) -> None:
     assert route.call_count == 1
 ```
 
-- [ ] **Step 8: Run to see them fail**
+- [x] **Step 8: Run to see them fail**
 
 Run: `uv run pytest tests/adapters/test_finviz_scraper.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.adapters.finviz.scraper'`.
 
-- [ ] **Step 9: Implement the scraper**
+- [x] **Step 9: Implement the scraper**
 
 `Trader/app/trader/adapters/finviz/scraper.py`:
 ```python
@@ -2009,12 +2009,12 @@ class FinvizScraper:
 
 Request order in `test_pages_through_all_results_politely`: page 1, then the unfiltered total (the ignored-filter guard), then page 2. That's three requests and two waits, which is what the test asserts.
 
-- [ ] **Step 10: Run the tests, then the gate**
+- [x] **Step 10: Run the tests, then the gate**
 
 Run: `uv run pytest tests/adapters -q` → `12 passed`.
 Run: `uv run ruff format . && bash scripts/check.sh` → all pass.
 
-- [ ] **Step 11: Commit and push**
+- [x] **Step 11: Commit and push**
 
 ```bash
 cd "/Users/stephen/Documents/Code/Claude Code/Trader"

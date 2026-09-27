@@ -47,3 +47,33 @@ def token_refresh() -> None:
         typer.echo(f"token refresh failed: {exc}", err=True)
         raise typer.Exit(1) from exc
     typer.echo(f"ok; access token valid until {token.expires_at.isoformat()}")
+
+
+@app.command("questrade-check")
+def questrade_check(symbol: str = "SPY") -> None:
+    """Show Questrade server time, one quote's freshness, and remaining rate limits (spike S2)."""
+    import asyncio
+
+    from trader.adapters.questrade.auth import QuestradeAuth
+    from trader.adapters.questrade.client import QuestradeClient
+    from trader.bootstrap import build_core
+
+    core = build_core()
+    auth = QuestradeAuth(core.factory, core.crypto, core.clock)
+
+    async def run() -> None:
+        async with QuestradeClient(auth, core.clock) as qt:
+            server = await qt.server_time()
+            sym = (await qt.symbols_by_names([symbol]))[symbol]
+            (quote,) = await qt.quotes([sym.symbol_id])
+            now = core.clock.now()
+            skew = (now - server).total_seconds()
+            typer.echo(f"server time {server.isoformat()} (local clock differs by {skew:.1f}s)")
+            age = (now - quote.last_trade_time).total_seconds() if quote.last_trade_time else None
+            typer.echo(
+                f"{symbol}: last={quote.last} bid={quote.bid} ask={quote.ask} delay={quote.delay} "
+                f"lastTradeTime={quote.last_trade_time} age_s={age}"
+            )
+            typer.echo(f"rate limit remaining: {qt.rate_limit_remaining}")
+
+    asyncio.run(run())

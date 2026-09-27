@@ -2588,7 +2588,7 @@ Append to the activity log that the chain is now owned by the database and `spik
 - Produces (`trader.adapters.questrade.client`): `INTRADAY_HISTORY = timedelta(days=88)`; `QuestradeApiError(Exception)` with `.status: int`; `TokenBucket(rate: float, monotonic=time.monotonic, sleep=asyncio.sleep)` with `async acquire()`; `QuestradeClient(tokens: TokenSource, clock: Clock, *, market_rps: float = 20.0, account_rps: float = 30.0, http: httpx.AsyncClient | None = None, sleep=asyncio.sleep)`, an async context manager, with `async server_time() -> datetime`, `async symbols_by_names(names: Sequence[str]) -> dict[str, QtSymbol]`, `async quotes(ids: Sequence[int]) -> list[QtQuote]`, `async candles(symbol_id, start, end, interval) -> list[Candle]`, `async candles_many(reqs: Sequence[CandleRequest]) -> dict[CandleRequest, list[Candle] | QuestradeApiError]`, and attribute `rate_limit_remaining: dict[str, int]` (keys `"market"`, `"account"`).
 - CLI: `trader questrade-check` prints server time, SPY's quote with `delay` and `lastTradeTime`, and remaining rate limits (used for S2 on Monday).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `Trader/app/tests/adapters/test_questrade_client.py`:
 ```python
@@ -2756,12 +2756,12 @@ async def test_token_bucket_spaces_requests() -> None:
     assert waits == pytest.approx([0.05, 0.05])
 ```
 
-- [ ] **Step 2: Run to see them fail**
+- [x] **Step 2: Run to see them fail**
 
 Run: `uv run pytest tests/adapters/test_questrade_client.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trader.adapters.questrade.client'`.
 
-- [ ] **Step 3: Implement the models**
+- [x] **Step 3: Implement the models**
 
 `Trader/app/trader/adapters/questrade/models.py`:
 ```python
@@ -2806,7 +2806,7 @@ class CandleRequest:
     interval: Interval
 ```
 
-- [ ] **Step 4: Implement the client**
+- [x] **Step 4: Implement the client**
 
 `Trader/app/trader/adapters/questrade/client.py`:
 ```python
@@ -3017,12 +3017,12 @@ class QuestradeClient:
 
 Note: `json.loads(..., parse_float=Decimal)` keeps prices exact; `Decimal(c["open"])` then works whether the value arrived as an int or a Decimal.
 
-- [ ] **Step 5: Run the client tests**
+- [x] **Step 5: Run the client tests**
 
 Run: `uv run pytest tests/adapters/test_questrade_client.py -q`
 Expected: `9 passed`.
 
-- [ ] **Step 6: Add `questrade-check` to the CLI**
+- [x] **Step 6: Add `questrade-check` to the CLI**
 
 Add to `Trader/app/trader/cli.py`:
 ```python
@@ -3053,7 +3053,7 @@ def questrade_check(symbol: str = "SPY") -> None:
     asyncio.run(run())
 ```
 
-- [ ] **Step 7: Run the gate, commit and push**
+- [x] **Step 7: Run the gate, commit and push**
 
 Run: `uv run ruff format . && bash scripts/check.sh` → all pass.
 ```bash

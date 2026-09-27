@@ -160,6 +160,10 @@ then the task section in <PHASE_PLAN_PATH>, then the SPEC sections it cites.
 Log to the shared state file exactly as §3.2 says: append a "started" entry now and a
 "finished" or "failed" entry at the end, each with ONE `cat >> ... <<'EOF'` command.
 Never print or commit secrets. Stage files by explicit path.
+Shell rules (a hook enforces them): one command per Bash call. No `&&`, `;` or `||` chaining, no leading
+`cd` (the working directory persists between calls, so `cd` in its own call), and no `git -C`. So
+"git pull --rebase && git push" in a plan means two separate calls. Chaining inside a heredoc body is fine.
+Use absolute paths where you can. The repo root is the directory containing Trader/.
 ```
 
 ### 6.1 Builder

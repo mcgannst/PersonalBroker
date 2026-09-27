@@ -6,14 +6,14 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 
 | Field | Value |
 |---|---|
-| Current phase | 1 (not started) |
-| Current task | none |
-| Gauntlet stage | none |
-| Last updated (UTC) | 2026-09-27T05:00:00Z |
-| Last pushed commit | (set by the orchestrator) |
+| Current phase | 1 |
+| Current task | P1-T1 |
+| Gauntlet stage | building |
+| Last updated (UTC) | 2026-09-27T04:13:00Z |
+| Last pushed commit | d64518b |
 | Questrade token owner | `docker/.env.dev` (moves to `trader_dev.trader.api_credentials` in P1-T6) |
 | Token last refreshed (UTC) | 2026-09-27T03:36:53Z (spike S1) |
-| Phase 1 start commit | (set when P1-T1 starts) |
+| Phase 1 start commit | d64518b |
 
 ## Task board
 
@@ -21,7 +21,7 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 
 | ID | Title | Depends on | Status | Attempt | Stage results | Last commit |
 |---|---|---|---|---|---|---|
-| P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | todo | 0 | | |
+| P1-T1 | Toolchain, project scaffold, env keys, quality gate | none | building | 1 | | |
 | P1-T2 | Database models, migration 0001, test database fixture | T1 | todo | 0 | | |
 | P1-T3 | Crypto and runtime settings store | T2 | todo | 0 | | |
 | P1-T4 | Market types, clock and session calendar | T1 | todo | 0 | | |
@@ -39,7 +39,11 @@ None open.
 
 ## Activity log
 
-### 2026-09-27T05:00:00Z · SETUP · Orchestrator · attempt 1 · finished
+### 2026-09-27T04:05:00Z · SETUP · Orchestrator · attempt 1 · finished
 - Result: master plan and Phase 1 plan written; state file created; build not started
 - Commits: (this commit)
 - Notes: Phase 0 checks S2 (quote freshness) and live S4 are assumed to pass, per Stephen. FinanceTracker token independence is assumed confirmed.
+
+### 2026-09-27T04:13:00Z · P1-T1 · Orchestrator · attempt 1 · started
+- Result: build started by Stephen ("gauntlet it"; run all phases without stopping, report progress)
+- Notes: Docker Desktop running; token refreshed 03:36Z (fresh)

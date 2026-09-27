@@ -353,17 +353,17 @@ The five Phase 4 failure modes most likely to hurt Stephen, most likely first. E
 - Symbols missing from the DB show ticker `?` (never a 500).
 
 **Acceptance tests (real DB with seeded rows; `make_client` with `fake_quotes` and a fixed plan):**
-- [ ] 1. A session day at 10:00 ET with `orb_open` fired, one pending entry proposal, one open position with a working stop: the dashboard shows phase `open`, approval mode `manual`, the pending proposal with `risk_usd` equal to `proposal_view`'s, the position with `stop_working` true, `next` on `entry_cancel`, premarket done, preopen done.
-- [ ] 2. The same seeded data gives the same position numbers as `notify.views.position_lines` and the same P&L as `commands.pnl_view` (built with fakes) — the web and Telegram cannot disagree.
-- [ ] 3. With the quote callable raising, the dashboard still returns 200 with `last` null and `unrealized_partial` true.
-- [ ] 4. On Saturday the dashboard has `is_session` false, an empty timeline and no error; on 2026-11-27 (13:00 close) the timeline has no 13:30 check-in and `flatten` at 17:50Z.
-- [ ] 5. A missed `orb_open` (`event:orb_open` failed with `missed: 295s late`) shows status `missed`.
-- [ ] 6. `DAY_JOBS` agree with `docker/crontab` (parsed at test time, never copied): every weekday line whose command is `premarket`, `preopen`, `checkin --at ...` or `postclose` has a `DAY_JOBS` entry with the same ET time and command, and every `DAY_JOBS` entry except `nightly` has such a line. `trader event ...` lines (orb_open 09:36, flatten 12:55 and 15:55, and the `overlay_decision` backups at 12:32 and 15:32 that the P3-T12 fix round adds) and `token-refresh` are not day jobs and are ignored, so the test passes whether or not those backup lines are on trunk yet.
-- [ ] 7. Candidates for a date: ranking ordered by rank with reject reasons, catalysts with headlines, the brief from the premarket job detail; another run's candidates are not included.
-- [ ] 8. Position detail for a closed seeded trade returns the signal (evidence), the entry and stop proposals, three orders, three fills with quote snapshots, the trade, and 5-minute candles from `candle_archive`; another run's position → 404.
-- [ ] 9. `/trades?from=&to=` filters by `session_date`; `limit` above 500 → 422; `/positions?status=closed` excludes open ones.
-- [ ] 10. `CachedQuotes`: two calls within the TTL fetch once; after the TTL, again; two concurrent calls share one fetch; a failed fetch is retried on the next call.
-- [ ] 11. Gate and commit `P4-T5: ...`.
+- [x] 1. A session day at 10:00 ET with `orb_open` fired, one pending entry proposal, one open position with a working stop: the dashboard shows phase `open`, approval mode `manual`, the pending proposal with `risk_usd` equal to `proposal_view`'s, the position with `stop_working` true, `next` on `entry_cancel`, premarket done, preopen done.
+- [x] 2. The same seeded data gives the same position numbers as `notify.views.position_lines` and the same P&L as `commands.pnl_view` (built with fakes) — the web and Telegram cannot disagree.
+- [x] 3. With the quote callable raising, the dashboard still returns 200 with `last` null and `unrealized_partial` true.
+- [x] 4. On Saturday the dashboard has `is_session` false, an empty timeline and no error; on 2026-11-27 (13:00 close) the timeline has no 13:30 check-in and `flatten` at 17:50Z.
+- [x] 5. A missed `orb_open` (`event:orb_open` failed with `missed: 295s late`) shows status `missed`.
+- [x] 6. `DAY_JOBS` agree with `docker/crontab` (parsed at test time, never copied): every weekday line whose command is `premarket`, `preopen`, `checkin --at ...` or `postclose` has a `DAY_JOBS` entry with the same ET time and command, and every `DAY_JOBS` entry except `nightly` has such a line. `trader event ...` lines (orb_open 09:36, flatten 12:55 and 15:55, and the `overlay_decision` backups at 12:32 and 15:32 that the P3-T12 fix round adds) and `token-refresh` are not day jobs and are ignored, so the test passes whether or not those backup lines are on trunk yet.
+- [x] 7. Candidates for a date: ranking ordered by rank with reject reasons, catalysts with headlines, the brief from the premarket job detail; another run's candidates are not included.
+- [x] 8. Position detail for a closed seeded trade returns the signal (evidence), the entry and stop proposals, three orders, three fills with quote snapshots, the trade, and 5-minute candles from `candle_archive`; another run's position → 404.
+- [x] 9. `/trades?from=&to=` filters by `session_date`; `limit` above 500 → 422; `/positions?status=closed` excludes open ones.
+- [x] 10. `CachedQuotes`: two calls within the TTL fetch once; after the TTL, again; two concurrent calls share one fetch; a failed fetch is retried on the next call.
+- [x] 11. Gate and commit `P4-T5: ...`.
 
 ---
 

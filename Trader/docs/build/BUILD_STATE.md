@@ -27,6 +27,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Phase 5 started | 15:52 MT Sep 27 (P5-T1 contracts); estimate ~5.5 h: finish ~21:00-21:30 MT |
 | Phase 4 estimate | revised 15:52 MT: T19 deploy + P4-REVIEW, finish ~17:30 MT |
 | OPEN checks | Tonight 18:10 MT: nightly job_run on trader-dev; Mon 06:10 MT premarket; Mon 07:25 MT preopen message + job_runs; Stephen tap on msg 45 |
+| Soak start | RESET (Stephen, 2026-09-28): Mon 09-28 not counted (9:35 opening-bar batch timed out, 0 candidates); soak day 1 = Tue 2026-09-29. After the 14:47 MT deploy run `trader soak-mark reset` for 2026-09-28 so the count starts 09-29. 10th clean day earliest Mon 2026-10-12 |
 | Stephen requests (after P5, 2026-09-27) | (1) Full activity/decision logging while running, for end-of-day analysis and tuning (every candidate, filter result, catalyst grade, ORB levels, proposal, approval, fill, exit, with reasons) plus a daily analysis export. (2) Move usernames/passwords/API keys to GitHub secrets (Stephen chose goal (c) recovery AND security: GitHub environment secrets (dev/prod) + a deploy workflow on a LAN self-hosted runner that writes the env file on the Docker host at deploy time; nothing secret kept on the Mac; the rotating Questrade token stays in the DB). Plan both as Phase 6 additions. UPDATE 22:50 MT: Stephen deferred (2) GitHub deploy/secrets until he asks; P6-T13/T14 not built; local .env.prod path restored |
 | Backlog P4 | settings-fallback copied 4x (deps/system/meta/stream) - use QuietSettings; pin proxy subnet (TRADER_FORWARDED_ALLOW_IPS in env / deploy.sh check); prod: one-shot migrate container so docker exec can't read owner URL/admin password; SPEC 15 deploy text outdated; small helper duplication |
 
@@ -2121,3 +2122,41 @@ None open.
 - Commits: e744771
 - Gate: gate.sh exit 0, 3590 passed, web 464 passed. New regression tests: 8 cases (test_wiring 7, test_decisions_cli 1)
 - Notes: D2 holds: no decision-path file touched, golden unchanged, test_d2_the_t9_to_t12_deploy_modifies_no_decision_path_file passes. Left as noted: lone "recovered" info after a lost warning, leftover running event row pauses the loop
+
+### 2026-09-28 12:35 MT · FIX-OPENBARS · Builder · attempt 1 · started
+- Result: production fix: the 9:35 ET opening-bar batch lost every completed bar when the 45 s deadline fired (Mon 2026-09-28: 543 symbols, 0 candidates). Keep completed results at the deadline, cancel the rest cleanly, add 429/pause stats. Log: Trader/docs/build/agents/FIX-OPENBARS-builder-a1.md
+
+### 2026-09-28 13:02 MT · FIX-OPENBARS · Builder · attempt 1 · finished
+- Result: done (code). candles_many(reqs, *, deadline_s) keeps every completed result at the deadline, cancels and awaits the rest. opening_bars reports only outstanding symbols as "timeout" and logs elapsed_s, completed/outstanding and client_stats (requests, http_429, pause_s, http_5xx, transport_errors). TokenBucket returns slots of cancelled waiters. FETCH_DEADLINE_S 45 s and 20 rps unchanged. Not deployed (orchestrator deploys after the close)
+- Commits: 6324d34
+- Gate: gate.sh exit 0, 3597 passed, web 464 passed. New tests: 4 client (partial results at the deadline, no deadline waits for all, bucket slot give-back, stats), 3 service/ORB (real client + respx: fast bars kept and only the hung symbol "timeout", fetched log, ORB scans the partial set)
+- Notes: part 2 hypotheses (unmeasured) in the agent log. Leading one: a single 429 with a far X-RateLimit-Reset pauses the whole market bucket 30 s (27 s + 30 s > 45 s)
+
+### 2026-09-28 13:08 MT · FIX-OPENBARS · Gauntlet (verify/break/review) · attempt 1 · started
+- Result: breaker tests for the candles_many deadline, TokenBucket give-back and the opening_bars partial set, plus code review. Log: Trader/docs/build/agents/FIX-OPENBARS-gauntlet-a1.md
+
+### 2026-09-28 13:21 MT · FIX-OPENBARS · Gauntlet (verify/break/review) · attempt 1 · finished
+- Result: PASS, safe to deploy, no must-fix. 14 breaker cases: 13 pass, 1 xfail(strict) finding. TokenBucket never beats 20 rps under cancel bursts, 429 pauses, random cancellation or the last-waiter race (mutation check: giving slots back on every cancel is caught)
+- Commits: caafbd5 (Trader/app/tests/gauntlet/test_fix_openbars_breaker.py)
+- Gate: gate.sh exit 0, 3610 passed + 1 xfailed, web 464 passed
+- Notes: should-fix 1: client.py:404 a non-API exception in one request (httpx.DecodingError, QuestradeAuthError) re-raises from t.result() and drops every completed bar, and opening_bars only catches TimeoutError (xfail test 7, remove the mark with the fix). Should-fix 2 (part 2): 45 s leaves 18 s over 27 s pacing but one 429 pauses up to MAX_429_PAUSE 30 s. Nits in the gauntlet log
+
+### 2026-09-28 16:21 MT · LIVE-0928 · Orchestrator-delegate · attempt 1 · started
+- Result: step 1 diagnose the 9:35 opening-bar batch timing on the deployed code (read-only, no DB writes); step 2 deploy trunk 1fa182f to trader-dev, cron_gap, soak-mark reset 09-28, decisions backfill. Log: Trader/docs/build/agents/LIVE-0928-a1.md
+
+### 2026-09-28 16:33 MT · LIVE-0928 · Orchestrator-delegate · attempt 1 · finished
+- Result: done. Step 1 root cause: the 543-request batch runs at exactly Questrade's 20 req/s limit (27.2 s floor); each 429 pauses the whole bucket >= 0.5 s (0.5*2**attempt floor, Reset said 0.0-0.4 s) and re-queues waiters. Measured after close: alone 28.0 s (3 x 429, 0.54 s paused); with ~3 rps of other quote load 42.2 s (38 x 429, 12.85 s paused). At the open any extra load on the per-second window pushes it past 45 s. No worker call overlapped (step loop awaits the scan before polling; no working orders); latency p95 0.12 s. Step 2: trunk 1fa182f deployed to trader-dev (down 22:29:10Z, up 22:30:06Z), /api/meta phase-5-complete-22-g1fa182f, alembic 0007 (head), crontab valid with both soak-report lines, heartbeat fresh, cron_gap nothing skipped, postclose 09-28 succeeded. Soak: 09-28 marked outage, 09-29 marked reset, report 0/10, earliest finish 2026-10-12. Decisions 09-28 backfilled (588 rows, not final). /reports?day=2026-09-28 200
+- D2: decision log (P6-T9..T12, 0007) not a trading change; opening-bar fixes 6324d34 + 1fa182f ARE a trading change; soak restarted Tue 2026-09-29 per Stephen
+- Notes: follow-up for the opening bars: pace the batch below 20 rps and honour X-RateLimit-Reset instead of the 0.5 s floor (FETCH_DEADLINE_S 45 s otherwise has ~18 s slack, about 50 x 429). Log: Trader/docs/build/agents/LIVE-0928-a1.md
+
+### 2026-09-28 16:36 MT · FIX-PACING · Builder · attempt 1 · started
+- Result: pace Questrade market data at 17 rps (below the 20 rps limit) and base the 429 pause on X-RateLimit-Reset (reset+0.05 s clamped to 0.05..2 s, backoff capped 2 s for market when Reset is missing, far Reset keeps the 30 s cap), then gate, push, deploy trader-dev, cron_gap, freeze decisions 09-28. Log: Trader/docs/build/agents/FIX-PACING-a1.md
+
+### 2026-09-28 17:02 MT · FIX-PACING · Builder · attempt 1 · finished
+- Result: done and deployed. Market data paced at 17 rps (MARKET_RPS, still the market_rps argument, no live settings key existed). 429 pause follows X-RateLimit-Reset: Reset within 2 s pauses reset+0.05 s clamped 0.05..2 s, Reset over 2 s ahead keeps min(30 s, delta), missing/unparseable/stale Reset backs off 0.5*2**attempt capped 2 s for market. FETCH_DEADLINE_S 45 s unchanged. Simulated 543-request batch: 20/s window + 3 rps other load 31.9 s (old 36.4 s), + 4 rps 33.9 s (old 39.4 s), worst case 429 every 15 requests 44.0 s (old 48.9 s)
+- Commits: 459e172 (fix + tests), 1d93bc3 (agent log)
+- Gate: gate.sh exit 0, 3629 passed, web 464 passed. New tests: tests/adapters/test_questrade_pacing.py 18 cases. One pin updated: test_questrade_client.py::test_429_on_every_attempt_does_not_pause_after_the_last backoffs 0.5,1,2,4 to 0.5,1,2,2
+- Deploy: trader-dev down 22:59:43Z, up 23:00:35Z, health 200, /api/meta phase-5-complete-24-g459e172, heartbeat 1.8 s old. cron_gap nothing skipped (16:05 MDT soak-report flagged as possibly interrupted, read-only, ran 54 min earlier, not re-run). Decisions 2026-09-28 recorded final (run 1, 588 rows)
+- D2: trading change (pacing of the 9:35 opening-bar fetch). Soak already restarts Tue 2026-09-29
+- Notes: the literal "429 every 15 requests" worst case lands at 44 s, inside 45 s but not well under, since pacing cannot help if the 429 rate does not fall. Log: Trader/docs/build/agents/FIX-PACING-a1.md
+- Correction: test_questrade_pacing.py has 16 cases (not 18). Telegram update sent

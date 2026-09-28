@@ -6,8 +6,9 @@ its summary with the dedupe key `summary:<date>`, so the notifier sends it once.
 listed in the result (and alerted when it matters), never a job failure (Review Focus 4).
 """
 
+import asyncio
 import dataclasses
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -21,6 +22,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from trader.adapters.telegram.types import CallbackIssuer
 from trader.db import models as m
 from trader.db.session import session_scope
+from trader.decisions.loop import FinalPass
+from trader.decisions.types import DaySummary
 from trader.engine.killswitch import KillSwitches
 from trader.events import log_event
 from trader.logging_setup import redact_text
@@ -33,6 +36,7 @@ from trader.notify.types import (
     Button,
     Buttons,
     DailySummaryView,
+    DecisionsLineView,
     Notifier,
     PositionLine,
     Renderer,
@@ -47,6 +51,7 @@ from trader.worker import WorkerEngine
 log = structlog.get_logger("jobs.postclose")
 
 SOURCE = "job.postclose"
+DECISIONS_SOURCE = "decisions"  # trader.decisions.types.SOURCE: the decision log's events, never relayed
 OPENING_BAR_CODE: Literal["5m"] = "5m"  # INTERVAL_CODES["FiveMinutes"]
 MINUTE_CODE: Literal["1m"] = "1m"  # INTERVAL_CODES["OneMinute"]
 MAX_MISSING_OPEN_FRACTION = Decimal("0.05")  # more opening bars missing than this is an error event
@@ -91,6 +96,9 @@ class PostcloseDeps:
     issuer: CallbackIssuer
     chat_id: int
     run_id: int
+    # P6-T11: the decision log's final pass for a session (record final, prune, read the day's summary back),
+    # `trader.decisions.loop.final_pass` bound to this run. None: no pass and no "Decisions" line.
+    decisions: Callable[[date], Awaitable[FinalPass]] | None = None
 
 
 def _reason(exc: BaseException) -> str:
@@ -119,7 +127,12 @@ async def run_postclose(deps: PostcloseDeps, session_date: date) -> dict[str, An
     (`Notifier.send` returns nothing): `sent` (the row is `sent`), `handed_off` (sent to a notifier that keeps
     no `notifications` row, such as a test fake), `duplicate` (a `summary:<date>` row already existed before
     this run, so nothing was issued or sent), `failed` (the row is `failed` or still `sending`), or `error`
-    (building or sending raised). `summary_sent` is True only for `sent` and `handed_off`."""
+    (building or sending raised). `summary_sent` is True only for `sent` and `handed_off`.
+
+    With `deps.decisions` (P6-T11) the decision log's final pass runs after the archive (which it never
+    delays) and before the summary, and the result gains `decisions`: `{"final", "rows", "pruned": {"live",
+    "replay"}}` (plus `skipped` when the recorder skipped), or `{"error": <exception type>}`, in which case
+    the summary goes out without its "Decisions" line."""
     if not deps.calendar.is_session(session_date):
         return {"skipped": "not a session"}
     started = deps.clock.now()
@@ -141,14 +154,90 @@ async def run_postclose(deps: PostcloseDeps, session_date: date) -> dict[str, An
             MINUTE_CODE: int(archive[MINUTE_CODE]),
             "missing": len(archive["missing"]),
         }
-    summary = await _send_summary(deps, session_date, counts)
-    return {
+    decisions_detail, line = await _decisions(deps, session_date)
+    summary = await _send_summary(deps, session_date, counts, line)
+    out: dict[str, Any] = {
         "open_positions": [int(p.id) for p in still_open],
         "cancelled": cancelled,
         "archive": archive,
         "summary_sent": summary in ("sent", "handed_off"),
         "summary": summary,
     }
+    if decisions_detail is not None:
+        out["decisions"] = decisions_detail
+    return out
+
+
+def decisions_line(s: DaySummary, session_date: date) -> DecisionsLineView:
+    """The daily summary's "Decisions" line from the day's decision-log summary (P6-T11)."""
+    return DecisionsLineView(
+        scanned=s.scanned,
+        ranked=s.ranked,
+        passed=s.passed,
+        proposals=s.proposals,
+        manual=int(s.approvals.get("manual", 0)),
+        auto=int(s.approvals.get("auto", 0)),
+        fills=s.fills,
+        trades=s.trades,
+        top_rejects=tuple(s.rejects_by_rule[:3]),
+        link=f"/reports?day={session_date.isoformat()}",
+    )
+
+
+async def _decisions(
+    deps: PostcloseDeps, session_date: date
+) -> tuple[dict[str, Any] | None, DecisionsLineView | None]:
+    """The decision log's final pass (P6-T11), after the archive and before the summary: the job detail's
+    `decisions` entry and the summary's line. Never raises: a failure is one masked warning (log line and a
+    `warning` event, never relayed), the detail says `{"error": <type>}` and the summary goes out without
+    the line. The line is left out when `reports.decisions_in_summary` is off or the day has no day row."""
+    if deps.decisions is None:
+        return None, None
+    try:
+        final = await deps.decisions(session_date)
+    except Exception as exc:
+        error = type(exc).__name__
+        log.warning("postclose.decisions_failed", error=_reason(exc))
+        await asyncio.to_thread(_log_warning, deps, session_date, _reason(exc), error)
+        return {"error": error}, None
+    detail: dict[str, Any] = {
+        "final": final.result.final,
+        "rows": final.rows,
+        "pruned": (
+            {"live": final.pruned.live_deleted, "replay": final.pruned.replay_deleted}
+            if final.pruned is not None
+            else {"error": final.prune_error or "unknown"}
+        ),
+    }
+    if final.result.skipped is not None:
+        detail["skipped"] = final.result.skipped
+    line: DecisionsLineView | None = None
+    if final.summary is not None:
+        try:
+            in_summary = (await asyncio.to_thread(deps.settings)).reports_decisions_in_summary
+        except Exception as exc:  # the settings can't be read: no line, the summary still goes out
+            log.warning("postclose.decisions_setting_failed", error=type(exc).__name__)
+            in_summary = False
+        if in_summary:
+            line = decisions_line(final.summary, session_date)
+    return detail, line
+
+
+def _log_warning(deps: PostcloseDeps, session_date: date, reason: str, error: str) -> None:
+    """A `warning` event (source `decisions`: shown on the System page, never relayed). Never raises."""
+    try:
+        with session_scope(deps.factory) as s:
+            log_event(
+                s,
+                deps.clock,
+                "warning",
+                DECISIONS_SOURCE,
+                f"decision log final pass for {session_date} failed: {reason}",
+                {"session_date": session_date.isoformat(), "error_type": error},
+                deps.run_id,
+            )
+    except Exception as db_exc:
+        log.error("postclose.event_log_failed", error=type(db_exc).__name__)
 
 
 def _log_error(deps: PostcloseDeps, message: str, session_date: date, error: str) -> None:
@@ -176,7 +265,12 @@ def _summary_status(deps: PostcloseDeps, dedupe_key: str) -> str | None:
         ).scalar_one_or_none()
 
 
-async def _send_summary(deps: PostcloseDeps, session_date: date, counts: Mapping[str, int]) -> str:
+async def _send_summary(
+    deps: PostcloseDeps,
+    session_date: date,
+    counts: Mapping[str, int],
+    decision_log: DecisionsLineView | None = None,
+) -> str:
     """Send the daily summary once per session (see `run_postclose` for the returned status)."""
     dedupe_key = f"summary:{session_date.isoformat()}"
     try:
@@ -192,6 +286,8 @@ async def _send_summary(deps: PostcloseDeps, session_date: date, counts: Mapping
             counts,
             expectancy_min_trades=_expectancy_min_trades(deps),
         )
+        if decision_log is not None:
+            view = dataclasses.replace(view, decision_log=decision_log)
         buttons: Buttons = ()
         try:
             _nonce, data = deps.issuer.issue(

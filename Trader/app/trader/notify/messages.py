@@ -21,6 +21,7 @@ from trader.notify.types import (
     AlertView,
     Buttons,
     DailySummaryView,
+    DecisionsLineView,
     FillView,
     MessageKind,
     OutboundMessage,
@@ -560,6 +561,8 @@ class MessageRenderer:
         if v.avg_decision_seconds is not None:
             decisions += f", average {fmt_duration(v.avg_decision_seconds)}"
         lines.append(decisions)
+        if v.decision_log is not None:
+            lines.append(self._decision_log_line(v.decision_log))
         lines.append(f"Unprotected time: {fmt_duration(v.unprotected_seconds)}")
         lines.append(f"Kill switches: {_e(', '.join(v.blocking_switches)) or 'none'}")
         archive = ", ".join(f"{_e(k)}: {n}" for k, n in sorted(v.archive.items()))
@@ -567,6 +570,22 @@ class MessageRenderer:
         lines.append("<b>Rules followed?</b>")
         lines.append(self._link(f"/journal?date={d}", f"Journal {d}"))
         return self._msg("daily_summary", lines, buttons)
+
+    def _decision_log_line(self, v: DecisionsLineView) -> str:
+        """P6-T11: `Decisions: 812 scanned · 14 ranked · 1 passed · 1 proposal (1 manual) · top rejects
+        rvol_below_min 790, catalyst_low_quality 6 · details` (the link to the day's Reports view)."""
+        parts = [f"{v.scanned} scanned", f"{v.ranked} ranked", f"{v.passed} passed"]
+        proposals = f"{v.proposals} proposal{'' if v.proposals == 1 else 's'}"
+        how = [f"{n} {k}" for k, n in (("manual", v.manual), ("auto", v.auto)) if n]
+        parts.append(proposals + (f" ({', '.join(how)})" if how else ""))
+        if v.fills:
+            parts.append(f"{v.fills} fill{'' if v.fills == 1 else 's'}")
+        if v.trades:
+            parts.append(f"{v.trades} trade{'' if v.trades == 1 else 's'}")
+        if v.top_rejects:
+            parts.append("top rejects " + ", ".join(f"{_e(rule)} {n}" for rule, n in v.top_rejects[:3]))
+        parts.append(self._link(v.link, "details"))
+        return "Decisions: " + " · ".join(parts)
 
     def journal_answered(self, session_date: date, rules_followed: bool) -> OutboundMessage:
         answer = "Yes" if rules_followed else "No"

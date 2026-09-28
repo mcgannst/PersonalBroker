@@ -46,6 +46,12 @@ Phase 5 (P5-T17):
 - `weekly_job`: the Saturday weekly report (`trader weekly`), its commentary written through an
   `AsyncAnthropic` client (timeout 30 s, one retry, as the catalyst classifier) only when
   ANTHROPIC_API_KEY is set.
+
+Phase 6 (P6-T11), the decision log (logging only, D2): the worker runs `DecisionsLoop` as its own task
+(`decisions_loop`); the post-close runs the final pass (`decisions_final_pass`: record final, prune, the day's
+summary for the "Decisions" line); the CLI calls `record_decisions_quietly` after a succeeded pre-market job
+and after `trader event` fired an event. None of them can fail or change a job: every failure is one masked
+warning, and all their database work runs in worker threads.
 """
 
 import asyncio
@@ -82,6 +88,10 @@ from trader.broker.sim_broker import SimBroker
 from trader.config import EnvSettings
 from trader.db import models as m
 from trader.db.session import session_scope
+from trader.decisions.loop import DecisionsLoop, EventWriter, FinalPass, final_pass
+from trader.decisions.recorder import LiveScanData, record_day
+from trader.decisions.types import SOURCE as DECISIONS_SOURCE
+from trader.decisions.types import RecorderDeps
 from trader.engine.killswitch import KillSwitches
 from trader.engine.orchestrator import Engine, build_engine
 from trader.engine.proposals import Decision, DecisionResult, ProposalService, Via
@@ -804,6 +814,8 @@ async def _run_worker(core: Core, settings: GuardedSettings, once: bool) -> int:
             rate_limit = client.rate_limit_remaining()
             return {"rate_limit": rate_limit} if rate_limit is not None else {}
 
+        run_id = run.id
+
         worker = Worker(
             WorkerDeps(
                 factory=factory,
@@ -820,6 +832,7 @@ async def _run_worker(core: Core, settings: GuardedSettings, once: bool) -> int:
                 process=WORKER_PROCESS,
                 host=socket.gethostname(),
                 heartbeat_extra=heartbeat_extra,
+                decisions=decisions_loop(core, lambda: run_id),
             )
         )
         try:
@@ -827,6 +840,71 @@ async def _run_worker(core: Core, settings: GuardedSettings, once: bool) -> int:
         except SystemExit as exc:  # 2: another worker runs; 3: this one lost its lock
             return exit_code(exc)
     return EXIT_LIVE_RUN_CHANGED if watch.changed else 0
+
+
+# --- the decision log (P6-T11) ------------------------------------------------------------------------------
+
+
+def recorder_deps(core: Core) -> RecorderDeps:
+    """The live recorder's deps: the database-only scan data, the core clock and calendar, and
+    `quiet_settings` (an unusable settings row gives the defaults, no event: the worker's GuardedSettings
+    reports it)."""
+    return RecorderDeps(
+        factory=core.factory,
+        clock=core.clock,
+        calendar=core.calendar,
+        settings=quiet_settings(core),
+        scan_data=LiveScanData(core.factory, core.calendar),
+    )
+
+
+def decisions_event_writer(core: Core) -> EventWriter:
+    """The decision log's warning/info events: one `event_log` row, source `decisions` (levels `warning` and
+    `info` are never relayed). Never raises."""
+
+    def write(level: str, message: str, data: dict[str, Any], run_id: int | None) -> None:
+        _record_event(core, level, DECISIONS_SOURCE, message, data, run_id)
+
+    return write
+
+
+def decisions_loop(core: Core, run_id: Callable[[], int | None]) -> DecisionsLoop:
+    """The worker's decision log loop for its live run."""
+    return DecisionsLoop(recorder_deps(core), run_id, event=decisions_event_writer(core))
+
+
+def decisions_final_pass(core: Core, run_id: int) -> Callable[[date], Awaitable[FinalPass]]:
+    """The post-close's final pass for `run_id` (record final, prune, the day's summary)."""
+
+    async def run(session_date: date) -> FinalPass:
+        return await final_pass(recorder_deps(core), run_id, session_date)
+
+    return run
+
+
+async def record_decisions_quietly(core: Core, session_date: date, *, final: bool = False) -> None:
+    """One decision log pass for the active live run, best effort (the CLI calls it after a succeeded
+    pre-market job, once its brief was handed off, and after `trader event` when an event fired). Never
+    raises: a failure is one masked log line and one `warning` event (source `decisions`, never relayed).
+    Every database step runs in a worker thread. No live run yet: nothing to record."""
+    run_id: int | None = None
+    try:
+        run_id = await asyncio.to_thread(active_live_run_id, core.factory)
+        if run_id is None:
+            return
+        await record_day(recorder_deps(core), run_id, session_date, final=final)
+    except Exception as exc:
+        reason = " ".join(redact_text(f"{type(exc).__name__}: {exc}").split())[:300]
+        log.warning("runtime.decisions_not_recorded", session_date=session_date.isoformat(), error=reason)
+        await asyncio.to_thread(
+            _record_event,
+            core,
+            "warning",
+            DECISIONS_SOURCE,
+            f"decision log pass for {session_date.isoformat()} failed: {reason}",
+            {"session_date": session_date.isoformat(), "error_type": type(exc).__name__},
+            run_id,
+        )
 
 
 # --- cron jobs ----------------------------------------------------------------------------------------------
@@ -997,6 +1075,7 @@ async def postclose_job(core: Core, session_date: date, *, force: bool) -> JobOu
             issuer=issuer,
             chat_id=core.env.telegram_chat_id or 0,
             run_id=run.id,
+            decisions=decisions_final_pass(core, run.id),
         )
         return await run_cli_job(
             core,

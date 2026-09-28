@@ -427,6 +427,7 @@ Timestamps are `timestamptz` in UTC. Money is `numeric(14,4)`. Primary keys are 
 | `event_log` | id, ts, level, source, run_id, message, data jsonb | Timeline for the UI |
 | `users` | id, username, password_hash, totp_secret_enc | Single user |
 | `audit_log` | id, ts, actor, action, before jsonb, after jsonb | Settings and approval changes |
+| `decision_log` | id, run_id, session_date, seq, stage, strategy_key, symbol_id, ticker, outcome, rule, reason, ts, ref jsonb, data jsonb, recorded_at, final; unique (run_id, session_date, seq) | The decision log (Phase 6, migration 0007): every trading decision of a run's session with its reason, one row per decision, ordered by stage (`universe`, `premarket`, `scan`, `signal`, `risk`, `proposal`, `approval`, `order`, `fill`, `exit`, `overlay`, `kill_switch`, then one `day` row holding the day's summary). A **derived journal**: built by the recorder from the rows above (catalysts, job details, universe snapshots, candidates, signals, proposals, orders, fills, trades, kill-switch and overlay events) and the stored opening bars, never from Questrade; the 9:35 scan rows carry every filter's value and threshold, taken from the strategy revision in effect at 9:35. Rebuilt while the session runs, frozen (`final`) by the post-close, so a later config edit never rewrites a finished day. Replays record under their own `run_id`. Logging only: no decision-path code reads it. Kept 400 days (live) and 30 days (replays), §13 |
 
 **Views:** `v_daily_pnl`, `v_trade_metrics` (per run: count, win rate, average win/loss R, expectancy, profit factor, max drawdown, average slippage, adherence %).
 
@@ -453,6 +454,11 @@ All endpoints need a session cookie, except `/api/auth/login` and `/api/health`.
 | `GET /stream` | Server-Sent Events for live dashboard updates |
 | `POST /credentials/questrade` | Paste the initial refresh token |
 | `GET /export/trades.csv` | CSV export |
+| `GET /decisions/days?limit=&run_id=` | The recorded days of the decision log, newest first, with each day's summary line (Phase 6) |
+| `GET /decisions?date=&run_id=&stage=&outcome=&ticker=&limit=&offset=` | One day's decisions in order, each scan row with its checks (name, value, op, threshold, pass), and the day's summary; 404 when the day has none |
+| `GET /export/decisions.csv?date=&run_id=` | The day's decisions as CSV (text cells guarded like the trades export) |
+
+Without `run_id` the decision routes serve only a live run; a replay's decisions need its explicit `run_id`.
 
 ## 12. Web application (React)
 
@@ -464,6 +470,7 @@ All endpoints need a session cookie, except `/api/auth/login` and `/api/health`.
 | **Performance** | Equity curve, drawdown, R-multiple histogram, metrics tiles (expectancy, win rate, profit factor, slippage, adherence), and a filter by run or date range |
 | **Journal** | Daily rules-followed record and notes |
 | **Replay** | Start a replay (date range, settings), see progress, see results, compare with live |
+| **Reports** | The weekly report (`/reports?week=YYYY-MM-DD`) and (Phase 6) the **Day** view of the decision log (`/reports?day=YYYY-MM-DD[&run=<id>]`, linked from the daily Telegram summary): a date picker (default the latest recorded day), the day's summary (text and counts), filters by stage, outcome and ticker, a table (MT time, stage, ticker, outcome, rule, reason) whose rows expand to the checks (name, value, op, threshold, pass/fail) and the data, and a Download CSV link |
 | **Settings** | Approval mode toggle; capital/currency/markets; fill model and slippage; TTLs; kill-switch thresholds; strategy plug-in settings (form generated from the JSON Schema); Claude budget; Telegram test button |
 | **System** | Job runs, API token status and last refresh, worker heartbeat, error log, rate-limit usage |
 
@@ -529,6 +536,17 @@ Engine settings (Phase 2; `trader/settings_store.py` is the source of truth):
 | `premarket.gap_min_pct` | `0.03` | > 0, ≤ 1 | Pre-market gap that makes a candidate |
 | `premarket.news_filter` | `news_date_today` | one or more `\|`-separated filter lists | FinViz news screen(s) (§4.2) |
 | `premarket.earnings_filter` | `session_window` | `session_window`, or one or more `\|`-separated filter lists | FinViz earnings screens, unioned (§4.2). `session_window` (and the retired first default `earningsdate_yesterdayafter\|earningsdate_todaybefore`) = previous trading session after the close + today before the open, from the exchange calendar and FinViz's Earnings column |
+
+Decision log settings (Phase 6, group "Reports" on the Settings page; logging only, not trading settings):
+
+| Key | Default | Allowed | Purpose |
+|---|---|---|---|
+| `reports.decisions_enabled` | `true` | bool | Record the decision log (the worker's refresh passes, the pre-market and cron-event passes, the post-close's final pass, replays) |
+| `reports.decisions_scan_detail` | `all` | `all` \| `ranked` | `all`: one 9:35 scan row per universe name with the reason it was dropped (≈ 800 rows a day); `ranked`: only the ranked candidates plus a count per rule |
+| `reports.decisions_refresh_seconds` | `60` | 15–600 | How often the worker records the day while the session runs (07:50 ET to the close + 30 min, never starting a pass 09:34–09:38 ET or while an event job is running) |
+| `reports.decisions_retention_days` | `400` | 30–3650 | Live-run decision rows older than this (by session date) are deleted by the post-close |
+| `reports.decisions_replay_retention_days` | `30` | 1–3650 | A replay's decision rows are deleted this long after it finished |
+| `reports.decisions_in_summary` | `true` | bool | The daily Telegram summary carries one "Decisions" line with a link to the day's Reports view |
 
 Every stored value is validated; `load()` fails closed on an invalid row, and every change is written to `audit_log`.
 

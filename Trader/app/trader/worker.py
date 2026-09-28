@@ -13,6 +13,8 @@ Four asyncio tasks run side by side, so none can delay another (Telegram never b
 - the relay loop (`relay()`, which talks to Telegram) at the same cadence, with a last pump on stop;
 - the heartbeat loop, every `worker.heartbeat_seconds`, which also re-checks the single-instance lock;
 - the bot (long polling), restarted 30 s after it dies.
+- (P6-T11) the decision log loop (`trader.decisions.loop.DecisionsLoop`), when given: logging only, its
+  database work in worker threads, cancelled on stop without a grace period.
 
 Failure alerts (fix round 1): a part that fails writes ONE `error` event when its failure streak starts,
 one `critical` event at FAILED_STEPS_CRITICAL consecutive failures, and one `info` "recovered after N
@@ -42,6 +44,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from trader import logging_setup
 from trader.db.models import WorkerHeartbeat
 from trader.db.session import session_scope
+from trader.decisions.loop import DecisionsLoop
 from trader.engine.scheduler import DayPlan, FireResult, due_events
 from trader.events import log_event
 from trader.market.calendar import SessionCalendar
@@ -96,6 +99,9 @@ class WorkerDeps:
     # P4-T18: extra keys merged into the heartbeat `detail` (the Questrade rate-limit numbers the System page
     # shows). The P3 keys win on a clash; a failing or unserialisable result is skipped (logged per streak).
     heartbeat_extra: Callable[[], Mapping[str, Any]] | None = None
+    # P6-T11: the decision log's refresh loop, run beside the relay. Its database work runs off the event
+    # loop and it never raises. None: the worker records no decisions.
+    decisions: DecisionsLoop | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -520,6 +526,10 @@ class Worker:
                 tasks["relay"] = asyncio.create_task(self._supervise("relay_loop", self._relay_loop, stop))
             if self.deps.bot is not None:
                 tasks["bot"] = asyncio.create_task(self._supervise("bot", self.deps.bot, stop))
+            if self.deps.decisions is not None:
+                tasks["decisions"] = asyncio.create_task(
+                    self._supervise("decisions_loop", self.deps.decisions.run, stop)
+                )
             while not stop.is_set():
                 await self.step()
                 if stop.is_set():
@@ -545,6 +555,7 @@ class Worker:
                 self._finish(tasks.get("relay"), RELAY_STOP_SECONDS),
                 self._finish(tasks.get("bot"), timeout),
                 self._finish(tasks.get("heartbeat"), 0),
+                self._finish(tasks.get("decisions"), 0),  # no grace period: a pass is idempotent
             )
         finally:
             try:

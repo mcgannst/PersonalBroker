@@ -349,6 +349,8 @@ def premarket(
         typer.echo(out.detail["brief"])
         # Once per session (dedupe premarket:<date>); a Telegram failure never fails the job.
         asyncio.run(runtime.send_premarket_brief(core, session_date, out.detail["brief"]))
+        # P6-T11: then a decision log pass (after the brief, so it is never delayed). It never raises.
+        _record_decisions(core, session_date)
     elif out.status == "skipped":
         typer.echo(f"premarket {session_date}: skipped ({out.detail.get('reason', 'no reason given')})")
     else:
@@ -500,6 +502,21 @@ def _session(core: "Core", date_: str | None, name: str) -> date | None:
     return day
 
 
+def _record_decisions(core: "Core", day: date) -> None:
+    """P6-T11: one best-effort decision log pass (`runtime.record_decisions_quietly`, which never raises
+    itself). Nothing it does can change the command's output line or exit code."""
+    import asyncio
+
+    from trader import runtime
+
+    try:
+        asyncio.run(runtime.record_decisions_quietly(core, day))
+    except Exception as exc:  # belt and braces: record_decisions_quietly already isolates its failures
+        import structlog
+
+        structlog.get_logger("cli").warning("cli.decisions_not_recorded", error_type=type(exc).__name__)
+
+
 def _run[T](name: str, day: date, work: Callable[[], Coroutine[Any, Any, T]]) -> T:
     import asyncio
 
@@ -607,6 +624,10 @@ def event(
             typer.echo(line, err=True)
         else:
             typer.echo(line)
+    if any(r.status == "fired" for r in results):
+        # P6-T11: a cron-fired event (the worker was down) is recorded too. Best effort: it never raises and
+        # the exit code never depends on it. A backup that found the event settled records nothing.
+        _record_decisions(core, day)
     if failed:
         raise typer.Exit(1)
 
@@ -1113,3 +1134,203 @@ def replay(
     typer.echo(_replay_summary(core, final))
     if final.status not in ("completed", "cancelled"):
         raise typer.Exit(1)
+
+
+# --- P6-T11: the decision log -------------------------------------------------------------------------------
+# `trader decisions record|show|export|prune`. None writes a `job_runs` row (they are not jobs and not in
+# `ManualJob`). Exit 0, or 1 on a database error or an unknown run. A date that is not a trading session
+# prints "not a trading session" and exits 0.
+
+decisions_app = typer.Typer(no_args_is_help=True, add_completion=False, help="The decision log (P6-T11).")
+app.add_typer(decisions_app, name="decisions")
+
+RUN_OPTION = typer.Option(None, "--run", help="A run id (default: the live run)")
+DAY_OPTION = typer.Option(..., "--date", help="The session YYYY-MM-DD")
+
+
+def _decisions_day(core: "Core", name: str, date_: str) -> date | None:
+    """--date as a session, or None (after printing "not a trading session") when it isn't one. A bad date
+    exits 1."""
+    try:
+        day = date.fromisoformat(date_)
+    except ValueError:
+        _fail(f"{name}: --date {date_} is not a valid date (use YYYY-MM-DD)")
+    try:
+        is_session = core.calendar.is_session(day)
+    except ValueError:
+        is_session = False
+    if not is_session:
+        typer.echo(f"{name} {day}: not a trading session, nothing to do")
+        return None
+    return day
+
+
+def _decisions_run(core: "Core", name: str, run_id: int | None) -> tuple[int, str]:
+    """(id, mode) of --run, else of the live run (the active one, else the latest). Exit 1 when unknown."""
+    from trader.decisions import read
+
+    try:
+        found = read.resolve_run(core.factory, run_id)
+    except Exception as exc:
+        _fail(f"{name}: failed: {_one_line(exc)}")
+    if found is None:
+        _fail(f"{name}: unknown run {run_id}" if run_id is not None else f"{name}: there is no live run")
+    return found
+
+
+@decisions_app.command("record")
+def decisions_record(
+    date_: str = DAY_OPTION,
+    run_id: int | None = RUN_OPTION,
+    final: bool = typer.Option(False, "--final", help="Freeze the day (the post-close does this)"),
+    rebuild: bool = typer.Option(
+        False, "--rebuild", help="Rebuild even if nothing changed (a final day stays final)"
+    ),
+) -> None:
+    """Record a day's decisions now (idempotent: an unchanged or final day is skipped unless --rebuild)."""
+    _setup_logging()
+    import asyncio
+    import dataclasses
+
+    from trader import runtime
+    from trader.decisions.recorder import record_day
+    from trader.replay.types import load_replay_run
+
+    name = "decisions record"
+    core = _core(name)
+    day = _decisions_day(core, name, date_)
+    if day is None:
+        return
+    rid, mode = _decisions_run(core, name, run_id)
+    deps = runtime.recorder_deps(core)
+    try:
+        if mode == "replay":  # a replay's rows use its own settings snapshot, never the live settings
+            snapshot = load_replay_run(core.factory, rid).settings
+            deps = dataclasses.replace(deps, settings=lambda: snapshot)
+        result = asyncio.run(record_day(deps, rid, day, final=final, rebuild=rebuild))
+    except Exception as exc:
+        _fail(f"{name} {day} run {rid}: failed: {_one_line(exc)}")
+    frozen = ", final" if result.final else ""
+    if result.skipped is not None:
+        typer.echo(f"{name} {day} run {rid}: skipped ({result.skipped}{frozen})")
+    else:
+        typer.echo(f"{name} {day} run {rid}: {sum(result.stages.values())} rows{frozen}")
+
+
+@decisions_app.command("show")
+def decisions_show(
+    date_: str = DAY_OPTION,
+    run_id: int | None = RUN_OPTION,
+    stage: str | None = typer.Option(None, "--stage", help="Only this stage (scan, proposal, fill, ...)"),
+    outcome: str | None = typer.Option(None, "--outcome", help="Only this outcome (passed, rejected, ...)"),
+    limit: int = typer.Option(200, "--limit", min=1, max=5000, help="At most this many rows"),
+) -> None:
+    """The day's summary, then one line per row: time (MT), stage, ticker, outcome, rule."""
+    _setup_logging()
+    from zoneinfo import ZoneInfo
+
+    from trader.decisions import read
+    from trader.decisions.types import OUTCOMES, STAGE_ORDER
+
+    name = "decisions show"
+    if stage is not None and stage not in STAGE_ORDER:
+        _fail(f"{name}: --stage must be one of {', '.join(STAGE_ORDER)}", code=2)
+    if outcome is not None and outcome not in OUTCOMES:
+        _fail(f"{name}: --outcome must be one of {', '.join(OUTCOMES)}", code=2)
+    core = _core(name)
+    day = _decisions_day(core, name, date_)
+    if day is None:
+        return
+    if run_id is not None:
+        _decisions_run(core, name, run_id)
+    try:
+        view = read.load_day(
+            core.factory,
+            run_id,
+            day,
+            stage=stage,  # checked against STAGE_ORDER above
+            outcome=outcome,  # checked against OUTCOMES above
+            limit=limit,
+        )
+    except Exception as exc:
+        _fail(f"{name} {day}: failed: {_one_line(exc)}")
+    if view is None:
+        typer.echo(f"{name} {day}: no decisions recorded")
+        return
+    tz = ZoneInfo(core.env.tz_display)
+    state = "final" if view.final else "not final"
+    typer.echo(f"decisions {day} run {view.run_id} ({view.run_mode}, {state}), {view.total} rows")
+    if view.summary_text:
+        for line in view.summary_text.splitlines():
+            typer.echo(_masked_line(line))
+    for r in view.rows:
+        at = r.ts.astimezone(tz).strftime("%H:%M:%S")
+        ticker, rule = _masked_line(r.ticker or "-"), _masked_line(r.rule or "-")
+        typer.echo(f"{at} MT  {r.stage:<11} {ticker:<8} {r.outcome:<13} {rule}")
+    if view.total > len(view.rows):
+        typer.echo(f"... {view.total - len(view.rows)} more (use --limit)")
+
+
+@decisions_app.command("export")
+def decisions_export(
+    date_: str = DAY_OPTION,
+    run_id: int | None = RUN_OPTION,
+    out: str | None = typer.Option(None, "--out", help="Write the CSV here (default: stdout)"),
+) -> None:
+    """The day's decisions as CSV (the same file as the web's Download CSV)."""
+    _setup_logging()
+    import sys
+    from pathlib import Path
+
+    from trader.decisions import read
+    from trader.decisions.export import decisions_csv
+
+    name = "decisions export"
+    core = _core(name)
+    day = _decisions_day(core, name, date_)
+    if day is None:
+        return
+    if run_id is not None:
+        _decisions_run(core, name, run_id)
+    try:
+        with core.factory() as s:
+            picked = read.pick_run(s, run_id, day)
+            has = picked is not None and read.has_rows(s, picked[0], day)
+    except Exception as exc:
+        _fail(f"{name} {day}: failed: {_one_line(exc)}")
+    if picked is None or not has:
+        typer.echo(f"{name} {day}: no decisions recorded", err=True)
+        return
+    lines = decisions_csv(core.factory, picked[0], day)
+    try:
+        if out is None:
+            for line in lines:
+                sys.stdout.write(line)
+            sys.stdout.flush()
+        else:
+            with Path(out).open("w", encoding="utf-8", newline="") as f:
+                for line in lines:
+                    f.write(line)
+    except Exception as exc:
+        _fail(f"{name} {day}: failed: {_one_line(exc)}")
+    finally:
+        lines.close()
+    if out is not None:
+        typer.echo(f"{name} {day} run {picked[0]}: written to {out}")
+
+
+@decisions_app.command("prune")
+def decisions_prune() -> None:
+    """Delete decision rows past their retention: reports.decisions_retention_days for live runs,
+    reports.decisions_replay_retention_days for replays (the post-close does this every session)."""
+    _setup_logging()
+    from trader import runtime
+    from trader.decisions.prune import prune
+
+    name = "decisions prune"
+    core = _core(name)
+    try:
+        result = prune(core.factory, core.clock, runtime.quiet_settings(core)())
+    except Exception as exc:
+        _fail(f"{name}: failed: {_one_line(exc)}")
+    typer.echo(f"{name}: deleted {result.live_deleted} live rows, {result.replay_deleted} replay rows")

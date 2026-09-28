@@ -199,6 +199,24 @@ class WeeklyReportView:
 
 
 @dataclass(frozen=True, slots=True)
+class DecisionsLineView:
+    """The daily summary's "Decisions" line (P6-T11), from the day's decision-log summary. `link` is the web
+    path of the day's Reports view (`/reports?day=<YYYY-MM-DD>`), rendered under PUBLIC_BASE_URL like every
+    other link. `top_rejects` holds at most three (rule, count) pairs, most frequent first."""
+
+    scanned: int
+    ranked: int
+    passed: int
+    proposals: int
+    manual: int
+    auto: int
+    fills: int
+    trades: int
+    top_rejects: tuple[tuple[str, int], ...]
+    link: str
+
+
+@dataclass(frozen=True, slots=True)
 class DailySummaryView:
     session_date: date
     trades: tuple[TradeLine, ...]
@@ -213,6 +231,9 @@ class DailySummaryView:
     blocking_switches: tuple[str, ...]
     archive: Mapping[str, int]  # candle-archive counts, e.g. {"5m": 812, "1m": 8190}
     run_to_date: RunToDateView | None = None  # P5-T10; None when the metrics could not be computed
+    # P6-T11: the decision log's line; None when it is off (reports.decisions_in_summary) or the day has no
+    # decision-log day row. Named `decision_log` because `decisions` above is the human-decision count.
+    decision_log: DecisionsLineView | None = None
 
 
 @dataclass(frozen=True, slots=True)

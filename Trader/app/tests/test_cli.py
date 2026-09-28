@@ -70,7 +70,19 @@ def _premarket(
         return outcome or JobOutcome("succeeded", {"brief": "Pre-market brief"})
 
     monkeypatch.setattr(trader.jobs.runner, "run_job", fake_run_job)
+    _no_decision_log(monkeypatch)
     return calls
+
+
+def _no_decision_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    """P6-T11: these fake cores have no database, so the best-effort decision log hook (tested in
+    tests/test_decisions_cli.py) is replaced by a no-op here."""
+    import trader.runtime
+
+    async def nothing(*a: Any, **k: Any) -> None:
+        return None
+
+    monkeypatch.setattr(trader.runtime, "record_decisions_quietly", nothing)
 
 
 PRE_OPEN = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)  # Tue 08:00 ET
@@ -220,6 +232,7 @@ def jobs(monkeypatch: pytest.MonkeyPatch) -> _Jobs:
     monkeypatch.setattr(trader.bootstrap, "build_core", lambda *a, **k: _fake_core())
     for name in ("preopen_job", "checkin_job", "event_backup", "postclose_job"):
         monkeypatch.setattr(trader.runtime, name, rec.job(name))
+    _no_decision_log(monkeypatch)
     return rec
 
 

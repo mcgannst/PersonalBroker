@@ -1,6 +1,7 @@
 """List the crontab lines that fell inside a deploy's downtime window (P6-T6, plan decision D3).
 
     uv --directory Trader/app run python ../build/cron_gap.py --from <down> --to <up> [--container trader-dev]
+        [--lookback MINUTES]
 
 `deploy.sh` prints the `down from` / `up at` stamps (UTC ISO). Any aware ISO datetime works (any offset, or a
 trailing Z). Every crontab entry whose fire time falls in [from - 60 s, to + 60 s] is printed, in time order,
@@ -16,8 +17,17 @@ as the exact command to run by hand from the Mac, with the session it was for pi
 - token-refresh: no date; any other command is printed unchanged with "(no date pinned)"
 
 "nothing skipped" when no line fell in the window. A warning is added when the window overlaps
-09:15-16:30 ET on a weekday. Exit 2 on a crontab line it can't read (step values, names, other variables)
-or a bad window. No database, no network: only the exchange calendar (trader.market.calendar).
+09:15-16:30 ET on a weekday.
+
+Interrupted jobs (P6-T6 fix round 1): a job still running at the down stamp is killed by the recreate, but it
+fired before the window, so it is not in the list above. On stderr, every fire in the `--lookback`
+minutes (default 120, 0 turns it off) before `--from - 60 s` is listed separately as "may have been
+interrupted": check `job_runs` (GET /api/jobs, the web System page) for its row started before the
+down stamp and re-run the printed command only if that row is `running` or `failed`. stdout stays the
+list of commands to run as they are; the operator reads both (`2>&1`).
+
+Exit 2 on a crontab line it can't read (step values, names, other variables) or a bad window. No database, no
+network: only the exchange calendar (trader.market.calendar).
 """
 
 from __future__ import annotations
@@ -39,6 +49,7 @@ DOCKER = "docker --context shared-docker-server exec"
 ET = ZoneInfo("America/New_York")
 MT = ZoneInfo("America/Edmonton")
 MARGIN = timedelta(seconds=60)
+DEFAULT_LOOKBACK_MINUTES = 120
 MARKET_WINDOW = (time(9, 15), time(16, 30))
 
 SESSION_DAY_COMMANDS = frozenset({"premarket", "preopen", "checkin", "event", "postclose"})
@@ -227,6 +238,39 @@ def report(
     return out
 
 
+def interrupted_report(
+    crontab_text: str,
+    start: datetime,
+    container: str,
+    calendar: SessionCalendar,
+    lookback: timedelta,
+) -> list[str]:
+    """The fires that started in [start - lookback, start - MARGIN), i.e. before the window `report` lists:
+    a job still running at the down stamp was killed by the recreate. Not-a-session fires are left out
+    (the job only printed "not a trading session"). Empty when `lookback` is zero."""
+    if lookback <= timedelta(0):
+        return []
+    zone, lines = parse_crontab(crontab_text)
+    before = start - MARGIN - timedelta(microseconds=1)
+    entries: list[str] = []
+    for moment, index in fires_between(zone, lines, start - lookback, before):
+        command, note = pinned_command(calendar, lines[index].command, moment.astimezone(ET).date())
+        if command is None:
+            continue
+        when = f"{_stamp(moment, ET, True)}  {_stamp(moment, MT, True)}"
+        entries.append(f"  {when}  {DOCKER} {container} {command}{note}")
+    minutes = int(lookback.total_seconds() // 60)
+    down = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not entries:
+        return [f"interrupted: no cron job started in the {minutes} min before the down stamp"]
+    return [
+        f"may have been interrupted: started in the {minutes} min before the down stamp {down}, so the"
+        " recreate may have killed it. Check job_runs (GET /api/jobs, the System page) for its row started"
+        " before the down stamp: re-run the command only if that row is running or failed.",
+        *entries,
+    ]
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="List the cron lines that fell inside a downtime window.")
     parser.add_argument("--from", dest="start", required=True, help="window start, aware ISO datetime")
@@ -235,19 +279,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--crontab", default=str(DEFAULT_CRONTAB), help="crontab file (default: docker/crontab)"
     )
     parser.add_argument("--container", default=DEFAULT_CONTAINER, help="trader-dev or trader")
+    parser.add_argument(
+        "--lookback",
+        type=int,
+        default=DEFAULT_LOOKBACK_MINUTES,
+        metavar="MINUTES",
+        help="list jobs started this many minutes before --from as maybe interrupted (default 120, 0: off)",
+    )
     args = parser.parse_args(argv)
     try:
         start = _parse_moment(args.start, "--from")
         end = _parse_moment(args.end, "--to")
         if end < start:
             raise ValueError("--to is before --from")
+        if args.lookback < 0:
+            raise ValueError("--lookback must be 0 or more minutes")
         text = Path(args.crontab).read_text()
-        lines = report(text, start, end, args.container, SessionCalendar())
+        calendar = SessionCalendar()
+        lines = report(text, start, end, args.container, calendar)
+        lookback = timedelta(minutes=args.lookback)
+        maybe = interrupted_report(text, start, args.container, calendar, lookback)
     except (ValueError, OSError) as exc:
         print(f"cron_gap: {exc}", file=sys.stderr)
         return 2
     for line in lines:
         print(line)
+    for line in maybe:
+        print(line, file=sys.stderr)
     return 0
 
 

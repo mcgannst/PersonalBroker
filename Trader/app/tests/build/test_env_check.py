@@ -353,3 +353,57 @@ def test_compare_needs_exactly_one_of_expect_and_rules(
     bad.write_text("{not json")
     assert env_check.main(["compare", str(bad), str(a), "--expect", "same"]) == 2
     capsys.readouterr()
+
+
+# --- fix round 1 (gauntlet nits) ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "password"),
+    [
+        ("postgresql+psycopg://trader_app:1234/5678@192.168.68.86:5432/trader", "1234/5678"),
+        ("postgresql+psycopg://trader_app:ab?cd#ef@192.168.68.86:5432/trader", "ab?cd#ef"),
+        ("postgresql+psycopg://trader_app:p%40ss%2Fw@192.168.68.86:5432/trader", "p@ss/w"),
+    ],
+)
+def test_a_password_with_url_characters_stays_in_the_password(
+    env_check: ModuleType, url: str, password: str
+) -> None:
+    """Split like SQLAlchemy: the password runs to the `@`, so `/`, `?` and `#` never spill into the database
+    or port fields."""
+    data = env_check.fingerprints({"DATABASE_URL": url}, "prod")
+    assert data["db"]["DATABASE_URL"] == {
+        "role": "trader_app",
+        "host": "192.168.68.86",
+        "port": 5432,
+        "database": "trader",
+    }
+    assert data["keys"]["DATABASE_URL.password"] == hashlib.sha256(password.encode()).hexdigest()[:12]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql+psycopg://trader_app:Leak1@Leak2@192.168.68.86:5432/trader",  # a second, raw @
+        "postgresql+psycopg://trader_app:Leak1Leak2@192.168.68.86:notaport/trader",
+        "postgresql+psycopg://trader_app:Leak1Leak2@/trader",  # no host
+        "not a url Leak1Leak2",
+    ],
+)
+def test_a_malformed_url_prints_no_part_of_its_password(env_check: ModuleType, url: str) -> None:
+    data = env_check.fingerprints({"DATABASE_URL": url}, "prod")
+    assert data["db"]["DATABASE_URL"] is None
+    text = json.dumps(data)
+    for fragment in ("Leak1", "Leak2", "notaport"):
+        assert fragment not in text
+
+
+def test_a_quoted_value_with_an_inline_comment_reads_like_compose(env_check: ModuleType) -> None:
+    parsed = env_check.parse_env_file(
+        'A="quoted value" # a note\nB=\'single # kept\' # note\nC=plain # note\nD="unclosed\nF=""\n'
+    )
+    assert parsed["A"] == "quoted value"
+    assert parsed["B"] == "single # kept"
+    assert parsed["C"] == "plain"
+    assert parsed["D"] == '"unclosed'
+    assert parsed["F"] == ""

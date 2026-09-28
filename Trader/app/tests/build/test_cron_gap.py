@@ -205,3 +205,75 @@ def test_the_live_dry_check_from_the_plan(cron_gap: ModuleType, capsys: pytest.C
     )
     assert code == 0
     assert _lines_with(lines, f"{EXEC} nightly --date 2026-09-29")
+
+
+# --- fix round 1: jobs that may have been interrupted by the recreate (plan D3) -----------------------------
+
+
+def test_a_job_started_before_the_down_stamp_is_listed_as_maybe_interrupted(
+    cron_gap: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The nightly fired at 20:00 and may still be running at a 20:30 down stamp: the recreate kills it. It is
+    not a skipped fire (stdout stays `nothing skipped`), but stderr lists it, pinned, with the job_runs
+    check."""
+    code, lines, err = _run(cron_gap, capsys, "2026-10-05T20:30:00-04:00", "2026-10-05T20:40:00-04:00")
+    assert code == 0
+    assert lines == ["nothing skipped"]
+    err_lines = err.splitlines()
+    assert err_lines[0].startswith("may have been interrupted: started in the 120 min before the down stamp")
+    assert "2026-10-06T00:30:00Z" in err_lines[0]
+    assert "job_runs" in err_lines[0] and "running or failed" in err_lines[0]
+    assert err_lines[1:] == [
+        f"  2026-10-05 20:00 EDT  2026-10-05 18:00 MDT  {EXEC} nightly --date 2026-10-06",
+    ]  # the 18:05 soak line is 145 min before: outside the default lookback
+
+
+def test_the_lookback_flag_widens_narrows_or_turns_it_off(
+    cron_gap: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, _, err = _run(
+        cron_gap, capsys, "2026-10-05T20:30:00-04:00", "2026-10-05T20:40:00-04:00", "--lookback", "150"
+    )
+    assert f"{EXEC} soak-report --notify --through 2026-10-05" in err
+    assert "the 150 min before" in err
+    _, _, err = _run(
+        cron_gap, capsys, "2026-10-05T20:30:00-04:00", "2026-10-05T20:40:00-04:00", "--lookback", "20"
+    )
+    assert err.splitlines() == ["interrupted: no cron job started in the 20 min before the down stamp"]
+    _, lines, err = _run(
+        cron_gap, capsys, "2026-10-05T20:30:00-04:00", "2026-10-05T20:40:00-04:00", "--lookback", "0"
+    )
+    assert lines == ["nothing skipped"] and err == ""
+    code, _, err = _run(
+        cron_gap, capsys, "2026-10-05T20:30:00-04:00", "2026-10-05T20:40:00-04:00", "--lookback", "-5"
+    )
+    assert code == 2 and "--lookback" in err
+
+
+def test_a_fire_inside_the_margin_is_skipped_not_interrupted(
+    cron_gap: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A fire at or after `from - 60 s` is in the skipped list only, never listed twice."""
+    _, lines, err = _run(cron_gap, capsys, "2026-10-05T20:01:00-04:00", "2026-10-05T20:05:00-04:00")
+    assert _lines_with(lines, "nightly --date 2026-10-06")
+    assert "nightly" not in err
+    _, lines, err = _run(cron_gap, capsys, "2026-10-05T20:01:01-04:00", "2026-10-05T20:05:00-04:00")
+    assert lines == ["nothing skipped"]
+    assert f"{EXEC} nightly --date 2026-10-06" in err
+
+
+def test_a_holiday_fire_is_not_listed_as_interrupted(
+    cron_gap: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Thanksgiving 09:40 EST: the 08:00 premarket and 09:20 preopen only printed "not a trading session"."""
+    _, lines, err = _run(
+        cron_gap, capsys, "2026-11-26T09:40:00-05:00", "2026-11-26T09:45:00-05:00", "--container", "trader"
+    )
+    assert lines[0] == "nothing skipped"
+    assert err.splitlines() == ["interrupted: no cron job started in the 120 min before the down stamp"]
+    _, _, err = _run(
+        cron_gap, capsys, "2026-11-27T09:40:00-05:00", "2026-11-27T09:45:00-05:00", "--container", "trader"
+    )
+    assert "exec trader trader premarket --date 2026-11-27" in err
+    assert "exec trader trader event orb_open --date 2026-11-27" in err
+    assert err.index("premarket") < err.index("preopen") < err.index("orb_open")

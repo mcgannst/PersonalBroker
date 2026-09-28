@@ -239,3 +239,32 @@ def test_a_malformed_passwords_file_names_keys_never_content(prod_env: ModuleTyp
 def test_a_missing_file_is_refused(prod_env: ModuleType, tmp_path: Path) -> None:
     with pytest.raises(prod_env.ProdEnvError):
         prod_env.read_admin_dsn(tmp_path / "absent")
+
+
+# --- fix round 1 (gauntlet nits) ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("entry", "rendered"),
+    [
+        ("search_path=trader, public", "ALTER ROLE \"r\" SET \"search_path\" = 'trader', 'public'"),
+        ('search_path="$user", public', "ALTER ROLE \"r\" SET \"search_path\" = '$user', 'public'"),
+        ("DateStyle=ISO, MDY", "ALTER ROLE \"r\" SET \"DateStyle\" = 'ISO', 'MDY'"),
+        ("statement_timeout=30s", 'ALTER ROLE "r" SET "statement_timeout" = \'30s\''),
+        ("application_name=trader, dev", 'ALTER ROLE "r" SET "application_name" = \'trader, dev\''),
+    ],
+)
+def test_only_list_settings_are_split(prod_env: ModuleType, entry: str, rendered: str) -> None:
+    assert prod_env._role_setting("r", entry).as_string(None) == rendered
+
+
+def test_an_admin_dsn_without_a_database_is_refused(prod_env: ModuleType) -> None:
+    """Without a dbname libpq would connect to the database named like the user: refused before connecting."""
+    with pytest.raises(prod_env.ProdEnvError) as err:
+        prod_env.create_db(
+            "host=192.168.68.86 user=stephen password=Admin-Dsn-Pw-5150",
+            owner_password=OWNER_PW,
+            app_password=APP_PW,
+        )
+    assert "must name database postgres" in str(err.value)
+    assert "Admin-Dsn-Pw-5150" not in str(err.value)

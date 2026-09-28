@@ -485,6 +485,8 @@ All endpoints need a session cookie, except `/api/auth/login` and `/api/health`.
 | `ADMIN_USERNAME`, `ADMIN_PASSWORD_INITIAL` | First-run user creation only |
 | `TZ_DISPLAY` | `America/Edmonton` |
 
+**Start-up-only secrets are not isolated inside the container (P6-T6 fix round 1).** The entrypoint unsets `MIGRATION_DATABASE_URL` and `ADMIN_PASSWORD_INITIAL` after the migration and first-user steps, but that only removes them from its own process tree: PID 1 (`docker-init`) keeps the full environment and runs as the same uid 10001 as every other process, so any process in the container (api, worker, cron jobs, a `docker exec`) can read them from `/proc/1/environ`, and a `docker exec` starts with them anyway. The unset is defence in depth, not a boundary. The real fix is a separate one-shot migrate container that alone gets the owner URL (on the P4 backlog); until then treat anything that runs in the container as able to use the owner role.
+
 **Runtime settings** (the `settings` table, editable in the UI) include `approval_mode` (`manual`|`auto`), `starting_cash`, `account_currency`, `markets_enabled`, `cash_account_mode`, `risk_pct`, `quote_poll_seconds`, `slippage_*`, `stale_quote_seconds`, `proposal_ttl_*`, `auto_flatten_on_expiry`, `killswitch.*`, `claude.model`, `claude.daily_budget_usd`, and `claude.premarket_max_candidates` (default 50).
 
 Data-layer settings (Phase 1):

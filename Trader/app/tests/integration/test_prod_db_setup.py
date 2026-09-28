@@ -165,3 +165,31 @@ def test_a_failed_login_error_names_no_secret(admin: dict[str, Any], prod_env: M
     with pytest.raises(prod_env.ProdEnvError) as err:
         prod_env.verify_roles(_url(admin, "trader_owner", wrong), _url(admin, "trader_app", wrong + "x"))
     assert wrong not in str(err.value)
+
+
+def test_public_schema_is_closed_and_a_failed_probe_leaves_nothing(
+    admin: dict[str, Any], prod_env: ModuleType
+) -> None:
+    """Fix round 1: trader_app can't create in schema public either (PostgreSQL 14 grants PUBLIC CREATE there
+    by default); when trader_app wrongly can create in schema trader, verify_roles fails and drops its
+    probe."""
+    owner_pw, app_pw = "OwnerPwThirdRun0123456789abcdefg", "AppPwThirdRun0123456789abcdefghi"
+    lines: list[str] = []
+    prod_env.create_db(make_conninfo(**admin), owner_password=owner_pw, app_password=app_pw, out=lines.append)
+    assert "schema public: CREATE revoked from PUBLIC" in lines
+    with _connect(admin, user="trader_app", password=app_pw, dbname="trader") as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("CREATE TABLE public.p6_public_probe (id integer)")
+
+    with _connect(admin, dbname="trader") as conn:
+        conn.execute("GRANT CREATE ON SCHEMA trader TO trader_app")
+    try:
+        with pytest.raises(prod_env.ProdEnvError, match="could create a table"):
+            prod_env.verify_roles(
+                _url(admin, "trader_owner", owner_pw), _url(admin, "trader_app", app_pw), out=lambda _: None
+            )
+        with _connect(admin, dbname="trader") as conn:
+            assert conn.execute("SELECT to_regclass('trader.p6_probe')").fetchone() == (None,)
+    finally:
+        with _connect(admin, dbname="trader") as conn:
+            conn.execute("REVOKE CREATE ON SCHEMA trader FROM trader_app")

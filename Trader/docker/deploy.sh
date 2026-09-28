@@ -9,7 +9,7 @@
 # Optional: TRADER_HEALTH_URL, TRADER_HEALTH_TIMEOUT (120 s), TRADER_HEALTH_INTERVAL (3 s),
 # TRADER_DEPLOY_SSH (stephen@192.168.68.73).
 # prod (P6-T6, plan D5) refuses before any build: TRADER_TAG dev or latest, a dirty working tree, or a HEAD
-# that is not exactly the tag TRADER_TAG.
+# that is not exactly the tag TRADER_TAG. prod bakes TRADER_TAG in as APP_VERSION (/api/meta).
 # Downtime (P6-T6, plan D3): prints `deploy: down from <UTC>` just before the recreate and `deploy: up at <UTC>`
 # when health returns 200, then the cron_gap.py command that lists the cron lines to catch up by hand. If the
 # recreate or the health wait fails, the `down from` stamp and the hint are still printed.
@@ -93,7 +93,13 @@ done
 export TRADER_ENV_FILE="$env_file"
 export TRADER_TAG="$tag"
 image="trader:$tag"
-app_version="$(git -C "$root" describe --always --dirty 2>/dev/null || echo unknown)"
+if [ "$env_name" = "prod" ]; then
+  # The guards proved HEAD is exactly this tag; bake it in so /api/meta reads it even when another tag
+  # (e.g. a newer phase tag) sits on the same commit and `git describe` would pick that one.
+  app_version="$tag"
+else
+  app_version="$(git -C "$root" describe --always --dirty 2>/dev/null || echo unknown)"
+fi
 ssh_target="${TRADER_DEPLOY_SSH:-stephen@192.168.68.73}"
 health_url="${TRADER_HEALTH_URL:-https://$host/api/health}"
 health_timeout="${TRADER_HEALTH_TIMEOUT:-120}"

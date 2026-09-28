@@ -44,9 +44,16 @@ APP_ROLE = "trader_app"
 ADMIN_USERNAME = "stephen"
 DEV_DATABASE = "trader_dev"
 DEV_ROLES = {OWNER_ROLE: "trader_dev_owner", APP_ROLE: "trader_dev_app"}
-ADMIN_DATABASES = ("postgres", DATABASE, "")
+# The admin DSN must name its database: without one libpq connects to the database named like the user.
+ADMIN_DATABASES = ("postgres", DATABASE)
 SCRAM_ITERATIONS = 4096
 PROBE_TABLE = sql.SQL("trader.p6_probe")
+# PostgreSQL's list-valued settings (GUC_LIST_INPUT) a role may carry: their rolconfig value
+# (`search_path=trader, public`) is re-set element by element. Any other value is one literal, commas
+# included.
+LIST_SETTINGS = frozenset(
+    {"search_path", "temp_tablespaces", "datestyle", "local_preload_libraries", "session_preload_libraries"}
+)
 _ALNUM = string.ascii_letters + string.digits
 
 Out = Callable[[str], None]
@@ -207,10 +214,14 @@ def _check_names(database: str, owner_role: str, app_role: str) -> None:
 
 
 def _role_setting(role: str, entry: str) -> sql.Composed:
-    """ALTER ROLE <role> SET <name> = <value(s)> for one `name=value` rolconfig entry. A list value
-    (e.g. search_path `trader, public`) is set element by element, each as a literal."""
+    """ALTER ROLE <role> SET <name> = <value(s)> for one `name=value` rolconfig entry. A list setting
+    (LIST_SETTINGS, e.g. search_path `trader, public`) is set element by element, each as a literal; any other
+    value (e.g. an application_name with a comma) is one literal."""
     name, _, value = entry.partition("=")
-    items = [item.strip().strip('"') for item in value.split(",")] if "," in value else [value]
+    if name.lower() in LIST_SETTINGS:
+        items = [item.strip().strip('"') for item in value.split(",")]
+    else:
+        items = [value]
     return sql.SQL("ALTER ROLE {} SET {} = {}").format(
         sql.Identifier(role), sql.Identifier(name), sql.SQL(", ").join(sql.Literal(i) for i in items)
     )
@@ -298,7 +309,10 @@ def create_db(
                     "GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO {}"
                 ).format(owner, app)
             )
+            # PostgreSQL 14 lets PUBLIC create in schema public: only its owner (and superusers) may now.
+            conn.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
             out(f"schema trader: {'exists' if had else 'created'}, owner {owner_role}, usage {app_role}")
+            out("schema public: CREATE revoked from PUBLIC")
             out(f"default privileges: {app_role} on {owner_role}'s tables and sequences")
     except psycopg.Error as exc:
         raise _failure(step, exc, hidden) from None
@@ -362,6 +376,7 @@ def verify_roles(owner_url: str, app_url: str, out: Out = print) -> None:
             except psycopg.errors.InsufficientPrivilege:
                 out(f"{APP_ROLE}: connect ok, create refused")
             else:
+                conn.execute(sql.SQL("DROP TABLE {}").format(PROBE_TABLE))  # leave nothing behind
                 raise ProdEnvError(f"{APP_ROLE} could create a table in schema trader (it must not)")
         step = f"{OWNER_ROLE}: create probe"
         with _connect(owner_params) as conn:

@@ -27,9 +27,10 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote
 
 KEYS = (
     "DATABASE_URL",
@@ -51,6 +52,14 @@ UNSET_BY_ENTRYPOINT = ("MIGRATION_DATABASE_URL", "ADMIN_PASSWORD_INITIAL")
 PROC_ENVIRON = Path("/proc/1/environ")
 EMPTY = "empty"
 UNAVAILABLE = "unavailable"
+# SQLAlchemy's URL grammar (sqlalchemy.engine.url._parse_url), IPv6 hosts left out: the app reads these URLs.
+_DB_URL = re.compile(
+    r"(?P<scheme>[\w+]+)://"
+    r"(?:(?P<user>[^:/]*)(?::(?P<password>[^@]*))?@)?"
+    r"(?P<host>[^/:?]*)(?::(?P<port>[^/?]*))?"
+    r"(?:/(?P<database>[^?]*))?"
+    r"(?:\?.*)?"
+)
 
 # The prod rules (A = prod, B = dev): the first plan's `prod_env.py check`, on container fingerprints.
 PROD_REQUIRED = (
@@ -102,21 +111,26 @@ def _fingerprint(value: str | None) -> str:
 
 
 def _url_parts(url: str) -> tuple[dict[str, object] | None, str]:
-    """(role/host/port/database, password) of a database URL; (None, "") when it can't be parsed."""
-    try:
-        parts = urlsplit(url)
-        port = parts.port
-    except ValueError:
+    """(role/host/port/database, password) of a database URL, split the way SQLAlchemy's make_url does (the
+    password runs to the `@`, so a `/`, `?` or `#` in it stays in the password); (None, "") when it can't be
+    parsed. A URL with a second `@`, or a port that isn't a number, is unparseable: no printed field (role,
+    host, port, database) can then hold part of a password."""
+    match = _DB_URL.fullmatch(url.strip())
+    if match is None or not match.group("host"):
         return None, ""
-    if not parts.scheme or not parts.hostname:
+    port_text = match.group("port")
+    if port_text is not None and not port_text.isdigit():
+        return None, ""
+    host, database = match.group("host"), match.group("database") or ""
+    if "@" in host or "@" in database:
         return None, ""
     info: dict[str, object] = {
-        "role": unquote(parts.username or ""),
-        "host": parts.hostname,
-        "port": port,
-        "database": parts.path.lstrip("/"),
+        "role": unquote(match.group("user") or ""),
+        "host": host,
+        "port": int(port_text) if port_text else None,
+        "database": database,
     }
-    return info, unquote(parts.password or "")
+    return info, unquote(match.group("password") or "")
 
 
 def fingerprints(values: dict[str, str | None], app_env: str | None) -> dict[str, object]:
@@ -166,8 +180,9 @@ def values_from_environ(environ: dict[str, str], proc_environ: Path) -> dict[str
 
 def parse_env_file(text: str) -> dict[str, str]:
     """KEY=value lines the way compose reads an env file: comments and blank lines skipped, an optional
-    `export `, the value stripped, surrounding single or double quotes removed, and for an unquoted value an
-    inline ` #` comment dropped."""
+    `export `, the value stripped; a value opening with a single or double quote is what lies between it and
+    the matching closing quote (anything after, e.g. an inline comment, is dropped), and for an unquoted value
+    an inline ` #` comment is dropped."""
     result: dict[str, str] = {}
     for raw in text.splitlines():
         line = raw.strip()
@@ -180,8 +195,9 @@ def parse_env_file(text: str) -> dict[str, str]:
             continue
         key = key.strip()
         value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-            value = value[1:-1]
+        closing = value.find(value[0], 1) if value[:1] in ("'", '"') else -1
+        if closing > 0:
+            value = value[1:closing]  # the quoted part only: `KEY="v" # note` is v, like compose
         elif " #" in value:
             value = value.split(" #", 1)[0].rstrip()
         result[key] = value

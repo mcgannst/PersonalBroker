@@ -273,11 +273,16 @@ def _check_strategies(
     return pins
 
 
+def in_offline_window(calendar: SessionCalendar, now: datetime) -> bool:
+    """True when a replay created at `now` runs offline: 09:15 (inclusive) to 16:30 (exclusive) ET on a
+    session day, so it never competes with the live worker for Questrade. The one definition of the window,
+    shared by `create_replay` and the API's `offline_now` (P5-T17)."""
+    local = now.astimezone(ET)
+    return calendar.is_session(local.date()) and OFFLINE_FROM <= local.time() < OFFLINE_UNTIL
+
+
 def _data_mode(request: ReplayRequest, wall: Clock, calendar: SessionCalendar) -> DataMode:
-    if request.offline:
-        return "offline"
-    now_et = wall.now().astimezone(ET)
-    if calendar.is_session(now_et.date()) and OFFLINE_FROM <= now_et.time() < OFFLINE_UNTIL:
+    if request.offline or in_offline_window(calendar, wall.now()):
         return "offline"
     return "full"
 

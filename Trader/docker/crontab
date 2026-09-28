@@ -6,8 +6,10 @@
 # (close - 30 min: 12:30 on early-close days, 15:30 otherwise); `--due` fires only events that are due and
 # not yet settled, so on a normal day the 12:32 run finds nothing new. The 12:58 and 15:58 flatten lines are a
 # second backup (P3-REVIEW): if the worker is down and the first backup fails, a retry still runs before the
-# close (the flatten is a safety event, so its failures never settle it). The weekly report line is added by
-# P5-T6.
+# close (the flatten is a safety event, so its failures never settle it). The Saturday 09:00 `trader weekly`
+# line (P5-T17) reports the Monday-Friday week just ended, keyed by that week's last session; it runs although
+# Saturday is not a session and does nothing for a week without one. Retries of the day-level jobs happen
+# in-process (SPEC section 9), so there are no retry lines here.
 CRON_TZ=America/New_York
 0 2 * * *      trader token-refresh
 0 20 * * 0-4   trader nightly
@@ -23,3 +25,4 @@ CRON_TZ=America/New_York
 55 15 * * 1-5  trader event flatten
 58 15 * * 1-5  trader event flatten
 15 16 * * 1-5  trader postclose
+0 9 * * 6      trader weekly

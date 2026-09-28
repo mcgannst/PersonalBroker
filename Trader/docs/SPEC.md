@@ -384,7 +384,9 @@ All times are **ET**, from supercronic with `CRON_TZ=America/New_York`. Every jo
 | 12:32 / 15:32 Mon–Fri | 10:32 / 13:32 | Backup of the overlay decision (close − 30 min: 12:30 on early-close days, 15:30 otherwise); fires only due, unsettled events, so on a normal day 12:32 does nothing | `trader event --due` |
 | 15:50 | 13:50 | Flatten (worker); cron backups at 15:55 and 15:58, and 12:55 and 12:58 for early-close days (on a normal day the 12:5x runs are too early and do nothing). The second backup retries a failed first one before the close (BR-42) | `trader event flatten` |
 | 16:15 Mon–Fri | 14:15 | Post-close: end-of-day orders, journal, metrics, equity snapshot, **candle archive** (1-min RTH bars for the top 20 + SPY), daily summary | `trader postclose` |
-| Sat 09:00 | 07:00 | Weekly report + Claude commentary | `trader weekly` |
+| Sat 09:00 | 07:00 | Weekly report + Claude commentary; runs although Saturday is not a session; reports on the Monday–Friday week just ended and is keyed by that week's last session date; it does nothing when that week had no session | `trader weekly` |
+
+The day-level jobs (nightly, premarket, preopen, postclose, weekly) retry a failed run in-process up to `jobs.retry_attempts` times in all, waiting `jobs.retry_delay_seconds` and then twice that; an intermediate failure is a `warning` event, and only the final failure is an `error` event (one Telegram alert per job and session). Events keep their own retries (30/60/120 s). No crontab lines are added for retries. A retry never waits past its job's deadline: 09:18 ET for the pre-market scan and 09:28 ET for the pre-open check, so neither runs into the next job or the open; the failure that stops the retries is then the final one.
 
 Each job records a `job_runs` row with status, start and end time, and any error. Jobs can safely be re-run: they're keyed by `(job, session_date)`. A run that already succeeded is skipped unless forced, and a PostgreSQL advisory lock on `(job, session_date)` makes a second start while one is running a skip (`already running`).
 

@@ -33,6 +33,19 @@ Fix round 1 (P3-T12 gauntlet):
   were built with. `LiveRunWatch` re-reads the active live run at each session change and at most every
   LIVE_RUN_CHECK_SECONDS otherwise; when it changed, the worker fires nothing more, stops cleanly and
   `run_worker` returns EXIT_LIVE_RUN_CHANGED (4), so supervisord restarts it on the new run.
+
+Phase 5 (P5-T17):
+- Log mirror: every process installs `install_log_mirror` (worker, API, each CLI command, the replay process):
+  its `error`/`critical` log lines are mirrored to `event_log` as `log.<process>` (never relayed). It is
+  optional wiring: a failure to install is one warning line and the process carries on. The worker closes
+  it after its shutdown (the relay's last pump included).
+- Retries: the day-level jobs (`preopen_job`, `postclose_job`, `weekly_job`, and the `nightly` and
+  `premarket` commands) run with `RetryPolicy.from_settings(...)`; the pre-open's retries stop at 09:28 ET
+  (`PREOPEN_RETRY_DEADLINE`) so they never run into the open. The check-ins and event backups pass no
+  policy: session events have their own retries (30/60/120 s).
+- `weekly_job`: the Saturday weekly report (`trader weekly`), its commentary written through an
+  `AsyncAnthropic` client (timeout 30 s, one retry, as the catalyst classifier) only when
+  ANTHROPIC_API_KEY is set.
 """
 
 import asyncio
@@ -42,7 +55,7 @@ import os
 import socket
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -53,6 +66,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from trader import bootstrap
+from trader.adapters.claude.reports import CommentaryWriter
 from trader.adapters.questrade.auth import QuestradeAuth
 from trader.adapters.questrade.client import QuestradeApiError, QuestradeClient
 from trader.adapters.questrade.models import CandleRequest, QtQuote
@@ -87,9 +101,11 @@ from trader.jobs.checkin import CheckinDeps, run_checkin
 from trader.jobs.events import run_event_backup
 from trader.jobs.postclose import PostcloseDeps, run_postclose
 from trader.jobs.preopen import PreopenDeps, run_preopen
-from trader.jobs.runner import JobOutcome, run_job_async
+from trader.jobs.runner import JobOutcome, RetryPolicy, run_job_async
+from trader.jobs.weekly import WeeklyDeps, run_weekly
+from trader.logging_mirror import EventLogMirror, install_event_mirror
 from trader.logging_setup import redact_text
-from trader.market.clock import et_date
+from trader.market.clock import ET, et_date
 from trader.market.data_service import MarketDataService, QuoteClient
 from trader.market.types import Candle, Interval
 from trader.notify.messages import MessageRenderer
@@ -97,6 +113,7 @@ from trader.notify.notifier import NullNotifier, TelegramNotifier
 from trader.notify.relay import NotificationRelay
 from trader.notify.types import Button, Buttons, Check, Notifier, OutboundMessage, PreopenView
 from trader.notify.views import WORKER_PROCESS as WORKER_PROCESS  # re-exported (one definition, in views)
+from trader.reports.weekly import WeekWindow
 from trader.settings_store import RuntimeSettings
 from trader.strategies.base import CatalystSource
 from trader.strategies.registry import StrategyRegistry
@@ -112,6 +129,12 @@ MAX_EVENT_MESSAGE = 500
 EXIT_LIVE_RUN_CHANGED = 4  # run_worker: the live run changed; supervisord restarts the worker on the new one
 LIVE_RUN_CHECK_SECONDS = 60.0  # the worker re-reads the live run at least this often (clock seconds)
 FINVIZ_CACHE_ENV = "TRADER_FINVIZ_CACHE_DIR"
+# The retries of a day-level job never wait past these ET times of its session: the pre-market scan's
+# stop before the 09:20 pre-open check starts, the pre-open's before the open (P5-T15 fix round 1).
+PREMARKET_RETRY_DEADLINE = time(9, 18)
+PREOPEN_RETRY_DEADLINE = time(9, 28)
+CLAUDE_TIMEOUT_S = 30  # the Claude clients (catalysts, weekly commentary): a hung call fails fast
+CLAUDE_MAX_RETRIES = 1
 
 
 def finviz_cache_dir() -> Path:
@@ -174,6 +197,52 @@ class GuardedSettings:
             self.problem = None
         self._last_good = settings
         return settings
+
+
+def quiet_settings(core: Core) -> Callable[[], RuntimeSettings]:
+    """`core.settings.load`, or silently the defaults when the stored row can't be used: no line and no event,
+    because the command's own settings read (or the worker's GuardedSettings) is the one that reports it."""
+
+    def load() -> RuntimeSettings:
+        try:
+            return core.settings.load()
+        except Exception:
+            return RuntimeSettings()
+
+    return load
+
+
+# --- the log mirror (P5-T17) --------------------------------------------------------------------------------
+
+
+def install_log_mirror(
+    core: Core,
+    process: str,
+    *,
+    run_id: int | None = None,
+    settings: Callable[[], RuntimeSettings] | None = None,
+) -> EventLogMirror | None:
+    """Mirror this process's `error`/`critical` log lines to `event_log` as `log.<process>` (T14), stamped
+    with `run_id` (the replay process's own run; None elsewhere). The mirror uses `core.clock`, the wall
+    clock, never a replay clock. None when `logging.mirror_level` is `off`. Optional wiring: it never
+    raises; a failure is one warning line and the process carries on. `settings` defaults to
+    `quiet_settings(core)` (defaults on an unusable row, no event); the worker passes its GuardedSettings."""
+    try:
+        loaded = (settings or quiet_settings(core))()
+        return install_event_mirror(core.factory, core.clock, process, loaded, run_id=run_id)
+    except Exception as exc:
+        log.warning("runtime.log_mirror_not_installed", process=process, error_type=type(exc).__name__)
+        return None
+
+
+def close_log_mirror(mirror: EventLogMirror | None) -> None:
+    """Flush and remove a mirror (bounded by its flush timeout). Never raises; None is a no-op."""
+    if mirror is None:
+        return
+    try:
+        mirror.close()
+    except Exception as exc:
+        log.warning("runtime.log_mirror_close_failed", error_type=type(exc).__name__)
 
 
 def _record_event(
@@ -391,7 +460,9 @@ async def open_catalysts(core: Core, stack: AsyncExitStack) -> CatalystSource:
     classifier = None
     api_key = core.env.anthropic_api_key
     if api_key is not None:
-        claude = anthropic.AsyncAnthropic(api_key=api_key.get_secret_value(), timeout=30, max_retries=1)
+        claude = anthropic.AsyncAnthropic(
+            api_key=api_key.get_secret_value(), timeout=CLAUDE_TIMEOUT_S, max_retries=CLAUDE_MAX_RETRIES
+        )
         stack.push_async_callback(claude.close)
         classifier = CatalystClassifier(claude, core.settings.load)
     return CatalystService(
@@ -627,10 +698,21 @@ async def run_worker(once: bool = False) -> int:
     bot). Returns the exit code: 0; 2 when another worker holds the lock; 3 when this one lost it; 4
     (EXIT_LIVE_RUN_CHANGED) when the live run changed under it (a restart builds everything on the new
     run). The single-instance lock is taken by `Worker.run`, never here. An invalid settings row does not
-    stop it: GuardedSettings falls back to the defaults with one relayed `error` event."""
+    stop it: GuardedSettings falls back to the defaults with one relayed `error` event. The log mirror
+    (process `worker`) is installed first and closed last."""
     core = bootstrap.build_core()
-    factory, clock = core.factory, core.clock
     settings = GuardedSettings(core)
+    mirror = install_log_mirror(core, WORKER_PROCESS, settings=settings)
+    try:
+        return await _run_worker(core, settings, once)
+    finally:
+        # After the worker's shutdown (the relay's last pump) and its stack's closing, so their error lines
+        # are mirrored too; off the event loop (the close flushes, bounded by its timeout).
+        await asyncio.to_thread(close_log_mirror, mirror)
+
+
+async def _run_worker(core: Core, settings: GuardedSettings, once: bool) -> int:
+    factory, clock = core.factory, core.clock
     run = get_live_run(factory, clock, settings())
     StrategyRegistry(factory, clock).ensure_defaults()
     stop = asyncio.Event()
@@ -757,9 +839,28 @@ async def run_cli_job(
     body: Callable[[], Awaitable[dict[str, Any]]],
     *,
     force: bool,
+    retry: RetryPolicy | None = None,
 ) -> JobOutcome:
-    """A cron job through `run_job_async` (advisory lock, skip when already succeeded unless `force`)."""
-    return await run_job_async(core.factory, core.clock, job, session_date, body, force=force)
+    """A cron job through `run_job_async` (advisory lock, skip when already succeeded unless `force`), with
+    the day-level jobs' in-process retries when `retry` is given (SPEC §9)."""
+    return await run_job_async(core.factory, core.clock, job, session_date, body, force=force, retry=retry)
+
+
+def retry_deadline(session_date: date, at: time) -> datetime:
+    """`at` (ET wall clock) on `session_date`, as the aware deadline of a `RetryPolicy`."""
+    return datetime.combine(session_date, at, tzinfo=ET)
+
+
+def day_job_retry(settings: RuntimeSettings) -> RetryPolicy:
+    """The in-process retries of a day-level job without a deadline (nightly, postclose, weekly)."""
+    return RetryPolicy.from_settings(settings)
+
+
+def premarket_retry(settings: RuntimeSettings, session_date: date) -> RetryPolicy:
+    """The pre-market scan's policy: its retries stop before the 09:20 pre-open check (09:18 ET)."""
+    return RetryPolicy.from_settings(
+        settings, deadline=retry_deadline(session_date, PREMARKET_RETRY_DEADLINE)
+    )
 
 
 async def preopen_job(core: Core, session_date: date, *, force: bool) -> JobOutcome:
@@ -798,7 +899,10 @@ async def preopen_job(core: Core, session_date: date, *, force: bool) -> JobOutc
                 detail["ok"] = False
             return detail
 
-        return await run_cli_job(core, "preopen", session_date, body, force=force)
+        retry = RetryPolicy.from_settings(
+            settings(), deadline=retry_deadline(session_date, PREOPEN_RETRY_DEADLINE)
+        )
+        return await run_cli_job(core, "preopen", session_date, body, force=force, retry=retry)
 
 
 def checkin_job_name(at_label: str) -> str:
@@ -895,7 +999,59 @@ async def postclose_job(core: Core, session_date: date, *, force: bool) -> JobOu
             run_id=run.id,
         )
         return await run_cli_job(
-            core, "postclose", session_date, lambda: run_postclose(deps, session_date), force=force
+            core,
+            "postclose",
+            session_date,
+            lambda: run_postclose(deps, session_date),
+            force=force,
+            retry=RetryPolicy.from_settings(settings()),
+        )
+
+
+def claude_client_class() -> type[Any]:
+    """The Anthropic async client class (tests replace this builder with a fake)."""
+    import anthropic
+
+    return anthropic.AsyncAnthropic
+
+
+async def weekly_job(core: Core, week: WeekWindow, *, force: bool) -> JobOutcome:
+    """The Saturday 09:00 weekly report (BR-61, SPEC §9): keyed by the week's last session date. The
+    commentary's Claude client is built (timeout 30 s, one SDK retry, as the catalyst classifier's) only when
+    ANTHROPIC_API_KEY is set; without it the report goes out with a note. The caller has checked that the
+    week had a session."""
+    if week.week_ending is None:
+        raise ValueError("weekly_job needs a week with a session")
+    week_ending = week.week_ending
+    async with AsyncExitStack() as stack:
+        api = await open_telegram(core, stack)
+        settings = GuardedSettings(core)
+        run = get_live_run(core.factory, core.clock, settings())
+        writer: CommentaryWriter | None = None
+        api_key = core.env.anthropic_api_key
+        if api_key is not None:
+            claude = claude_client_class()(
+                api_key=api_key.get_secret_value(), timeout=CLAUDE_TIMEOUT_S, max_retries=CLAUDE_MAX_RETRIES
+            )
+            stack.push_async_callback(claude.close)
+            writer = CommentaryWriter(claude, settings)
+        deps = WeeklyDeps(
+            factory=core.factory,
+            clock=core.clock,
+            calendar=core.calendar,
+            settings=settings,
+            writer=writer,
+            notifier=build_notifier(core, api),
+            render=build_renderer(core),
+            run_id=run.id,
+        )
+        return await run_cli_job(
+            core,
+            "weekly",
+            week_ending,
+            lambda: run_weekly(deps, week),
+            force=force,
+            retry=RetryPolicy.from_settings(settings()),
         )
 
 

@@ -126,7 +126,14 @@ def test_system_on_seeded_data(db_factory: sessionmaker[Session]) -> None:
     assert body["alembic_revision"] == "0006"  # the head (P5-T1 added 0006)
     assert body["worker"]["ok"] is True and body["worker"]["phase"] == "idle"
     assert body["token"]["ok"] is True
-    assert body["manual_jobs"] == ["nightly", "premarket", "preopen", "postclose", "token-refresh"]
+    assert body["manual_jobs"] == [
+        "nightly",
+        "premarket",
+        "preopen",
+        "postclose",
+        "token-refresh",
+        "weekly",  # P5-T17
+    ]
     assert body["server_time"] == "2026-10-06T21:00:00Z"
     assert body["app_env"] == "dev" and body["version"] == "dev"
 

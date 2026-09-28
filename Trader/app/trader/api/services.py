@@ -21,6 +21,8 @@ the change feed and the day plan.
 - **Decisions on a bad row:** `ProposalService.decide` still reads the store directly and fails closed. The
   API answers that failure with a 503 `settings_unreadable` (the invalid keys are logged, never the values),
   not an unhandled 500.
+- **Phase 5 (P5-T17):** `replays` is a `SubprocessReplayLauncher` (`trader replay --run <id>` children); the
+  process's log mirror (`log.api`) is installed here and closed with `stack`.
 """
 
 import asyncio
@@ -40,6 +42,7 @@ from trader.api.errors import ApiError
 from trader.api.feed import PollingChangeFeed
 from trader.api.launcher import SubprocessJobLauncher
 from trader.api.quotes import CachedQuotes
+from trader.api.replay_launcher import SubprocessReplayLauncher
 from trader.bootstrap import Core
 from trader.engine.killswitch import KillSwitches
 from trader.engine.proposals import Decision, DecisionResult, Via
@@ -55,6 +58,7 @@ CANDLE_INTERVAL: Interval = "FiveMinutes"  # the position-detail chart (SPEC §1
 # loops on the first read after the refresh that follows, so within about this long while they are busy.
 SETTINGS_MAX_AGE_S = 5.0
 SETTINGS_UNREADABLE = "settings_unreadable"
+API_PROCESS = "api"  # the log mirror's process name: rows `log.api`
 
 Decide = Callable[[int, Decision, Via, str], DecisionResult]
 
@@ -174,6 +178,10 @@ async def build_services(core: Core, stack: AsyncExitStack) -> ApiServices:
     await asyncio.to_thread(registry.ensure_defaults)  # once per process (the day plan needs them)
     settings = QuietSettings(core)
     await asyncio.to_thread(settings.refresh)  # primed off the loop
+    # The API's error lines (a 500, a failed quote fetch) reach the System page as `log.api` (P5-T17); the
+    # mirror is closed (flushed, off the loop) with the stack.
+    mirror = runtime.install_log_mirror(core, API_PROCESS, settings=settings)
+    stack.push_async_callback(asyncio.to_thread, runtime.close_log_mirror, mirror)
     data = OffLoopMarketData(factory, clock, core.calendar, runtime.LazyQuestrade(core, stack))
 
     async def candles(symbol_id: int, start: datetime, end: datetime) -> list[Candle]:
@@ -194,4 +202,5 @@ async def build_services(core: Core, stack: AsyncExitStack) -> ApiServices:
         feed=PollingChangeFeed(factory, clock, settings),
         plan=runtime.plan_builder(core),
         fired=runtime.fired_for(core),
+        replays=SubprocessReplayLauncher(factory, clock),
     )

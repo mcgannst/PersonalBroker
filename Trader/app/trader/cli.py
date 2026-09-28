@@ -1,4 +1,10 @@
-"""`trader <command>` entry points (the crontab's commands: docker/crontab)."""
+"""`trader <command>` entry points (the crontab's commands: docker/crontab).
+
+Phase 5 (P5-T17): every command that builds a `Core` installs the log mirror (process `cron`, rows
+`log.cron`) through `_core`, and closes it when the command's context closes; `trader replay` installs its
+own (process `replay`, stamped with the replay's run id) instead. The day-level jobs (nightly, premarket,
+preopen, postclose, weekly) run with the settings' `RetryPolicy`; `trader weekly` and `trader replay` are new.
+"""
 
 import re
 from collections.abc import Callable, Coroutine, Mapping
@@ -12,22 +18,33 @@ from trader import __version__
 if TYPE_CHECKING:
     from trader.bootstrap import Core
     from trader.jobs.runner import JobOutcome
+    from trader.logging_mirror import EventLogMirror
     from trader.settings_store import RuntimeSettings
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 
-def _setup_logging() -> None:
+CRON_PROCESS = "cron"  # the process name of the cron commands' log lines and mirror rows (`log.cron`)
+REPLAY_PROCESS = "replay"
+EXIT_BUSY = 2  # `trader replay`: another replay holds the replay lock
+
+
+def _setup_logging(process: str = CRON_PROCESS) -> None:
     """Every command calls this first (P3-T2/T12): structlog JSON lines, stdlib routed through it,
     token-bearing loggers quiet. Called through the module attribute, so tests can swap it."""
     from trader import logging_setup
 
-    logging_setup.configure_logging("cron")
+    logging_setup.configure_logging(process)
+
+
+_OPEN_MIRRORS: list["EventLogMirror"] = []  # the log mirrors installed by this command (P5-T17)
 
 
 @app.callback()
-def main() -> None:
+def main(ctx: typer.Context) -> None:
     """Trader simulation platform."""
+    # The command's log mirror is flushed and removed when the command line's context closes (any exit).
+    ctx.call_on_close(close_mirrors)
 
 
 @app.command()
@@ -44,9 +61,8 @@ def questrade_seed(
     """Store QUESTRADE_REFRESH_TOKEN (from the environment) as the start of the token chain."""
     _setup_logging()
     from trader.adapters.questrade.auth import QuestradeAuth, QuestradeAuthError
-    from trader.bootstrap import build_core
 
-    core = build_core()
+    core = _core("questrade-seed")
     if core.env.questrade_refresh_token is None:
         typer.echo("QUESTRADE_REFRESH_TOKEN is not set", err=True)
         raise typer.Exit(1)
@@ -100,12 +116,11 @@ def questrade_check(symbol: str = "SPY") -> None:
 
     from trader.adapters.questrade.auth import QuestradeAuth, QuestradeAuthError
     from trader.adapters.questrade.client import QuestradeApiError, QuestradeClient
-    from trader.bootstrap import build_core
 
     class CheckFailed(Exception):
         pass
 
-    core = build_core()
+    core = _core("questrade-check")
     auth = QuestradeAuth(core.factory, core.crypto, core.clock)
     name = symbol.upper()
 
@@ -154,11 +169,10 @@ def nightly(
     from trader.adapters.finviz.scraper import FinvizScraper
     from trader.adapters.questrade.auth import QuestradeAuth
     from trader.adapters.questrade.client import QuestradeClient
-    from trader.bootstrap import build_core
     from trader.jobs.nightly import NightlyDeps, earliest_run_time, run_nightly, target_session
     from trader.jobs.runner import run_job
 
-    core = build_core()
+    core = _core("nightly")
     settings = _strict_settings(core, "nightly")
     if date_:
         try:
@@ -198,7 +212,15 @@ def nightly(
 
             return asyncio.run(go())
 
-        out = run_job(core.factory, core.clock, "nightly", session_date, job, force=force)
+        out = run_job(
+            core.factory,
+            core.clock,
+            "nightly",
+            session_date,
+            job,
+            force=force,
+            retry=runtime.day_job_retry(settings),
+        )
     typer.echo(f"nightly {session_date}: {out.status} {_masked_line(str(out.detail or out.error or ''))}")
     if out.status == "failed":
         raise typer.Exit(1)
@@ -230,13 +252,12 @@ def premarket(
     from trader.adapters.finviz.scraper import FinvizScraper
     from trader.adapters.questrade.auth import QuestradeAuth
     from trader.adapters.questrade.client import QuestradeClient
-    from trader.bootstrap import build_core
     from trader.jobs.premarket import PremarketDeps, run_premarket
     from trader.jobs.runner import run_job
     from trader.market.clock import ET, et_date
     from trader.market.data_service import MarketDataService
 
-    core = build_core()
+    core = _core("premarket")
     settings = _strict_settings(core, "premarket")
     now = core.clock.now()
     today = et_date(now)
@@ -315,7 +336,15 @@ def premarket(
 
             return asyncio.run(go())
 
-        out = run_job(core.factory, core.clock, "premarket", session_date, job, force=force)
+        out = run_job(
+            core.factory,
+            core.clock,
+            "premarket",
+            session_date,
+            job,
+            force=force,
+            retry=runtime.premarket_retry(settings, session_date),  # never past 09:18 ET
+        )
     if out.status == "succeeded":
         typer.echo(out.detail["brief"])
         # Once per session (dedupe premarket:<date>); a Telegram failure never fails the job.
@@ -411,13 +440,42 @@ def _strict_settings(core: "Core", name: str) -> "RuntimeSettings":
         _fail(f"{name}: failed: {runtime.settings_problem_text(exc)}; fix the row on the Settings page")
 
 
-def _core(name: str) -> "Core":
+def _core(name: str, *, mirror: bool = True) -> "Core":
+    """The command's Core (a failure is one line and exit 1). With `mirror`, the `cron` log mirror is
+    installed for the rest of the command (`trader replay` installs its own, with its run id)."""
     from trader.bootstrap import build_core
 
     try:
-        return build_core()
+        core = build_core()
     except Exception as exc:
         _fail(f"{name}: failed: {_one_line(exc)}")
+    if mirror:
+        _install_mirror(core, CRON_PROCESS)
+    return core
+
+
+def _install_mirror(core: "Core", process: str, *, run_id: int | None = None) -> None:
+    """Install the log mirror (P5-T14). It is closed (flushed) by `close_mirrors` when the `trader` command
+    line's context closes, whatever the exit (`main` registers it), or else at interpreter exit. Optional
+    wiring: never raises."""
+    import atexit
+
+    from trader import runtime
+
+    installed = runtime.install_log_mirror(core, process, run_id=run_id)
+    if installed is None:
+        return
+    if not _OPEN_MIRRORS:
+        atexit.register(close_mirrors)  # a safety net: close_mirrors is idempotent
+    _OPEN_MIRRORS.append(installed)
+
+
+def close_mirrors() -> None:
+    """Close every log mirror this process's commands installed. Never raises."""
+    from trader import runtime
+
+    while _OPEN_MIRRORS:
+        runtime.close_log_mirror(_OPEN_MIRRORS.pop())
 
 
 def _session(core: "Core", date_: str | None, name: str) -> date | None:
@@ -655,3 +713,261 @@ def user_password(
     except Exception as exc:
         _fail(f"user-password failed: {_one_line(exc)}")
     typer.echo(f"password changed for {name}; {revoked} sessions signed out")
+
+
+# --- P5-T17: the weekly report and replays ------------------------------------------------------------------
+
+
+@app.command()
+def weekly(
+    date_: str | None = typer.Option(
+        None, "--date", help="Any day of the week to report, YYYY-MM-DD (default: the last completed week)"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Re-run a week that already succeeded (it still sends one message per week)."
+    ),
+) -> None:
+    """Weekly report of the Monday-Friday week just ended, with a Claude commentary (SPEC §9, Sat 09:00 ET).
+
+    Keyed by the week's last session (`job_runs` `weekly`); a week without a session prints "no sessions" and
+    exits 0; a week whose last session has not closed yet is refused (exit 1)."""
+    _setup_logging()
+    from trader import runtime
+    from trader.market.clock import et_date
+    from trader.reports.weekly import last_completed_week, week_window
+
+    core = _core("weekly")
+    now = core.clock.now()
+    day = et_date(now)
+    if date_:
+        try:
+            day = date.fromisoformat(date_)
+        except ValueError:
+            _fail(f"weekly: --date {date_} is not a valid date (use YYYY-MM-DD)")
+    try:
+        week = week_window(core.calendar, day) if date_ else last_completed_week(core.calendar, day)
+    except ValueError:  # outside the calendar's range
+        _fail(f"weekly: --date {day} is outside the trading calendar")
+    week_ending = week.week_ending
+    if week_ending is None:
+        typer.echo(f"weekly {week.start}..{week.end}: no sessions, nothing to do")
+        return
+    if now < core.calendar.session_close(week_ending):
+        _fail(f"weekly {week_ending}: the week of {week.start} has not ended yet")
+    out = _run("weekly", week_ending, lambda: runtime.weekly_job(core, week, force=force))
+    _report("weekly", week_ending, out)
+
+
+def _lower_priority() -> None:
+    """A replay shares the container's CPUs with the live worker: run it at nice 10 (best effort)."""
+    import os
+
+    try:
+        os.nice(10)
+    except (AttributeError, OSError) as exc:
+        import structlog
+
+        structlog.get_logger("cli").warning("cli.replay_nice_failed", error_type=type(exc).__name__)
+
+
+def _parse_sets(values: list[str]) -> dict[str, Any]:
+    """`--set KEY=VALUE` overrides: VALUE as JSON when it parses (numbers, true/false), else as text."""
+    import json
+
+    out: dict[str, Any] = {}
+    for item in values:
+        key, sep, raw = item.partition("=")
+        key = key.strip()
+        if not sep or not key:
+            _fail(f"replay: --set {_masked_line(item)} is not KEY=VALUE")
+        try:
+            out[key] = json.loads(raw)
+        except ValueError:
+            out[key] = raw
+    return out
+
+
+def _date_option(name: str, value: str | None) -> date:
+    if not value:
+        _fail("replay: give --from and --to (YYYY-MM-DD), or --run ID")
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        _fail(f"replay: {name} {value} is not a valid date (use YYYY-MM-DD)")
+
+
+class _SessionLines:
+    """The replay's engine, printing one line per finished session once the engine has ended it (the day's
+    trades are all closed by then). Everything else is the engine's own (`__getattr__` covers the runner's
+    targeted candle pass)."""
+
+    def __init__(self, engine: Any, factory: Any, run_id: int) -> None:
+        self._engine = engine
+        self._factory = factory
+        self._run_id = run_id
+
+    @property
+    def broker(self) -> Any:
+        return self._engine.broker
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._engine, name)
+
+    async def run_event(self, event_key: str, session_date: date) -> Any:
+        return await self._engine.run_event(event_key, session_date)
+
+    async def on_candles(self, candles: Any, now: Any) -> Any:
+        return await self._engine.on_candles(candles, now)
+
+    async def tick(self, now: Any) -> None:
+        await self._engine.tick(now)
+
+    async def end_of_session(self, session_date: date) -> Any:
+        result = await self._engine.end_of_session(session_date)
+        try:
+            typer.echo(_session_line(self._factory, self._run_id, session_date))
+        except Exception as exc:  # a line not printed never stops the replay
+            import structlog
+
+            structlog.get_logger("cli").warning("cli.replay_line_failed", error_type=type(exc).__name__)
+        return result
+
+
+def _money(value: Any) -> str:
+    from decimal import ROUND_HALF_UP, Decimal
+
+    return str(Decimal(value).quantize(Decimal("0.01"), ROUND_HALF_UP))
+
+
+def _session_line(factory: Any, run_id: int, day: date) -> str:
+    """ "2026-11-24 done: 1 trade, P&L -7.20" for the replay's trades of that session."""
+    from sqlalchemy import func, select
+
+    from trader.db import models as m
+
+    with factory() as s:
+        n, pnl = s.execute(
+            select(func.count(m.Trade.id), func.coalesce(func.sum(m.Trade.pnl), 0)).where(
+                m.Trade.run_id == run_id, m.Trade.session_date == day
+            )
+        ).one()
+    return f"{day} done: {n} trade{'' if n == 1 else 's'}, P&L {_money(pnl)}"
+
+
+async def _run_replay(core: "Core", run: Any) -> Any:
+    """`run_replay` over the real composition (`open_replay_deps`), with the per-session lines."""
+    import dataclasses
+
+    from trader.replay import runner as replay_runner
+
+    async with replay_runner.open_replay_deps(core, data_mode=run.data_mode) as deps:
+        inner = deps.engine_factory
+
+        def engine_factory(*args: Any) -> Any:
+            return _SessionLines(inner(*args), core.factory, run.id)
+
+        return await replay_runner.run_replay(
+            dataclasses.replace(deps, engine_factory=engine_factory), run.id
+        )
+
+
+def _replay_summary(core: "Core", final: Any) -> str:
+    from trader.reports.metrics import compute_metrics
+
+    metrics = compute_metrics(core.factory, final.id)
+    expectancy = "n/a" if metrics.expectancy_r is None else f"{metrics.expectancy_r}R"
+    biased = ", ".join(d.isoformat() for d in final.progress.biased_days) or "none"
+    line = (
+        f"replay {final.id} {final.status} ({final.data_mode} data, {final.date_from}..{final.date_to}): "
+        f"trades {metrics.trades}, expectancy {expectancy}, P&L {_money(metrics.total_pnl)}, "
+        f"biased days {biased}"
+    )
+    if final.error:
+        line += f"; error: {_masked_line(final.error)}"
+    return line
+
+
+@app.command()
+def replay(
+    date_from: str | None = typer.Option(None, "--from", help="First session, YYYY-MM-DD"),
+    date_to: str | None = typer.Option(None, "--to", help="Last session, YYYY-MM-DD"),
+    label: str | None = typer.Option(None, "--label", help="A name for the run (at most 200 characters)"),
+    offline: bool = typer.Option(False, "--offline", help="Stored data only: never call Questrade."),
+    set_: list[str] = typer.Option(  # noqa: B008 (typer's option declaration)
+        [],
+        "--set",
+        help="KEY=VALUE setting override, repeatable (VALUE is JSON when it parses, else text).",
+    ),
+    run_id: int | None = typer.Option(
+        None, "--run", help="Run an existing queued replay (the web's launcher)."
+    ),
+) -> None:
+    """Replay the strategies over past sessions (SPEC §8): create the run (actor `cli`) and run it here, or
+    run a queued one with --run. One line per finished session and a summary. Exit 0 completed or cancelled,
+    1 failed or invalid, 2 another replay is running."""
+    _setup_logging(REPLAY_PROCESS)
+    import asyncio
+
+    from trader.replay import runner as replay_runner
+    from trader.replay.types import (
+        ReplayBusy,
+        ReplayInvalid,
+        ReplayNotFound,
+        ReplayRequest,
+        load_replay_run,
+    )
+    from trader.strategies.registry import StrategyRegistry
+
+    if run_id is not None:
+        if date_from or date_to or label is not None or offline or set_:
+            _fail("replay: --run takes no other option")
+    else:
+        request = ReplayRequest(
+            _date_option("--from", date_from),
+            _date_option("--to", date_to),
+            label=label,
+            overrides=_parse_sets(set_),
+            offline=offline,
+        )
+    _lower_priority()
+    core = _core("replay", mirror=False)  # the replay's own mirror is installed once its id is known
+    if run_id is None:
+        registry = StrategyRegistry(core.factory, core.clock)
+        try:
+            run_id = replay_runner.create_replay(
+                core.factory,
+                core.clock,
+                core.calendar,
+                core.settings,
+                registry,
+                request,
+                "cli",
+                app_version=core.env.app_version,
+            )
+        except ReplayInvalid as exc:
+            for loc, msg in exc.errors:
+                typer.echo(f"replay: {loc}: {_masked_line(msg)}", err=True)
+            raise typer.Exit(1) from None
+        except ReplayBusy:
+            _fail("replay: another replay is queued or running", code=EXIT_BUSY)
+        except Exception as exc:
+            _fail(f"replay: failed: {_one_line(exc)}")
+    try:
+        run = load_replay_run(core.factory, run_id)
+    except ReplayNotFound:
+        _fail(f"replay: {run_id} is not a replay run")
+    except Exception as exc:
+        _fail(f"replay {run_id}: failed: {_one_line(exc)}")
+    _install_mirror(core, REPLAY_PROCESS, run_id=run.id)
+    if run.status != "queued":
+        _fail(f"replay {run.id}: it is {run.status}, not queued: nothing to run")
+    typer.echo(f"replay {run.id}: {run.date_from}..{run.date_to}, {run.data_mode} data")
+    try:
+        final = asyncio.run(_run_replay(core, run))
+    except ReplayBusy:
+        _fail(f"replay {run.id}: another replay is running", code=EXIT_BUSY)
+    except Exception as exc:
+        _fail(f"replay {run.id}: failed: {_one_line(exc)}")
+    typer.echo(_replay_summary(core, final))
+    if final.status not in ("completed", "cancelled"):
+        raise typer.Exit(1)

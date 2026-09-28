@@ -34,7 +34,7 @@ Registered under `/api` by `trader.api.routers.ROUTERS`.
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from functools import partial
 from typing import Annotated, Any
@@ -71,8 +71,8 @@ from trader.db import models as m
 from trader.db.session import session_scope
 from trader.logging_setup import redact_text
 from trader.market.calendar import SessionCalendar
-from trader.market.clock import ET, et_date
-from trader.replay.runner import create_replay, reconcile_abandoned, request_cancel
+from trader.market.clock import et_date
+from trader.replay.runner import create_replay, in_offline_window, reconcile_abandoned, request_cancel
 from trader.replay.types import (
     ACTIVE_STATUSES,
     REPLAY_OVERRIDE_KEYS,
@@ -95,7 +95,6 @@ MAX_LIMIT = 200
 EVENTS_SHOWN = 20
 FINISHED: tuple[str, ...] = ("completed", "cancelled")  # the statuses that have metrics
 LATEST_DELAY = timedelta(minutes=15)  # a session can be replayed from its close + 15 min
-OFFLINE_FROM, OFFLINE_TO = time(9, 15), time(16, 30)  # ET, on a session day: a start runs offline
 MINUTE = "1m"  # candle_archive interval code of 1-minute bars
 R_PLACES = Decimal("0.0001")
 
@@ -115,9 +114,9 @@ def latest_allowed(calendar: SessionCalendar, now: datetime) -> date:
 
 def offline_now(calendar: SessionCalendar, now: datetime) -> bool:
     """True when a replay started at `now` runs offline (09:15 to 16:30 ET on a session day), so it never
-    competes with the live worker for Questrade's rate limit."""
-    local = now.astimezone(ET)
-    return calendar.is_session(local.date()) and OFFLINE_FROM <= local.time() < OFFLINE_TO
+    competes with the live worker for Questrade's rate limit. The runner's `in_offline_window`, so the form
+    and `create_replay` always agree (P5-T17)."""
+    return in_offline_window(calendar, now)
 
 
 def to_request(body: ReplayIn) -> ReplayRequest:

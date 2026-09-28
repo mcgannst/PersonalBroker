@@ -33,6 +33,27 @@ def _process_logging_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(trader.logging_setup, "configure_logging", lambda *args, **kwargs: None)
 
 
+@pytest.fixture(autouse=True)
+def _day_jobs_single_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """P5-T17: the day-level jobs (nightly, premarket, preopen, postclose, weekly) retry a failure in-process
+    with real sleeps of minutes, taking their policy from `trader.runtime.RetryPolicy.from_settings`. Tests
+    that make such a job fail would sleep through them, so by default that name gives one attempt (the P3
+    behaviour those tests pin). Tests of the wiring restore the real class (tests/test_cli_phase5.py); the
+    retry mechanics are tested on `trader.jobs.runner` directly (tests/jobs/test_runner_retry.py)."""
+    from datetime import datetime
+
+    import trader.runtime
+    from trader.jobs.runner import RetryPolicy
+    from trader.settings_store import RuntimeSettings
+
+    class SingleAttempt(RetryPolicy):
+        @classmethod
+        def from_settings(cls, s: RuntimeSettings, *, deadline: datetime | None = None) -> RetryPolicy:
+            return RetryPolicy(attempts=1, deadline=deadline)
+
+    monkeypatch.setattr(trader.runtime, "RetryPolicy", SingleAttempt)
+
+
 @pytest.fixture(scope="session")
 def pg_url() -> Iterator[str]:
     with PostgresContainer("postgres:14-alpine", driver="psycopg") as pg:

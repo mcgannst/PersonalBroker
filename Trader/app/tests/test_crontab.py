@@ -1,5 +1,5 @@
 """P3-T12: docker/crontab (SPEC §9 plus the 12:55 early-close flatten backup and the 12:32 / 15:32
-overlay-decision backups, fix round 1), read by supercronic in ET."""
+overlay-decision backups, fix round 1), read by supercronic in ET. P5-T17 adds the Saturday weekly line."""
 
 from datetime import UTC, date, datetime, time
 from pathlib import Path
@@ -32,6 +32,7 @@ EXPECTED = {
     ("55 15 * * 1-5", "trader event flatten"),
     ("58 15 * * 1-5", "trader event flatten"),
     ("15 16 * * 1-5", "trader postclose"),
+    ("0 9 * * 6", "trader weekly"),  # P5-T17: Saturday 09:00 ET, the week just ended (SPEC §9)
 }
 # SPEC §9 times (ET) of the weekday jobs, plus the documented 12:55 flatten and 12:32 / 15:32 overlay backups.
 WEEKDAY_ET = {

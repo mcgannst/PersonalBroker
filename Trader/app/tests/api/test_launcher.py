@@ -72,6 +72,7 @@ def test_cli_args() -> None:
         "preopen": ("preopen",),
         "postclose": ("postclose",),
         "token-refresh": ("token-refresh",),
+        "weekly": ("weekly",),  # P5-T17
     }
 
 

@@ -38,6 +38,7 @@ CLI_ARGS: Mapping[ManualJob, tuple[str, ...]] = {
     "preopen": ("preopen",),
     "postclose": ("postclose",),
     "token-refresh": ("token-refresh",),  # takes no --date or --force on trunk
+    "weekly": ("weekly",),  # P5-T17: a date (a session) selects the Monday-Friday week containing it
 }
 NO_OPTIONS: frozenset[str] = frozenset({"token-refresh"})
 EXIT_EVENT_SOURCE = "jobs.manual"

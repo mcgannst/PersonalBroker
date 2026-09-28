@@ -686,6 +686,25 @@ T1 signature.
 - `expectancy_switch.closed_trades` counts trades with an R up to the week's end since the switch's last reset, as `KillSwitches` does. Kill-switch trip `value`/`threshold` are not treated as ratios by the number check (the rule names `win_rate` and `*_pct` keys only).
 - Detail `sent` follows the postclose pattern: `sent`, `handed_off` (no `notifications` row, e.g. a fake), `duplicate` (the key existed before this run), `failed`, `error`.
 - Tests monkeypatch `trader.reports.weekly.compute_metrics` (T2 was a stub); T18's weekly-day test exercises the real one.
+- **Fix round 1 (P5-GN gauntlet, 2026-09-27):** (1) the number check now treats the `value`/`threshold` of a
+  kill-switch trip whose `switch` ends in `_pct` (daily loss, max drawdown) as ratios (x 100 allowed), so
+  "a 6.12% loss, past its 5% limit" passes; the expectancy switch's R values are not multiplied (this replaces
+  the note above). (2) `build_prompt` writes the facts through `facts_json`, which escapes every `<` as
+  `<`, so no value can close `<facts>`. (3) The cap holds for any facts size:
+  `CommentaryWriter.max_cost(facts, avoid=)` is the worst case of one call (input tokens estimated high as one
+  per 2 bytes of UTF-8 of system prompt + user message, plus 50, and the full 900 output tokens).
+  Before the first call `jobs.weekly._fit` halves the kill-switch trips list Claude is given until that worst
+  case fits `reports.weekly_max_cost_usd`, adding `kill_switch_trips_not_listed` (the stored facts stay
+  complete; the number check uses the facts Claude was given); if even no trips fit, no call: status `budget`,
+  note "Commentary unavailable: the report's facts are too large for its Claude cost limit.". The retry also
+  needs first cost + the retry's worst case within the cap (in addition to the plan's two rules).
+  (4) `sent` is `duplicate` when the key's row is still `sending` after our send (a concurrent run holds it).
+  (5) `claude_spent` still attributes a row's accumulated cost to its `updated_at` day; documented as accepted
+  (it only over-counts the day being checked, so the budget can't be passed; exact per-day attribution needs a
+  per-call spend table). (6) The job's DB work (facts, spend, upsert, notification status) runs in
+  `asyncio.to_thread`. (7) `last_expectancy_reset` / `r_trades_since` are shared with `postclose._run_to_date`.
+- **For T17:** build the weekly job's `AsyncAnthropic` with `timeout=30, max_retries=1`, as `runtime.py` does for
+  the catalyst classifier, so a hung call fails fast to the facts-only report.
 
 ---
 
@@ -729,6 +748,11 @@ T1 signature.
   an R multiple closed since the last reset (queried directly).
 - Relay: `log.*` sources are excluded in SQL (`startswith` with autoescape), so the cursor still passes them;
   reset rows are taken with `source = 'killswitch'` and `message LIKE 'kill switch % reset'` at any level.
+- **Fix round 1 (P5-GN gauntlet, 2026-09-27):** `_run_to_date` now bounds the expectancy reset window by the end
+  of the session's ET day (a later reset doesn't change a rebuilt summary), through the helpers it shares with
+  the weekly facts (`trader.reports.weekly.last_expectancy_reset`, `r_trades_since`). The run-to-date line says
+  "1 trade". The weekly message keeps "(1 wins, ...)": the gauntlet test `test_09` asserts that exact text, so
+  "wins" is not singularised ("Expectancy switch: 1 of 50 trades" reads correctly as is).
 
 ---
 

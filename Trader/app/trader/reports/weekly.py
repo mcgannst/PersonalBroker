@@ -218,21 +218,33 @@ def _et_day_bounds(day: date) -> tuple[datetime, datetime]:
     return start, datetime.combine(day + timedelta(days=1), time(0), tzinfo=ET)
 
 
-def _expectancy_trades(db: Session, run_id: int, end: date) -> int:
-    """Closed trades with an R multiple the expectancy switch counts at the week's end (since its last reset,
-    as `KillSwitches` counts them)."""
+def last_expectancy_reset(db: Session, run_id: int, end: date) -> datetime | None:
+    """The expectancy switch's last reset before the end of the ET day `end`, or None. A reset made after
+    that day (a report or summary built later) does not change what the switch counted on it. Shared by the
+    weekly facts and the daily summary's run-to-date line (`trader.jobs.postclose`)."""
     _, end_ts = _et_day_bounds(end)
-    reset_at = db.execute(
+    reset_at: datetime | None = db.execute(
         select(func.max(m.KillSwitchEvent.reset_at)).where(
             m.KillSwitchEvent.run_id == run_id,
             m.KillSwitchEvent.switch == "expectancy",
             m.KillSwitchEvent.reset_at < end_ts,
         )
     ).scalar_one()
+    return reset_at
+
+
+def r_trades_since(db: Session, run_id: int, end: date, reset_at: datetime | None) -> int:
+    """Closed trades with an R multiple up to session `end`, only those closed after `reset_at` if given (as
+    `KillSwitches` counts them for the expectancy switch)."""
     q = select(func.count(m.Trade.pnl_r)).where(m.Trade.run_id == run_id, m.Trade.session_date <= end)
     if reset_at is not None:
         q = q.where(m.Trade.closed_at > reset_at)
     return int(db.execute(q).scalar_one())
+
+
+def _expectancy_trades(db: Session, run_id: int, end: date) -> int:
+    """Closed trades with an R multiple the expectancy switch counts at the week's end."""
+    return r_trades_since(db, run_id, end, last_expectancy_reset(db, run_id, end))
 
 
 # --- the number check ---------------------------------------------------------------------------------------
@@ -240,22 +252,39 @@ def _is_ratio(key: str | None) -> bool:
     return key is not None and (key == "win_rate" or key.endswith("_pct"))
 
 
-def _leaves(value: Any, key: str | None = None) -> Iterator[tuple[str | None, Any]]:
+# The fields of a kill-switch trip that hold the tripping value and its limit. For a switch named `*_pct`
+# (daily loss, max drawdown) both are ratios (0.0612 = 6.12%); the expectancy switch's are R multiples.
+_TRIP_RATIO_FIELDS = ("value", "threshold")
+
+
+def _ratio_fields(mapping: Mapping[Any, Any]) -> tuple[str, ...]:
+    """The keys of `mapping` that hold ratios although their names do not end in `_pct`."""
+    switch = mapping.get("switch")
+    if isinstance(switch, str) and _is_ratio(switch):
+        return _TRIP_RATIO_FIELDS
+    return ()
+
+
+def _leaves(value: Any, key: str | None = None, ratio: bool = False) -> Iterator[tuple[bool, Any]]:
+    """(is this leaf a ratio, the leaf) for every leaf of `value`."""
     if isinstance(value, Mapping):
+        extra = _ratio_fields(value)
         for k, v in value.items():
-            yield from _leaves(v, str(k))
+            name = str(k)
+            yield from _leaves(v, name, _is_ratio(name) or name in extra)
     elif isinstance(value, list | tuple):
         for v in value:
-            yield from _leaves(v, key)
+            yield from _leaves(v, key, ratio)
     else:
-        yield key, value
+        yield ratio, value
 
 
 def allowed_values(facts: Mapping[str, Any]) -> set[Decimal]:
-    """Every number the commentary may quote: each numeric leaf, its absolute value, ratio fields x 100, and
-    the year, month and day of every date."""
+    """Every number the commentary may quote: each numeric leaf, its absolute value, ratio fields x 100 (the
+    `win_rate` and `*_pct` keys, and the `value`/`threshold` of a `*_pct` kill-switch trip), and the year,
+    month and day of every date."""
     out: set[Decimal] = set()
-    for key, value in _leaves(facts):
+    for ratio, value in _leaves(facts):
         number: Decimal | None = None
         if isinstance(value, bool) or value is None:
             continue
@@ -272,7 +301,7 @@ def allowed_values(facts: Mapping[str, Any]) -> set[Decimal]:
         if number is None:
             continue
         out.update((number, abs(number)))
-        if _is_ratio(key):
+        if ratio:
             out.update((number * 100, abs(number) * 100))
     return out
 
@@ -313,7 +342,13 @@ def check_length(text: str) -> str | None:
 
 # --- spend and storage --------------------------------------------------------------------------------------
 def claude_spent(factory: sessionmaker[Session], day: date) -> Decimal:
-    """The day's Claude spend: catalysts of that session date plus weekly reports updated that ET date."""
+    """The day's Claude spend: catalysts of that session date plus weekly reports updated that ET date.
+
+    A forced re-run on a later day moves the row's whole accumulated `cost_usd` (earlier days' calls
+    included) to the re-run's day. That is accepted on purpose: the error only ever over-counts the day the
+    budget is checked for (the earlier day is past and never checked again, and `updated_at` only moves
+    forward), so it can refuse a re-run's commentary but never let the daily budget be passed. Counting each
+    call on its own day exactly would need a per-call spend record (a schema change)."""
     start, end = _et_day_bounds(day)
     with factory() as s:
         catalysts = s.execute(

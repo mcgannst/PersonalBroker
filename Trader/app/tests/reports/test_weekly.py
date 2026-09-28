@@ -272,6 +272,23 @@ def test_check_numbers_rounding_is_half_up_and_limited_to_four_decimals() -> Non
     assert check_numbers("0.12501", facts) == ["0.12501"]
 
 
+def test_check_numbers_takes_pct_kill_switch_trips_as_ratios() -> None:
+    """Fix round 1 (P5-GN breaker test_05): a `*_pct` switch's trip value and limit are ratios; the
+    expectancy switch's are R multiples and are not multiplied by 100."""
+    facts = {
+        "kill_switch_trips": [
+            {"switch": "daily_loss_pct", "date": "2026-11-09", "value": "0.061200", "threshold": "0.050000"},
+            {"switch": "max_drawdown_pct", "date": "2026-11-10", "value": "0.1520", "threshold": "0.1500"},
+            {"switch": "expectancy", "date": "2026-11-10", "value": "-0.1200", "threshold": "0.0000"},
+            {"switch": "manual_pause", "date": "2026-11-10", "value": None, "threshold": None},
+        ]
+    }
+    ok = "A 6.12% daily loss passed its 5% limit, and a 15.2% drawdown its 15% limit, at -0.12R."
+    assert check_numbers(ok, facts) == []
+    assert check_numbers("the expectancy switch tripped at 12%", facts) == ["12"]
+    assert check_numbers("a 6.13% loss", facts) == ["6.13"]
+
+
 # --- claude_spent and upsert_report -------------------------------------------------------------------------
 def outcome(**kw: Any) -> CommentaryOutcome:
     base: dict[str, Any] = {

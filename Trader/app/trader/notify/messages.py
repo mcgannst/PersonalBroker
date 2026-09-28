@@ -193,7 +193,7 @@ def fmt_rate(value: Decimal) -> str:
 
 def run_to_date_lines(v: RunToDateView) -> list[str]:
     """The daily summary's run-to-date line(s) (BR-60); None values are left out."""
-    parts = [f"{v.trades} trades"]
+    parts = [f"{v.trades} trade" if v.trades == 1 else f"{v.trades} trades"]
     if v.win_rate is not None:
         parts.append(f"win rate {fmt_rate(v.win_rate)}")
     if v.expectancy_r is not None:

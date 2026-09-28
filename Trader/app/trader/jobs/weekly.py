@@ -6,10 +6,21 @@ of the ET date plus weekly reports updated that date) is at least `reports.weekl
 retry is made only when twice the first call's cost is within that cap (the retry costs about the same, so
 the report never passes its cap) and the daily check still passes with the first call counted.
 
+The cap also holds whatever the size of the facts (fix round 1): before each call the worst case
+(`CommentaryWriter.max_cost`: input tokens estimated high from the prompt size plus the full output allowance)
+must fit. For the first call the facts Claude is given have their kill-switch trips list cut until it does
+(`_fit`; the number of trips left out is itself a fact), and when even no trips don't fit the report goes out
+without commentary (status `budget`, note "cap"). The retry also needs the first call's cost plus the retry's
+worst case within the cap.
+
+The synchronous database work runs in worker threads (`asyncio.to_thread`) so the API's manual run never
+blocks its event loop.
+
 The report is stored and sent whatever happens to the commentary; a forced re-run replaces the stored row
 (its cost accumulates) and the notifier's dedupe keeps it to one message.
 """
 
+import asyncio
 import dataclasses
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -41,8 +52,11 @@ from trader.settings_store import RuntimeSettings
 log = structlog.get_logger(__name__)
 
 NO_API_KEY = "ANTHROPIC_API_KEY not set"
+# The count of kill-switch trips left out of the facts Claude is given when the full list would pass the cap.
+TRIPS_NOT_LISTED = "kill_switch_trips_not_listed"
 NOTES: dict[str, str] = {
     "budget": "Commentary unavailable: the daily Claude budget is used up.",
+    "cap": "Commentary unavailable: the report's facts are too large for its Claude cost limit.",
     "numbers": "Commentary unavailable: it quoted numbers not in the report.",
     "length": "Commentary unavailable: it was not the expected length.",
     "not_configured": "Commentary unavailable: Claude is not configured.",
@@ -74,9 +88,11 @@ async def run_weekly(deps: WeeklyDeps, week: WeekWindow) -> dict[str, Any]:
     if week.week_ending is None:
         return {"skipped": "no sessions"}
     settings = deps.settings()
-    facts = build_facts(deps.factory, deps.calendar, deps.run_id, week, settings=settings)
+    facts = await asyncio.to_thread(
+        build_facts, deps.factory, deps.calendar, deps.run_id, week, settings=settings
+    )
     outcome, note = await _commentary(deps, settings, facts)
-    upsert_report(deps.factory, deps.clock, week, deps.run_id, facts, outcome)
+    await asyncio.to_thread(upsert_report, deps.factory, deps.clock, week, deps.run_id, facts, outcome)
     sent = await _send(deps, _view(week, week.week_ending, facts, outcome, note), week.week_ending)
     log.info("weekly.done", week_ending=week.week_ending.isoformat(), status=outcome.status, sent=sent)
     return {
@@ -121,6 +137,22 @@ def _rejection(numbers: Sequence[str], length: str | None) -> tuple[str, str]:
     return "; ".join(parts), "numbers" if numbers else "length"
 
 
+def _fit(writer: CommentaryWriter, facts: Mapping[str, Any], room: Decimal) -> Mapping[str, Any] | None:
+    """The facts to give Claude so that one call's worst case (`CommentaryWriter.max_cost`) is within `room`:
+    all of them when they fit; else the kill-switch trips list (the only unbounded part) halved until they
+    fit, the trips left out counted in `kill_switch_trips_not_listed`; None when even no trips don't fit."""
+    if writer.max_cost(facts) <= room:
+        return facts
+    trips = list(facts.get("kill_switch_trips") or [])
+    keep = len(trips)
+    while keep > 0:
+        keep //= 2
+        trimmed = {**facts, "kill_switch_trips": trips[:keep], TRIPS_NOT_LISTED: len(trips) - keep}
+        if writer.max_cost(trimmed) <= room:
+            return trimmed
+    return None
+
+
 async def _commentary(
     deps: WeeklyDeps, s: RuntimeSettings, facts: Mapping[str, Any]
 ) -> tuple[CommentaryOutcome, str | None]:
@@ -129,33 +161,44 @@ async def _commentary(
         return _no_call("disabled", None), "off"
     if deps.writer is None:
         return _no_call("disabled", NO_API_KEY), "not_configured"
+    writer = deps.writer
     today = et_date(deps.clock.now())
     budget, cap = s.claude_daily_budget_usd, s.reports_weekly_max_cost_usd
-    spent = claude_spent(deps.factory, today)
+    spent = await asyncio.to_thread(claude_spent, deps.factory, today)
     if budget - spent < cap:
         error = f"daily Claude budget: US${spent} of US${budget} spent; the report needs US${cap}"
         return _no_call("budget", error), "budget"
+    # What Claude is given: the facts, with the kill-switch trips list cut when the worst case of one call
+    # would pass the cap. The number check uses the same facts, so "and N more" may be quoted.
+    given = _fit(writer, facts, cap)
+    if given is None:
+        error = f"the facts are too large: one call could cost more than the report's cap of US${cap}"
+        log.warning("weekly.commentary_skipped", error=error)
+        return _no_call("budget", error), "cap"
 
-    first = await deps.writer.write(facts)
+    first = await writer.write(given)
     if first.status == "error" or first.text is None:
         return _combined("error", None, first.error, [first]), "error"
-    numbers, length = _problems(first.text, facts)
+    numbers, length = _problems(first.text, given)
     if not numbers and length is None:
         return _combined("ok", first.text, None, [first]), None
     seen = list(numbers)
+    spent_now = await asyncio.to_thread(claude_spent, deps.factory, today)
     retry_fits = (
-        first.cost_usd * 2 <= cap and budget - (claude_spent(deps.factory, today) + first.cost_usd) >= cap
+        first.cost_usd * 2 <= cap
+        and first.cost_usd + writer.max_cost(given, avoid=numbers) <= cap
+        and budget - (spent_now + first.cost_usd) >= cap
     )
     if not retry_fits:
         error, note = _rejection(seen, length)
         log.warning("weekly.commentary_rejected", error=error, retried=False)
         return _combined("rejected", None, error, [first]), note
 
-    second = await deps.writer.write(facts, avoid=numbers)
+    second = await writer.write(given, avoid=numbers)
     calls = [first, second]
     if second.status == "error" or second.text is None:
         return _combined("error", None, f"retry: {second.error}", calls), "error"
-    numbers, length = _problems(second.text, facts)
+    numbers, length = _problems(second.text, given)
     if not numbers and length is None:
         return _combined("ok", second.text, None, calls), None
     seen += [n for n in numbers if n not in seen]
@@ -201,14 +244,16 @@ def _notification_status(factory: sessionmaker[Session], dedupe_key: str) -> str
 async def _send(deps: WeeklyDeps, view: WeeklyReportView, week_ending: date) -> str:
     dedupe_key = f"weekly:{week_ending.isoformat()}"
     try:
-        before = _notification_status(deps.factory, dedupe_key)
+        before = await asyncio.to_thread(_notification_status, deps.factory, dedupe_key)
         msg = deps.render.weekly_report(view)
         await deps.notifier.send(dataclasses.replace(msg, dedupe_key=dedupe_key))
-        after = _notification_status(deps.factory, dedupe_key)
+        after = await asyncio.to_thread(_notification_status, deps.factory, dedupe_key)
     except Exception as exc:  # the report is stored; the web Reports page still shows it
         log.error("weekly.send_failed", error=type(exc).__name__)
         return "error"
-    if before is not None:
+    # `sending` after our send: a concurrent run (cron and a manual run) claimed the key first and is still
+    # sending, so the notifier dropped ours; our own send always leaves a final status.
+    if before is not None or after == "sending":
         return "duplicate"
     if after is None:
         return "handed_off"

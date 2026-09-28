@@ -40,6 +40,7 @@ from trader.notify.types import (
     TradeLine,
 )
 from trader.reports.metrics import compute_metrics
+from trader.reports.weekly import last_expectancy_reset, r_trades_since
 from trader.settings_store import OVERLAY_SYMBOL, RuntimeSettings
 from trader.worker import WorkerEngine
 
@@ -485,27 +486,16 @@ def _run_to_date(
 ) -> RunToDateView | None:
     """The run's metrics up to `session_date` for the daily summary, or None when they can't be computed
     (logged at warning; the summary never depends on them). `expectancy_trades` counts as the expectancy
-    switch does: closed trades with an R multiple, only those closed after its last reset if it was reset."""
+    switch does: closed trades with an R multiple, only those closed after its last reset before the end of
+    the session's ET day if it was reset (the helpers the weekly facts use)."""
     try:
         metrics = compute_metrics(factory, run_id, None, session_date)
         with factory() as s:
-            reset_at = s.execute(
-                select(func.max(m.KillSwitchEvent.reset_at)).where(
-                    m.KillSwitchEvent.run_id == run_id,
-                    m.KillSwitchEvent.switch == EXPECTANCY_SWITCH,
-                    m.KillSwitchEvent.reset_at.is_not(None),
-                )
-            ).scalar_one()
+            reset_at = last_expectancy_reset(s, run_id, session_date)
             if reset_at is None:
                 counted = metrics.trades - metrics.trades_without_r
             else:
-                counted = s.execute(
-                    select(func.count(m.Trade.pnl_r)).where(
-                        m.Trade.run_id == run_id,
-                        m.Trade.closed_at > reset_at,
-                        m.Trade.session_date <= session_date,
-                    )
-                ).scalar_one()
+                counted = r_trades_since(s, run_id, session_date, reset_at)
     except Exception as exc:
         log.warning("postclose.run_to_date_failed", error=type(exc).__name__)
         return None

@@ -3,7 +3,7 @@ row and one Telegram message per week (BR-61; SPEC §4.3, §9; Review Focus 4)."
 
 import json
 import re
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -27,7 +27,7 @@ from tests.reports.test_weekly import (
 from trader.adapters.claude.catalyst import cost_usd
 from trader.adapters.claude.reports import CommentaryWriter
 from trader.db import models as m
-from trader.jobs.weekly import WeeklyDeps, run_weekly
+from trader.jobs.weekly import NOTES, WeeklyDeps, run_weekly
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import ET, FixedClock
 from trader.notify.notifier import TelegramNotifier
@@ -313,6 +313,94 @@ async def test_recording_notifier_also_drops_the_second_message(world: World) ->
     await run_weekly(world.deps(reply(CLEAN)), week())
     await run_weekly(world.deps(reply(CLEAN)), week())
     assert len(world.sent()) == 1 and len(world.views()) == 2
+
+
+# --- fix round 1 (P5-GN breaker test_08 and review nits) ----------------------------------------------------
+def given_facts(call: dict[str, Any]) -> dict[str, Any]:
+    block = re.search(r"<facts>\n(.*)\n</facts>", user_text(call), re.DOTALL)
+    assert block is not None
+    facts: dict[str, Any] = json.loads(block.group(1))
+    return facts
+
+
+def add_trips(world: World, n: int) -> None:
+    with world.factory() as s:
+        s.add_all(
+            m.KillSwitchEvent(
+                run_id=world.run_id,
+                switch="daily_loss_pct",
+                session_date=WED,
+                tripped_at=datetime(2026, 11, 25, 15, 0, tzinfo=UTC) + timedelta(seconds=i),
+                value=Decimal("0.051234"),
+                threshold=Decimal("0.050000"),
+            )
+            for i in range(n)
+        )
+        s.commit()
+
+
+async def test_a_huge_trips_list_is_cut_so_one_call_stays_within_the_cap(world: World) -> None:
+    add_trips(world, 3000)
+    deps = world.deps(reply(CLEAN))
+    detail = await run_weekly(deps, week())
+    assert detail["commentary_status"] == "ok" and len(world.calls) == 1
+    given = given_facts(world.calls[0])
+    cap = world.settings.reports_weekly_max_cost_usd
+    assert deps.writer is not None and deps.writer.max_cost(given) <= cap
+    assert 0 < len(given["kill_switch_trips"]) < 3000
+    assert len(given["kill_switch_trips"]) + given["kill_switch_trips_not_listed"] == 3000
+    row = world.row()
+    assert len(row.facts["kill_switch_trips"]) == 3000 and "kill_switch_trips_not_listed" not in row.facts
+
+
+async def test_facts_too_large_for_the_cap_even_without_trips_skip_claude(world: World) -> None:
+    # US$0.005 is less than the 900 output tokens alone (US$0.009): no call can fit
+    detail = await run_weekly(world.deps(reply(CLEAN), reports_weekly_max_cost_usd=Decimal("0.005")), week())
+    assert detail["commentary_status"] == "budget" and world.calls == []
+    row = world.row()
+    assert row.cost_usd == 0 and "too large" in (row.commentary_error or "")
+    (view,) = world.views()
+    assert view.commentary_note == NOTES["cap"]
+    assert (
+        NOTES["cap"] == "Commentary unavailable: the report's facts are too large for its Claude cost limit."
+    )
+    assert len(world.sent()) == 1
+
+
+async def test_retry_needs_its_worst_case_within_the_cap(world: World) -> None:
+    # cap 0.02: the first call (0.01) passes "twice the first call"; 0.01 + the retry's worst case does not
+    deps = world.deps(reply(BAD), reply(CLEAN), reports_weekly_max_cost_usd=Decimal("0.02"))
+    detail = await run_weekly(deps, week())
+    assert deps.writer is not None
+    assert CLEAN_COST + deps.writer.max_cost(world.row().facts, avoid=["7", "12.34"]) > Decimal("0.02")
+    assert detail["commentary_status"] == "rejected" and len(world.calls) == 1
+
+
+class ClaimedElsewhere:
+    """A notifier that loses the claim to a concurrent run still sending: the key's row stays `sending`."""
+
+    def __init__(self, factory: sessionmaker[Session]) -> None:
+        self.factory = factory
+
+    async def send(self, msg: Any) -> None:
+        with self.factory() as s:
+            s.add(
+                m.Notification(
+                    kind=msg.kind,
+                    dedupe_key=msg.dedupe_key,
+                    text=msg.text,
+                    created_at=NOW,
+                    status="sending",
+                    attempts=1,
+                )
+            )
+            s.commit()
+
+
+async def test_a_concurrent_run_still_sending_makes_this_one_a_duplicate(world: World) -> None:
+    world.notifier = ClaimedElsewhere(world.factory)
+    detail = await run_weekly(world.deps(reply(CLEAN)), week())
+    assert detail["sent"] == "duplicate"
 
 
 async def test_facts_sent_to_claude_are_the_stored_facts(world: World) -> None:

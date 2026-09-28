@@ -20,6 +20,9 @@ from trader.settings_store import RuntimeSettings
 
 MAX_COMMENTARY_TOKENS = 900
 MAX_ERROR_CHARS = 300
+# The worst-case cost estimate (`CommentaryWriter.max_cost`): input tokens counted high from the prompt size.
+PROMPT_BYTES_PER_TOKEN = 2
+PROMPT_OVERHEAD_TOKENS = 50
 COMMENTARY_SYSTEM_PROMPT = (
     "You write the weekly commentary of a simulated day-trading account for its owner, in 150 to 300 words "
     "of plain prose (no headings, no tables). Cover the week's results, risk (drawdown and any kill switch) "
@@ -42,12 +45,20 @@ class Commentary:
     error: str | None
 
 
+def facts_json(facts: Mapping[str, Any]) -> str:
+    """The facts as sorted JSON with every `<` written as the JSON escape `\\u003c`, so no value (a ticker,
+    say) can close the <facts> block; `json.loads` gives the same facts back. `<` only occurs inside JSON
+    strings, so the replacement is always a valid escape."""
+    text = json.dumps(facts, sort_keys=True, indent=2, ensure_ascii=False, default=str)
+    return text.replace("<", "\\u003c")
+
+
 def build_prompt(facts: Mapping[str, Any], avoid: Sequence[str] = ()) -> str:
     """The user message: the facts as JSON inside a <facts> block, and the numbers to avoid, if any."""
     lines = [
         "Facts of the week just ended (JSON; ratios such as win_rate and the *_pct fields are fractions):",
         "<facts>",
-        json.dumps(facts, sort_keys=True, indent=2, ensure_ascii=False, default=str),
+        facts_json(facts),
         "</facts>",
         "Write the weekly commentary.",
     ]
@@ -59,6 +70,14 @@ def build_prompt(facts: Mapping[str, Any], avoid: Sequence[str] = ()) -> str:
     return "\n".join(lines)
 
 
+def estimate_input_tokens(facts: Mapping[str, Any], avoid: Sequence[str] = ()) -> int:
+    """A deliberately high estimate of one call's input tokens: one token per PROMPT_BYTES_PER_TOKEN bytes of
+    UTF-8 in the system prompt and the user message (English prose runs about 4 characters a token and JSON
+    with digits 2-3), plus PROMPT_OVERHEAD_TOKENS for the message framing."""
+    size = len(COMMENTARY_SYSTEM_PROMPT.encode()) + len(build_prompt(facts, avoid).encode())
+    return -(-size // PROMPT_BYTES_PER_TOKEN) + PROMPT_OVERHEAD_TOKENS
+
+
 class CommentaryWriter:
     """One commentary call per `write`. `client` is an `anthropic.AsyncAnthropic` (or a test double with
     `messages.create`); build it with a short timeout and few retries, as for the catalyst classifier."""
@@ -66,6 +85,13 @@ class CommentaryWriter:
     def __init__(self, client: Any, settings: Callable[[], RuntimeSettings]) -> None:
         self._client = client
         self._settings = settings
+
+    def max_cost(self, facts: Mapping[str, Any], *, avoid: Sequence[str] = ()) -> Decimal:
+        """The most one `write(facts, avoid=avoid)` call can cost: the estimated input tokens plus the full
+        MAX_COMMENTARY_TOKENS of output, at the model's prices. The caller checks it against the report's cap
+        before every call."""
+        model = self._settings().claude_model
+        return cost_usd(model, estimate_input_tokens(facts, avoid), MAX_COMMENTARY_TOKENS)
 
     async def write(self, facts: Mapping[str, Any], *, avoid: Sequence[str] = ()) -> Commentary:
         """One commentary call; `avoid` lists numbers a previous answer quoted that are not in the facts."""

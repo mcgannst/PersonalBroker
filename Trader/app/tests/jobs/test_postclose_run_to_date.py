@@ -16,6 +16,7 @@ from trader.jobs.postclose import PostcloseDeps, daily_summary_view, run_postclo
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import ET, FixedClock
 from trader.market.types import Candle, Interval, OpeningBars, UniverseMember
+from trader.notify.messages import run_to_date_lines
 from trader.notify.types import DailySummaryView, RunToDateView
 from trader.reports.metrics import Metrics
 from trader.settings_store import RuntimeSettings
@@ -161,6 +162,40 @@ def test_after_an_expectancy_reset_only_later_trades_count(
     patch_metrics(monkeypatch, metrics(run_id, trades=4, trades_without_r=1), [])
     view = daily_summary_view(db_factory, run_id, DAY, NOW, {}, expectancy_min_trades=50)
     assert view.run_to_date is not None and view.run_to_date.expectancy_trades == 2
+
+
+def test_a_reset_after_the_session_day_does_not_count(
+    db_factory: sessionmaker[Session], run_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fix round 1: a summary rebuilt for DAY after a later reset counts as the switch did on DAY (the reset
+    window is bounded by the end of the session's ET day, as the weekly facts count it)."""
+    with session_scope(db_factory) as s:
+        sid = add_symbol(s, "AAA")
+        add_trade(s, run_id, sid, et(DAY, 10, 0), "1")
+        add_trade(s, run_id, sid, et(DAY, 12, 0), "-1")
+        s.add(
+            m.KillSwitchEvent(
+                run_id=run_id,
+                switch="expectancy",
+                session_date=DAY,
+                tripped_at=et(DAY, 10, 5),
+                reset_at=et(DAY + timedelta(days=1), 9, 0),
+                reset_reason="reviewed",
+                reset_by="web:stephen",
+            )
+        )
+    patch_metrics(monkeypatch, metrics(run_id, trades=2, trades_without_r=0), [])
+    view = daily_summary_view(db_factory, run_id, DAY, NOW, {}, expectancy_min_trades=50)
+    assert view.run_to_date is not None and view.run_to_date.expectancy_trades == 2
+
+
+def test_run_to_date_line_says_one_trade(
+    db_factory: sessionmaker[Session], run_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_metrics(monkeypatch, metrics(run_id, trades=1, trades_without_r=0), [])
+    view = daily_summary_view(db_factory, run_id, DAY, NOW, {}, expectancy_min_trades=50)
+    assert view.run_to_date is not None
+    assert run_to_date_lines(view.run_to_date)[0].startswith("Run to date: 1 trade, ")
 
 
 def test_a_failing_metrics_call_leaves_run_to_date_empty(

@@ -17,6 +17,9 @@ from typing import Annotated, Any, Literal, Self
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, SecretStr, StrictBool, StringConstraints
 
 from trader.db import models as m
+from trader.decisions.types import CheckOp as CheckOp
+from trader.decisions.types import DecisionOutcome as DecisionOutcome
+from trader.decisions.types import DecisionStage as DecisionStage
 from trader.market.sessions import SessionPhase
 from trader.notify.types import PositionLine, ProposalView
 from trader.replay.types import CatalystMode as CatalystMode
@@ -52,7 +55,8 @@ Topic = Literal[
 ]
 ManualJob = Literal["nightly", "premarket", "preopen", "postclose", "token-refresh", "weekly"]
 # The weekly report's commentary outcome (P5-T9): written, switched off, over budget, withheld by the number
-# check, or Claude failed. ReplayStatus, DataMode and CatalystMode live in trader.replay.types (re-exported).
+# check, or Claude failed. ReplayStatus, DataMode and CatalystMode live in trader.replay.types (re-exported);
+# DecisionStage, DecisionOutcome and CheckOp in trader.decisions.types (re-exported).
 CommentaryStatus = Literal["ok", "disabled", "budget", "rejected", "error"]
 
 TotpCode = Annotated[str, StringConstraints(pattern=r"^\d{6}$")]
@@ -845,6 +849,87 @@ class WeeklyReportOut(ApiModel):
     cost_usd: Decimal
     facts: dict[str, Any]
     telegram_status: str | None = None
+
+
+# --- decision log (P6-T9 contracts; P6-T12 routes) ------------------------------------------------------
+
+
+class CheckOut(ApiModel):
+    name: str
+    value: str | None = None  # an exact decimal string
+    op: CheckOp
+    threshold: str | None = None
+    passed: bool | None = None  # None only when an input is missing
+
+
+class RuleCountOut(ApiModel):
+    rule: str
+    count: int
+
+
+class DecisionRowOut(ApiModel):
+    seq: int
+    stage: DecisionStage
+    strategy_key: str | None = None
+    symbol_id: int | None = None
+    ticker: str | None = None
+    outcome: DecisionOutcome
+    rule: str | None = None
+    reason: str | None = None
+    ts: UtcDateTime
+    ref: dict[str, int]
+    checks: list[CheckOut]  # lifted out of `data`
+    data: dict[str, Any]
+
+
+class DecisionSummaryOut(ApiModel):
+    text: str
+    universe_size: int | None = None
+    premarket_listed: int
+    premarket_classified: int
+    scanned: int
+    rvol_passed: int
+    ranked: int
+    passed: int
+    rejects_by_rule: list[RuleCountOut]
+    signals: int
+    risk_rejections: list[RuleCountOut]
+    proposals: int
+    approvals: dict[str, int]  # manual, auto, declined, expired, blocked
+    median_decision_seconds: float | None = None
+    fills: int
+    avg_fill_diff_per_share: Decimal | None = None  # positive = worse than planned
+    trades: int
+    wins: int
+    losses: int
+    pnl: Decimal
+    pnl_r: Decimal | None = None
+    exits_by_reason: list[RuleCountOut]
+    notes: list[str]
+
+
+class DecisionDayOut(ApiModel):
+    run_id: int
+    run_mode: str
+    session_date: date
+    final: bool
+    recorded_at: UtcDateTime | None = None
+    summary: DecisionSummaryOut | None = None
+    rows: list[DecisionRowOut]
+    total: int
+
+
+class DecisionDayItemOut(ApiModel):
+    run_id: int
+    session_date: date
+    final: bool
+    summary_text: str | None = None
+    proposals: int
+    trades: int
+
+
+class DecisionDaysOut(ApiModel):
+    days: list[DecisionDayItemOut]
 
 
 # --- stream (SSE event payloads) ------------------------------------------------------------------------

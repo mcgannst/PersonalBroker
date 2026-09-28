@@ -1,6 +1,6 @@
 """ORM models (SPEC §10). Phase 1 tables, the Phase 2 trading tables (migration 0002), the Phase 3
-worker and Telegram tables (migration 0004), the Phase 4 web tables (migration 0005), then the Phase 5
-replay columns and weekly reports (migration 0006)."""
+worker and Telegram tables (migration 0004), the Phase 4 web tables (migration 0005), the Phase 5
+replay columns and weekly reports (migration 0006), then the Phase 6 decision log (migration 0007)."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -566,3 +566,43 @@ class WeeklyReport(Base):
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), default=Decimal(0), server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(TS)
     updated_at: Mapped[datetime] = mapped_column(TS)
+
+
+# --- Phase 6: the decision log (migration 0007). A derived journal, rebuilt per (run, session) by the -------
+# recorder; the CHECK lists equal trader.decisions.types DecisionStage / DecisionOutcome (a test reads both).
+DECISION_STAGES_SQL = (
+    "stage IN ('universe', 'premarket', 'scan', 'signal', 'risk', 'proposal', 'approval', 'order', 'fill', "
+    "'exit', 'overlay', 'kill_switch', 'day')"
+)
+DECISION_OUTCOMES_SQL = (
+    "outcome IN ('info', 'listed', 'classified', 'passed', 'rejected', 'proposed', 'approved', "
+    "'auto_approved', 'declined', 'expired', 'blocked', 'submitted', 'filled', 'cancelled', 'exited', "
+    "'tripped', 'reset', 'error')"
+)
+
+
+class DecisionLog(Base):
+    __tablename__ = "decision_log"
+    __table_args__ = (
+        UniqueConstraint("run_id", "session_date", "seq", name="uq_decision_log_run_day_seq"),
+        CheckConstraint(DECISION_STAGES_SQL, name="ck_decision_log_stage"),
+        CheckConstraint(DECISION_OUTCOMES_SQL, name="ck_decision_log_outcome"),
+        Index("ix_decision_log_run_day_stage", "run_id", "session_date", "stage"),
+        Index("ix_decision_log_day", "session_date"),
+    )
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey(RUN_FK))
+    session_date: Mapped[date] = mapped_column(Date)
+    seq: Mapped[int] = mapped_column(Integer)
+    stage: Mapped[str] = mapped_column(String(20))  # DecisionStage
+    strategy_key: Mapped[str | None] = mapped_column(String(50))
+    symbol_id: Mapped[int | None] = mapped_column(ForeignKey(SYMBOL_FK))
+    ticker: Mapped[str | None] = mapped_column(String(20))
+    outcome: Mapped[str] = mapped_column(String(20))  # DecisionOutcome
+    rule: Mapped[str | None] = mapped_column(String(60))
+    reason: Mapped[str | None] = mapped_column(Text)
+    ts: Mapped[datetime] = mapped_column(TS)  # when the decision happened (from the source row)
+    ref: Mapped[Any] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    data: Mapped[Any] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    recorded_at: Mapped[datetime] = mapped_column(TS)
+    final: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))

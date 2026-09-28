@@ -10,6 +10,7 @@ from decimal import Decimal
 
 import pytest
 from alembic import command
+from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -165,6 +166,10 @@ def _restore_head(pg_url: str, migrated_engine: Engine) -> Iterator[None]:
         conn.execute(text("DELETE FROM trader.strategy_configs"))
 
 
+def _head(pg_url: str) -> str:
+    return str(ScriptDirectory.from_config(alembic_config(pg_url)).get_current_head())
+
+
 def _version(engine: Engine) -> str:
     with engine.connect() as conn:
         return str(conn.execute(text("SELECT version_num FROM trader.alembic_version")).scalar_one())
@@ -183,7 +188,7 @@ def test_downgrade_refuses_with_replay_rows(
         )
     with pytest.raises(RuntimeError, match="delete the replay runs first"):
         command.downgrade(alembic_config(pg_url), "0005")
-    assert _version(migrated_engine) == "0006"
+    assert _version(migrated_engine) == _head(pg_url)  # nothing downgraded (P6-T9: head is now 0007)
 
 
 def test_downgrade_to_0005_and_back(pg_url: str, migrated_engine: Engine, _restore_head: None) -> None:
@@ -196,4 +201,4 @@ def test_downgrade_to_0005_and_back(pg_url: str, migrated_engine: Engine, _resto
     uniques = {u["name"] for u in insp.get_unique_constraints("strategy_configs", schema="trader")}
     assert "uq_strategy_configs_key_revision" in uniques
     command.upgrade(alembic_config(pg_url), "head")
-    assert _version(migrated_engine) == "0006"
+    assert _version(migrated_engine) == _head(pg_url)

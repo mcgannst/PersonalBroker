@@ -204,6 +204,21 @@ class RuntimeSettings(BaseModel):
     jobs_retry_delay_seconds: int = Field(120, ge=10, le=600, alias="jobs.retry_delay_seconds")
     logging_mirror_level: Literal["error", "critical", "off"] = Field("error", alias="logging.mirror_level")
     logging_mirror_max_per_minute: int = Field(30, ge=1, le=600, alias="logging.mirror_max_per_minute")
+    # --- Phase 6 amendment: the decision log (P6-T9). Reporting only (D2: the `reports.*` group)
+    reports_decisions_enabled: bool = Field(True, alias="reports.decisions_enabled")
+    reports_decisions_scan_detail: Literal["all", "ranked"] = Field(
+        "all", alias="reports.decisions_scan_detail"
+    )
+    reports_decisions_refresh_seconds: int = Field(
+        60, ge=15, le=600, alias="reports.decisions_refresh_seconds"
+    )
+    reports_decisions_retention_days: int = Field(
+        400, ge=30, le=3650, alias="reports.decisions_retention_days"
+    )
+    reports_decisions_replay_retention_days: int = Field(
+        30, ge=1, le=3650, alias="reports.decisions_replay_retention_days"
+    )
+    reports_decisions_in_summary: bool = Field(True, alias="reports.decisions_in_summary")
 
     @field_validator("scheduler_always_fire_late")
     @classmethod

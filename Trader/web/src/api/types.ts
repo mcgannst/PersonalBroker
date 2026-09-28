@@ -49,6 +49,60 @@ export type DataMode = "full" | "offline";
 export type CatalystMode = "stored" | "unknown";
 /** The weekly report's commentary outcome. */
 export type CommentaryStatus = "ok" | "disabled" | "budget" | "rejected" | "error";
+/** `trader.decisions.types.DecisionStage` (re-exported by the schemas), in `STAGE_ORDER`. */
+export type DecisionStage =
+  | "universe"
+  | "premarket"
+  | "scan"
+  | "signal"
+  | "risk"
+  | "proposal"
+  | "approval"
+  | "order"
+  | "fill"
+  | "exit"
+  | "overlay"
+  | "kill_switch"
+  | "day";
+/** `trader.decisions.types.DecisionOutcome`. */
+export type DecisionOutcome =
+  | "info"
+  | "listed"
+  | "classified"
+  | "passed"
+  | "rejected"
+  | "proposed"
+  | "approved"
+  | "auto_approved"
+  | "declined"
+  | "expired"
+  | "blocked"
+  | "submitted"
+  | "filled"
+  | "cancelled"
+  | "exited"
+  | "tripped"
+  | "reset"
+  | "error";
+/** `trader.decisions.types.CheckOp`. */
+export type CheckOp = ">=" | "<=" | "between" | "==" | "!=" | "present" | "absent";
+
+/** Every `DecisionStage`, in the journal's stage order. */
+export const DECISION_STAGES: readonly DecisionStage[] = [
+  "universe",
+  "premarket",
+  "scan",
+  "signal",
+  "risk",
+  "proposal",
+  "approval",
+  "order",
+  "fill",
+  "exit",
+  "overlay",
+  "kill_switch",
+  "day",
+];
 
 /** Every `Topic`, in the schema's order (handy for exhaustive loops and tests). */
 export const TOPICS: readonly Topic[] = [
@@ -787,6 +841,86 @@ export interface WeeklyReportOut {
   cost_usd: Money;
   facts: JsonObject;
   telegram_status: string | null;
+}
+
+// ---------------------------------------------------------------- decision log (P6-T9)
+
+export interface CheckOut {
+  name: string;
+  value: string | null;
+  op: CheckOp;
+  threshold: string | null;
+  passed: boolean | null;
+}
+
+export interface RuleCountOut {
+  rule: string;
+  count: number;
+}
+
+export interface DecisionRowOut {
+  seq: number;
+  stage: DecisionStage;
+  strategy_key: string | null;
+  symbol_id: number | null;
+  ticker: string | null;
+  outcome: DecisionOutcome;
+  rule: string | null;
+  reason: string | null;
+  ts: IsoTime;
+  ref: Record<string, number>;
+  checks: CheckOut[];
+  data: JsonObject;
+}
+
+export interface DecisionSummaryOut {
+  text: string;
+  universe_size: number | null;
+  premarket_listed: number;
+  premarket_classified: number;
+  scanned: number;
+  rvol_passed: number;
+  ranked: number;
+  passed: number;
+  rejects_by_rule: RuleCountOut[];
+  signals: number;
+  risk_rejections: RuleCountOut[];
+  proposals: number;
+  approvals: Record<string, number>;
+  median_decision_seconds: number | null;
+  fills: number;
+  avg_fill_diff_per_share: Money | null;
+  trades: number;
+  wins: number;
+  losses: number;
+  pnl: Money;
+  pnl_r: Money | null;
+  exits_by_reason: RuleCountOut[];
+  notes: string[];
+}
+
+export interface DecisionDayOut {
+  run_id: number;
+  run_mode: string;
+  session_date: IsoDate;
+  final: boolean;
+  recorded_at: IsoTime | null;
+  summary: DecisionSummaryOut | null;
+  rows: DecisionRowOut[];
+  total: number;
+}
+
+export interface DecisionDayItemOut {
+  run_id: number;
+  session_date: IsoDate;
+  final: boolean;
+  summary_text: string | null;
+  proposals: number;
+  trades: number;
+}
+
+export interface DecisionDaysOut {
+  days: DecisionDayItemOut[];
 }
 
 // ---------------------------------------------------------------- stream (SSE `data:` payloads)

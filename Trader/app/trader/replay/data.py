@@ -15,7 +15,8 @@ Sources, in order:
 - daily bars (prior close, ATR): `daily_candles` -> Questrade `OneDay`, per symbol and chunk of about
   `CHUNK_DAYS` calendar days.
 - universe: that session's `universe_snapshots`; with none, the names of the newest stored universe on or
-  before the run's creation date, every member `source = "biased"` (and the day in `biased_days`), with
+  before the run's creation date (else the newest stored at all, e.g. the next session's snapshot written
+  the evening before; P5-REVIEW), every member `source = "biased"` (and the day in `biased_days`), with
   `price`, `avg_volume` and `atr14` recomputed from the daily bars before that session with the nightly
   job's formulas (fix round 1; the snapshot's own numbers are from a later date).
 - opening-bar stats: that session's `open_bar_stats`; a member without a row gets them computed in memory
@@ -500,6 +501,9 @@ class ReplayData:
         if stored:
             return stored
         if self._biased_names is None:
+            # The current universe: the newest snapshot on or before the run's creation date, else the newest
+            # stored at all (the nightly job writes the next session's snapshot the evening before, so on a
+            # weekend or evening that may be the only one). Only the member list is borrowed.
             with self._factory() as s:
                 newest = s.execute(
                     select(m.UniverseSnapshot.session_date)
@@ -507,6 +511,12 @@ class ReplayData:
                     .order_by(m.UniverseSnapshot.session_date.desc())
                     .limit(1)
                 ).scalar_one_or_none()
+                if newest is None:
+                    newest = s.execute(
+                        select(m.UniverseSnapshot.session_date)
+                        .order_by(m.UniverseSnapshot.session_date.desc())
+                        .limit(1)
+                    ).scalar_one_or_none()
             self._biased_names = await self._db.universe(newest) if newest is not None else []
         names = self._biased_names
         if not names:

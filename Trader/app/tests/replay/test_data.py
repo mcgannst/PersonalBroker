@@ -357,6 +357,66 @@ async def test_biased_day_stats_equal_the_nightly_formulas(db_factory: sessionma
     assert all(v is not None for row in members.values() for v in row)
 
 
+async def test_biased_universe_falls_back_to_the_next_sessions_snapshot(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """P5-REVIEW (P5-T18 LIVE): the only stored snapshot is the next session's, written the evening before
+    the run was created (after the wall date). The replayed days borrow its member list, labelled biased; the
+    numbers still come from the daily bars before each replayed session (no lookahead)."""
+    next_session = CAL.next_session(WALL.now().astimezone(ET).date())
+    assert next_session > WALL.now().astimezone(ET).date()  # Saturday evening -> Monday
+    days = [d for d in (D1 - timedelta(days=n) for n in range(45, 0, -1)) if CAL.is_session(d)]
+    days += [D1, D2, next_session]
+    daily_aaa = [day_bar(d, str(Decimal("20") + Decimal(i) / 10)) for i, d in enumerate(days)]
+    w = seed_replay_world(
+        db_factory,
+        universe_days=[next_session],
+        universe_tickers=["AAA", "BBB"],
+        daily={"AAA": [(d, b) for d, b in zip(days, daily_aaa, strict=True)]},
+        strategies=False,
+    )
+    clock = FixedClock(et(D1, 9, 0))
+    rd = make_data(db_factory, clock)
+
+    for d in (D1, D2):
+        clock.set(et(d, 9, 0))
+        await rd.prepare_day(d)
+        uni = await rd.universe(d)
+        assert [u.ticker for u in uni] == ["AAA", "BBB"]
+        assert {u.source for u in uni} == {BIASED_SOURCE}
+        assert (await rd.universe_status(d)).source == BIASED_SOURCE
+        aaa = next(u for u in uni if u.ticker == "AAA")
+        # the price is the last daily close before `d`, never the snapshot's (20) or a later close
+        assert aaa.price == daily_aaa[days.index(d) - 1].close
+        assert next(u for u in uni if u.ticker == "BBB").price is None  # no daily bars stored, offline
+    assert rd.biased_days == frozenset({D1, D2})
+    assert w.symbols["AAA"] != w.symbols["BBB"]
+
+
+async def test_biased_universe_prefers_a_snapshot_on_or_before_the_wall_date(
+    db_factory: sessionmaker[Session],
+) -> None:
+    next_session = CAL.next_session(WALL.now().astimezone(ET).date())
+    w = seed_replay_world(
+        db_factory, universe_days=[next_session], universe_tickers=["AAA", "BBB"], strategies=False
+    )
+    earlier = date(2026, 11, 25)
+    with session_scope(db_factory) as s:
+        s.add(
+            m.UniverseSnapshot(
+                session_date=earlier,
+                symbol_id=w.symbols["SPY"],
+                price=Decimal("20"),
+                avg_volume=2_000_000,
+                atr14=Decimal("1.0"),
+                source="finviz",
+            )
+        )
+    rd = make_data(db_factory, FixedClock(et(D1, 9, 0)))
+    await rd.prepare_day(D1)
+    assert [(u.ticker, u.source) for u in await rd.universe(D1)] == [("SPY", BIASED_SOURCE)]
+
+
 def test_nightly_constants_are_the_nightly_jobs() -> None:
     """replay/data.py keeps its own copy (importing trader.jobs.nightly pulls in the FinViz adapter)."""
     from trader.jobs import nightly

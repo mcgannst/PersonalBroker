@@ -1141,6 +1141,10 @@ commentary rendered as text, the week asked for around DST and holidays, an erro
   fallback takes the newest snapshot ON OR BEFORE the wall-clock date (09-27). So the check proved
   determinism and isolation of the loop, the real SPY data and the overlay decisions, but not strategy
   trades. Re-run it on a weekday evening once a snapshot dated on or before that day exists (deferred, OPEN).
+  **P5-REVIEW fix:** with no snapshot on or before the wall-clock date the fallback now takes the newest stored
+  snapshot at all (here the next session's, written the evening before), still labelled biased and borrowing
+  only the member list (numbers from the daily bars before each replayed day). Regression tests in
+  `tests/replay/test_data.py` (`test_biased_universe_*`). The LIVE re-run should now produce candidates.
 - LIVE 4: the Playwright live smoke (with `/replay` and `SMOKE_REPLAY_ID=18`, the "Compared with live" card)
   passed.
 - LIVE 5 (manual weekday weekly run) and LIVE 6 (restart in market hours): need a trading day. Recorded as

@@ -11,6 +11,7 @@ from trader.api.routers import (
     auth,
     credentials,
     dashboard,
+    decisions,
     jobs,
     journal,
     killswitch,
@@ -44,5 +45,6 @@ ROUTERS: tuple[APIRouter, ...] = (
     watchlist.router,
     replays.router,
     reports.router,
+    decisions.router,  # P6-T12
     stream.router,
 )

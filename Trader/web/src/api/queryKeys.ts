@@ -1,6 +1,8 @@
 // TanStack Query keys. Every key is an array whose first element is its resource name, so
 // `invalidateQueries({ queryKey: [name] })` refreshes every query of that resource.
 import type {
+  DecisionDayQuery,
+  DecisionDaysQuery,
   EventsQuery,
   JobsQuery,
   JournalQuery,
@@ -38,6 +40,9 @@ export const qk = {
   replays: (q: ReplaysQuery = {}) => ["replays", q] as const,
   replay: (id: number) => ["replay", id] as const,
   weeklyReport: (week: IsoDate) => ["weeklyReport", week] as const,
+  // Phase 6 (P6-T12)
+  decisionDays: (q: DecisionDaysQuery = {}) => ["decisionDays", q] as const,
+  decisionDay: (q: DecisionDayQuery) => ["decisionDay", q] as const,
 };
 
 /** The resource-name prefixes each SSE `invalidate` topic refreshes. */

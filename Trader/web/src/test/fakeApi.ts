@@ -25,8 +25,8 @@ import type {
 } from "../api/types";
 import * as fx from "./fixtures";
 
-/** Methods that return a Promise (every method except the two URL builders). */
-export type AsyncApiMethod = Exclude<ApiMethod, "exportTradesUrl" | "streamUrl">;
+/** Methods that return a Promise (every method except the three URL builders). */
+export type AsyncApiMethod = Exclude<ApiMethod, "exportTradesUrl" | "decisionsCsvUrl" | "streamUrl">;
 type ArgsOf<M extends ApiMethod> = Parameters<ApiClient[M]>;
 type ResultOf<M extends AsyncApiMethod> = Awaited<ReturnType<ApiClient[M]>>;
 export type FakeResponses = { [M in AsyncApiMethod]: ResultOf<M> };
@@ -94,6 +94,8 @@ export function defaultResponses(): FakeResponses {
     startReplay: fx.replayQueued,
     cancelReplay: { ...fx.replayRunning, cancel_requested: true },
     weeklyReport: fx.weeklyReportOk,
+    decisionDays: fx.decisionDaysOut,
+    decisionDay: fx.decisionDayOut,
   };
 }
 
@@ -324,6 +326,17 @@ export class FakeApiClient implements ApiClient {
   }
   weeklyReport(week: IsoDate) {
     return this.call("weeklyReport", [week]);
+  }
+  // decision log (P6-T12)
+  decisionDays(q: Parameters<ApiClient["decisionDays"]>[0]) {
+    return this.call("decisionDays", [q]);
+  }
+  decisionDay(q: Parameters<ApiClient["decisionDay"]>[0]) {
+    return this.call("decisionDay", [q]);
+  }
+  decisionsCsvUrl(q: Parameters<ApiClient["decisionsCsvUrl"]>[0]): string {
+    this.calls.push(["decisionsCsvUrl", [q]]);
+    return `/api/export/decisions.csv${queryString(q)}`;
   }
   // live updates
   streamUrl(): string {

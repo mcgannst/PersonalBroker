@@ -78,6 +78,11 @@ def _line(values: tuple[object, ...] | list[object]) -> str:
     return buf.getvalue()
 
 
+# Public aliases (P6-T12): the decision log export (`trader.decisions.export`) shares this formula guard.
+csv_cell = _cell
+csv_line = _line
+
+
 def trades_csv(
     factory: sessionmaker[Session], run_id: int, date_from: date | None, date_to: date | None
 ) -> Generator[str, None, None]:

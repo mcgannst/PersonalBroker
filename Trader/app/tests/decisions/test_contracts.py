@@ -290,14 +290,7 @@ async def test_every_stub_raises_not_implemented() -> None:
         summary.summary_text(s, link=None)
     with pytest.raises(NotImplementedError):
         prune.prune(any_, any_, RuntimeSettings())  # type: ignore[arg-type]
-    with pytest.raises(NotImplementedError):
-        read.resolve_run(any_, None)  # type: ignore[arg-type]
-    with pytest.raises(NotImplementedError):
-        read.list_days(any_, run_id=None)  # type: ignore[arg-type]
-    with pytest.raises(NotImplementedError):
-        read.load_day(any_, None, D)  # type: ignore[arg-type]
-    with pytest.raises(NotImplementedError):
-        export.decisions_csv(any_, 1, D)  # type: ignore[arg-type]
+    # read.py and export.py are implemented by P6-T12 (tests/decisions/test_read.py, test_export.py)
 
 
 def test_stub_signatures() -> None:

@@ -144,6 +144,7 @@ ROUTER_ORDER = [
     "watchlist",
     "replays",  # P5-T1
     "reports",  # P5-T1
+    "decisions",  # P6-T12
     "stream",
 ]
 
@@ -223,7 +224,7 @@ def test_every_contract_module_imports_with_its_names(module: str) -> None:
 
 
 def test_routers_are_the_seventeen_in_order() -> None:
-    assert len(ROUTERS) == 17  # Phase 5 added replays and reports (P5-T1)
+    assert len(ROUTERS) == 18  # Phase 5 added replays and reports (P5-T1), P6-T12 decisions
     assert all(isinstance(r, APIRouter) for r in ROUTERS)
     for name, router in zip(ROUTER_ORDER, ROUTERS, strict=True):
         assert router is importlib.import_module(f"trader.api.routers.{name}").router

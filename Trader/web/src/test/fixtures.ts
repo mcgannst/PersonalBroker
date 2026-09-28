@@ -8,7 +8,11 @@ import type {
   CandleOut,
   CatalystOut,
   DashboardOut,
+  DecisionDayOut,
+  DecisionDaysOut,
   DecisionOut,
+  DecisionRowOut,
+  DecisionSummaryOut,
   EquityOut,
   EventOut,
   FieldOut,
@@ -1175,4 +1179,133 @@ export const weeklyReportBudget: WeeklyReportOut = {
   commentary_error: "daily Claude budget used up",
   model: null,
   cost_usd: "0.000000",
+};
+
+// ---------------------------------------------------------------- decision log (P6-T12)
+
+export const decisionSummaryText =
+  "811 scanned · 20 ranked · 1 passed (NVDA) · 1 proposal, approved by you in 42 s · filled 10.27 vs 10.25 planned (+0.02)";
+
+export const decisionSummary: DecisionSummaryOut = {
+  text: decisionSummaryText,
+  universe_size: 812,
+  premarket_listed: 12,
+  premarket_classified: 10,
+  scanned: 811,
+  rvol_passed: 21,
+  ranked: 20,
+  passed: 1,
+  rejects_by_rule: [
+    { rule: "rvol_below_min", count: 790 },
+    { rule: "catalyst_low_quality", count: 6 },
+    { rule: "doji", count: 3 },
+  ],
+  signals: 1,
+  risk_rejections: [],
+  proposals: 1,
+  approvals: { manual: 1, auto: 0, declined: 0, expired: 0, blocked: 0 },
+  median_decision_seconds: 42,
+  fills: 2,
+  avg_fill_diff_per_share: "0.0200",
+  trades: 1,
+  wins: 1,
+  losses: 0,
+  pnl: "12.5000",
+  pnl_r: "0.8000",
+  exits_by_reason: [{ rule: "flatten", count: 1 }],
+  notes: ["no baseline for 2 symbols"],
+};
+
+function decisionRow(partial: Partial<DecisionRowOut> & Pick<DecisionRowOut, "seq" | "stage" | "outcome">): DecisionRowOut {
+  return {
+    strategy_key: null,
+    symbol_id: null,
+    ticker: null,
+    rule: null,
+    reason: null,
+    ts: "2026-10-06T13:35:05Z",
+    ref: {},
+    checks: [],
+    data: {},
+    ...partial,
+  };
+}
+
+export const decisionRows: DecisionRowOut[] = [
+  decisionRow({ seq: 1, stage: "universe", outcome: "info", ts: "2026-10-05T22:00:10Z", data: { count: 812, source: "finviz" } }),
+  decisionRow({
+    seq: 2,
+    stage: "premarket",
+    outcome: "classified",
+    ticker: "NVDA",
+    symbol_id: 7,
+    ts: "2026-10-06T12:05:00Z",
+    reason: "<b>Guidance raised</b> after the close",
+    data: { type: "earnings", quality: 80, sources: ["news", "gap"] },
+  }),
+  decisionRow({
+    seq: 3,
+    stage: "scan",
+    outcome: "passed",
+    strategy_key: "orb_sip",
+    ticker: "NVDA",
+    symbol_id: 7,
+    ref: { candidate_id: 5 },
+    checks: [
+      { name: "rvol", value: "3.20", op: ">=", threshold: "1.00", passed: true },
+      { name: "price", value: "22.40", op: "between", threshold: "5-50", passed: true },
+      { name: "atr14", value: null, op: "present", threshold: null, passed: null },
+    ],
+    data: { rvol: "3.20", rank: 1, entry: "10.2500", stop_loss: "9.8000" },
+  }),
+  decisionRow({
+    seq: 4,
+    stage: "scan",
+    outcome: "rejected",
+    strategy_key: "orb_sip",
+    ticker: "AMD",
+    symbol_id: 8,
+    rule: "rvol_below_min",
+    checks: [{ name: "rvol", value: "0.80", op: ">=", threshold: "1.00", passed: false }],
+    data: { rvol: "0.80" },
+  }),
+  decisionRow({
+    seq: 5,
+    stage: "fill",
+    outcome: "filled",
+    ticker: "NVDA",
+    symbol_id: 7,
+    ts: "2026-10-06T13:38:05Z",
+    data: { planned_price: "10.2500", fill_price: "10.2700", diff_per_share: "0.0200" },
+  }),
+  decisionRow({
+    seq: 6,
+    stage: "exit",
+    outcome: "exited",
+    ticker: "NVDA",
+    symbol_id: 7,
+    rule: "flatten",
+    reason: "flatten_close",
+    ts: "2026-10-06T19:55:00Z",
+    data: { pnl: "12.5000", pnl_r: "0.8000" },
+  }),
+  decisionRow({ seq: 7, stage: "day", outcome: "info", ts: "2026-10-06T20:30:00Z", data: { text: decisionSummaryText } }),
+];
+
+export const decisionDayOut: DecisionDayOut = {
+  run_id: RUN_ID,
+  run_mode: "live",
+  session_date: SESSION_DATE,
+  final: true,
+  recorded_at: "2026-10-06T20:30:00Z",
+  summary: decisionSummary,
+  rows: decisionRows,
+  total: decisionRows.length,
+};
+
+export const decisionDaysOut: DecisionDaysOut = {
+  days: [
+    { run_id: RUN_ID, session_date: SESSION_DATE, final: true, summary_text: decisionSummaryText, proposals: 1, trades: 1 },
+    { run_id: RUN_ID, session_date: "2026-10-05", final: true, summary_text: "790 scanned · 0 passed", proposals: 0, trades: 0 },
+  ],
 };

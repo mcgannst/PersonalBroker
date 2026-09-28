@@ -8,6 +8,8 @@ import { ApiError, queryString, type ApiClient } from "./client";
 import type {
   CandidatesOut,
   DashboardOut,
+  DecisionDayOut,
+  DecisionDaysOut,
   DecisionOut,
   EquityOut,
   EventOut,
@@ -280,6 +282,18 @@ export function createHttpClient(opts: HttpClientOptions = {}): HttpApiClient {
         throw err;
       }
     },
+
+    // decision log (P6-T12)
+    decisionDays: (q) => get<DecisionDaysOut>(`/decisions/days${queryString(q)}`),
+    decisionDay: async (q) => {
+      try {
+        return await get<DecisionDayOut>(`/decisions${queryString(q)}`);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) return null;
+        throw err;
+      }
+    },
+    decisionsCsvUrl: (q) => url(`/export/decisions.csv${queryString(q)}`),
 
     // live updates
     streamUrl: () => url("/stream"),

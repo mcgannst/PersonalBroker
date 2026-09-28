@@ -6,7 +6,11 @@ import { createContext, createElement, useContext, type ReactNode } from "react"
 import type {
   CandidatesOut,
   DashboardOut,
+  DecisionDayOut,
+  DecisionDaysOut,
   DecisionOut,
+  DecisionOutcome,
+  DecisionStage,
   EquityOut,
   EventOut,
   FieldError,
@@ -144,6 +148,27 @@ export interface ReplaysQuery {
   limit?: number;
 }
 
+/** The decision log (P6-T12). Without `run_id` the server serves only a live run (never a replay's rows). */
+export interface DecisionDaysQuery {
+  limit?: number;
+  run_id?: number;
+}
+
+export interface DecisionDayQuery {
+  date: IsoDate;
+  run_id?: number;
+  stage?: DecisionStage;
+  outcome?: DecisionOutcome;
+  ticker?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface DecisionsCsvQuery {
+  date: IsoDate;
+  run_id?: number;
+}
+
 /** One method per /api route (SPEC §11, P4 plan T3–T11). Every method rejects with an `ApiError`. */
 export interface ApiClient {
   // auth (T4)
@@ -207,6 +232,11 @@ export interface ApiClient {
   cancelReplay(id: number): Promise<ReplayOut>;
   // reports (P5-T12); `weeklyReport` resolves null when the server answers 404 (no report for that week)
   weeklyReport(week: IsoDate): Promise<WeeklyReportOut | null>;
+  // decision log (P6-T12); `decisionDay` resolves null when the server answers 404 (no rows that day)
+  decisionDays(q: DecisionDaysQuery): Promise<DecisionDaysOut>;
+  decisionDay(q: DecisionDayQuery): Promise<DecisionDayOut | null>;
+  /** Same-origin URL of `GET /api/export/decisions.csv` (a download link, not a fetch). */
+  decisionsCsvUrl(q: DecisionsCsvQuery): string;
   // live updates (T11)
   /** Same-origin URL of `GET /api/stream` (for `EventSource`). */
   streamUrl(): string;
@@ -262,6 +292,9 @@ export const API_METHODS = [
   "startReplay",
   "cancelReplay",
   "weeklyReport",
+  "decisionDays",
+  "decisionDay",
+  "decisionsCsvUrl",
   "streamUrl",
 ] as const satisfies readonly (keyof ApiClient)[];
 

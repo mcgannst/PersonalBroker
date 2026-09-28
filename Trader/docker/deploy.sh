@@ -8,6 +8,11 @@
 # or printed) and handed to compose as TRADER_ENV_FILE; compose reads it on the Mac, at run time only.
 # Optional: TRADER_HEALTH_URL, TRADER_HEALTH_TIMEOUT (120 s), TRADER_HEALTH_INTERVAL (3 s),
 # TRADER_DEPLOY_SSH (stephen@192.168.68.73).
+# prod (P6-T6, plan D5) refuses before any build: TRADER_TAG dev or latest, a dirty working tree, or a HEAD
+# that is not exactly the tag TRADER_TAG.
+# Downtime (P6-T6, plan D3): prints `deploy: down from <UTC>` just before the recreate and `deploy: up at <UTC>`
+# when health returns 200, then the cron_gap.py command that lists the cron lines to catch up by hand. If the
+# recreate or the health wait fails, the `down from` stamp and the hint are still printed.
 set -euo pipefail
 
 usage() {
@@ -24,6 +29,7 @@ case "$env_name" in
   dev)
     tag="dev"
     host="trader-dev.sunspinner.ca"
+    container="trader-dev"
     ;;
   prod)
     if [ -z "${TRADER_TAG:-}" ]; then
@@ -32,9 +38,33 @@ case "$env_name" in
     fi
     tag="$TRADER_TAG"
     host="trader.sunspinner.ca"
+    container="trader"
     ;;
   *) usage ;;
 esac
+
+# The prod guards: prod is built only from a clean checkout of exactly the git tag it is named after.
+if [ "$env_name" = "prod" ]; then
+  if [ "$tag" = "dev" ] || [ "$tag" = "latest" ]; then
+    echo "deploy: prod refused: TRADER_TAG=$tag is not a release tag (use the git tag, e.g. v1.0.0)" >&2
+    exit 1
+  fi
+  if ! porcelain="$(git -C "$root" status --porcelain)"; then
+    echo "deploy: prod refused: git status failed in $root" >&2
+    exit 1
+  fi
+  if [ -n "$porcelain" ]; then
+    echo "deploy: prod refused: the working tree is dirty (commit or remove the changes)" >&2
+    exit 1
+  fi
+  # --match keeps another tag on the same commit (e.g. a phase tag) from hiding this one.
+  exact="$(git -C "$root" describe --exact-match --tags --match "$tag" HEAD 2>/dev/null || true)"
+  if [ "$exact" != "$tag" ]; then
+    head="$(git -C "$root" describe --always --tags HEAD 2>/dev/null || echo unknown)"
+    echo "deploy: prod refused: HEAD is $head, not the tag $tag (check out the tag first)" >&2
+    exit 1
+  fi
+fi
 
 env_file="${TRADER_ENV_FILE:-$here/.env.$env_name}"
 if [ ! -f "$env_file" ]; then
@@ -76,7 +106,27 @@ DOCKER_DEFAULT_PLATFORM=linux/amd64 docker --context desktop-linux build --platf
 echo "deploy: shipping $image to $ssh_target"
 docker --context desktop-linux save "$image" | ssh "$ssh_target" docker load
 
+utc_now() {
+  date -u +%Y-%m-%dT%H:%M:%SZ
+}
+catch_up_hint() {
+  echo "deploy: run uv --directory Trader/app run python ../build/cron_gap.py --from $1 --to $2 --container $container"
+}
+down_at=""
+healthy=0
+# On any failure after the service went down, still say when it went down and how to find what was missed.
+on_exit() {
+  if [ -n "$down_at" ] && [ "$healthy" -ne 1 ]; then
+    echo "deploy: not healthy; it was down from $down_at. Once it is healthy again, catch up with --to set to"
+    echo "deploy: that time (below: now), then run each listed command:"
+    catch_up_hint "$down_at" "$(utc_now)"
+  fi
+}
+trap on_exit EXIT
+
 echo "deploy: recreating the trader service ($env_name)"
+down_at="$(utc_now)"
+echo "deploy: down from $down_at"
 docker --context shared-docker-server compose -f "$here/docker-compose.$env_name.yml" \
   up -d --no-build --no-deps --force-recreate trader
 
@@ -85,7 +135,11 @@ waited=0
 while true; do
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$health_url" || true)"
   if [ "$code" = "200" ]; then
+    healthy=1
+    up_at="$(utc_now)"
     echo "deploy: health $code after ${waited}s"
+    echo "deploy: up at $up_at"
+    catch_up_hint "$down_at" "$up_at"
     exit 0
   fi
   if [ "$waited" -ge "$health_timeout" ]; then

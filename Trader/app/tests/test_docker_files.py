@@ -463,6 +463,23 @@ def _env_file(path: Path, *, skip: tuple[str, ...] = ()) -> Path:
     return path
 
 
+# P6-T6: a stub git for the prod guards. STUB_GIT_STATUS is `status --porcelain`'s output (empty: clean);
+# STUB_GIT_TAG is what `describe --exact-match` finds at HEAD (unset: no tag); STUB_GIT_HEAD is the plain
+# `describe` of HEAD (the version string).
+GIT_STUB = """case "$*" in
+  *"status --porcelain"*) printf "%s" "${STUB_GIT_STATUS-}" ;;
+  *--exact-match*)
+    if [ -z "${STUB_GIT_TAG-}" ]; then
+      echo "fatal: no tag exactly matches" >&2
+      exit 128
+    fi
+    echo "$STUB_GIT_TAG" ;;
+  *describe*) echo "${STUB_GIT_HEAD:-stub-version}" ;;
+esac
+exit 0"""
+STAMP = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
+
+
 @pytest.fixture
 def deploy_env(tmp_path: Path) -> dict[str, str]:
     stubs = tmp_path / "bin"
@@ -476,6 +493,7 @@ def deploy_env(tmp_path: Path) -> dict[str, str]:
     _stub(stubs, "ssh", "cat > /dev/null\nexit 0")
     _stub(stubs, "curl", 'printf "%s" "${STUB_HTTP_CODE:-200}"')
     _stub(stubs, "sleep", "exit 0")
+    _stub(stubs, "git", GIT_STUB)
     return {
         "PATH": f"{stubs}:{os.environ['PATH']}",
         "STUB_LOG": str(tmp_path / "calls.log"),
@@ -596,12 +614,96 @@ def test_deploy_prod_needs_a_tag(deploy_env: dict[str, str]) -> None:
 
 
 def test_deploy_prod_uses_the_tag_and_the_prod_host(deploy_env: dict[str, str]) -> None:
-    result = _deploy({**deploy_env, "TRADER_TAG": "v1"}, "prod")
+    result = _deploy({**deploy_env, "TRADER_TAG": "v1", "STUB_GIT_TAG": "v1"}, "prod")  # clean, at the tag
     assert result.returncode == 0, result.stdout + result.stderr
     calls = _log(Path(deploy_env["STUB_LOG"]))
+    assert any(c.startswith("docker --context desktop-linux build") and "-t trader:v1" in c for c in calls)
     assert "docker --context desktop-linux save trader:v1" in calls
     assert any("docker-compose.prod.yml" in c for c in calls)
     assert any("https://trader.sunspinner.ca/api/health" in c for c in calls if c.startswith("curl"))
+    assert f"git -C {TRADER} status --porcelain" in calls
+    assert f"git -C {TRADER} describe --exact-match --tags --match v1 HEAD" in calls
+    assert "--container trader\n" in result.stdout + "\n"
+
+
+def _docker_calls(env: dict[str, str]) -> list[str]:
+    return [c for c in _log(Path(env["STUB_LOG"])) if c.startswith("docker ")]
+
+
+def test_deploy_prod_refuses_a_dirty_tree(deploy_env: dict[str, str]) -> None:
+    env = {**deploy_env, "TRADER_TAG": "v1", "STUB_GIT_TAG": "v1", "STUB_GIT_STATUS": " M Trader/app/x.py\n"}
+    result = _deploy(env, "prod")
+    assert result.returncode == 1
+    assert "working tree is dirty" in result.stderr
+    assert _docker_calls(deploy_env) == []  # no build
+
+
+def test_deploy_prod_refuses_a_head_that_is_not_the_tag(deploy_env: dict[str, str]) -> None:
+    env = {**deploy_env, "TRADER_TAG": "v1.0.0", "STUB_GIT_HEAD": "phase-5-complete-12-gabc1234"}
+    result = _deploy(env, "prod")
+    assert result.returncode == 1
+    assert "phase-5-complete-12-gabc1234" in result.stderr and "v1.0.0" in result.stderr  # names both
+    assert _docker_calls(deploy_env) == []
+
+
+@pytest.mark.parametrize("tag", ["dev", "latest"])
+def test_deploy_prod_refuses_the_dev_and_latest_tags(deploy_env: dict[str, str], tag: str) -> None:
+    result = _deploy({**deploy_env, "TRADER_TAG": tag, "STUB_GIT_TAG": tag}, "prod")
+    assert result.returncode == 1
+    assert f"TRADER_TAG={tag}" in result.stderr
+    assert _docker_calls(deploy_env) == []
+
+
+def test_deploy_dev_skips_the_prod_guards(deploy_env: dict[str, str]) -> None:
+    result = _deploy({**deploy_env, "STUB_GIT_STATUS": " M dirty\n"}, "dev")  # dev may deploy a dirty tree
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not any("status --porcelain" in c for c in _log(Path(deploy_env["STUB_LOG"])))
+
+
+def test_deploy_dev_prints_the_downtime_window_and_the_catch_up_hint(deploy_env: dict[str, str]) -> None:
+    result = _deploy(deploy_env, "dev")
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = result.stdout.splitlines()
+    down = next(i for i, line in enumerate(lines) if line.startswith("deploy: down from "))
+    health = next(i for i, line in enumerate(lines) if line.startswith("deploy: health 200"))
+    up = next(i for i, line in enumerate(lines) if line.startswith("deploy: up at "))
+    assert lines[down - 1].startswith("deploy: recreating")  # just before the recreate
+    assert down < health < up
+    down_at = re.fullmatch(f"deploy: down from ({STAMP})", lines[down])
+    up_at = re.fullmatch(f"deploy: up at ({STAMP})", lines[up])
+    assert down_at and up_at
+    hint = (
+        "deploy: run uv --directory Trader/app run python ../build/cron_gap.py "
+        f"--from {down_at.group(1)} --to {up_at.group(1)} --container trader-dev"
+    )
+    assert lines[up + 1] == hint
+    # The recreate itself runs after the stamp: the compose call is logged after the build and ship.
+    calls = _docker_calls(deploy_env)
+    assert calls[-1].startswith("docker --context shared-docker-server compose")
+
+
+def test_deploy_still_prints_the_down_stamp_and_hint_when_health_fails(deploy_env: dict[str, str]) -> None:
+    env = {**deploy_env, "STUB_HTTP_CODE": "502", "TRADER_HEALTH_TIMEOUT": "3", "TRADER_HEALTH_INTERVAL": "3"}
+    result = _deploy(env, "dev")
+    assert result.returncode == 1
+    assert re.search(f"deploy: down from ({STAMP})", result.stdout)
+    assert "deploy: up at" not in result.stdout
+    assert re.search(f"cron_gap.py --from {STAMP} --to {STAMP} --container trader-dev", result.stdout), (
+        result.stdout
+    )
+
+
+def test_cron_gap_accepts_the_stamps_deploy_prints(deploy_env: dict[str, str]) -> None:
+    """P6-T6 test 14: the printed window goes straight into cron_gap.py."""
+    from tests.build import load_build_script
+
+    result = _deploy(deploy_env, "dev")
+    assert result.returncode == 0, result.stdout + result.stderr
+    down = re.search(f"deploy: down from ({STAMP})", result.stdout)
+    up = re.search(f"deploy: up at ({STAMP})", result.stdout)
+    assert down and up
+    cron_gap = load_build_script("cron_gap")
+    assert cron_gap.main(["--from", down.group(1), "--to", up.group(1), "--container", "trader-dev"]) == 0
 
 
 def test_deploy_rejects_an_unknown_environment(deploy_env: dict[str, str]) -> None:

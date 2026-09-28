@@ -7,9 +7,9 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Field | Value |
 |---|---|
 | Current phase | 5 (Phase 4 COMPLETE ~17:05 MT Sep 27, tag phase-4-complete) |
-| Current task | P5 wave 1 (T2-T7, T9, T10); P4-REVIEW; T8, T11-T16 queued |
+| Current task | P5 gauntlets (group W; replay core) + builders T2, T9, T11, T14, T15, T16 |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-27T22:34:56Z |
+| Last updated (UTC) | 2026-09-28T00:16:12Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
 | Token last refreshed (UTC) | 2026-09-27T17:21:56Z (re-seeded from Stephen's new token after .env.dev rebuild; token removed from .env.dev) |
@@ -103,21 +103,21 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P4-REVIEW | Phase 4 review | T19 | accepted | 1 | PASS; off-loop market data in API, masked job/worker detail, trades->journal refresh, web client contract test | 97416bc |
 | P5-T0 | Write the Phase 5 plan | P4 | accepted | 1 | plan verify+fix PASS | 8ce148e |
 | P5-T1 | Contracts (backend + web), migration 0006 (LIVE) | - | accepted | 1 | contracts + migration 0006 LIVE; gate 2517 py + 366 web | 8ddff8e |
-| P5-T2 | Metrics module | - | building | 1 | builder running | - |
-| P5-T3 | Replay clock + candle fill model | - | building | 1 | builder running | - |
-| P5-T4 | Replay hooks in engine/broker/proposals | - | building | 1 | builder running | - |
-| P5-T5 | Replay data source | - | building | 1 | builder running | - |
-| P5-T6 | Replay runner | - | building | 1 | builder running | - |
-| P5-T7 | Replay API + SSE | - | building | 1 | builder running | - |
-| P5-T8 | Web Replay page | - | todo | 1 | - | - |
-| P5-T9 | Weekly report + Claude commentary | - | building | 1 | builder running | - |
-| P5-T10 | Telegram/relay additions | - | building | 1 | builder running | - |
-| P5-T11 | Kill-switch trips end to end (tests) | - | todo | 1 | - | - |
-| P5-T12 | Reports API + CSV columns | - | todo | 1 | - | - |
-| P5-T13 | Web Reports commentary | - | todo | 1 | - | - |
-| P5-T14 | Error log mirror | - | todo | 1 | - | - |
-| P5-T15 | Job retries + restart recovery | - | todo | 1 | - | - |
-| P5-T16 | Compose limits | - | todo | 1 | - | - |
+| P5-T2 | Metrics module | - | accepted | 1 | GN gauntlet: all metrics breakers pass (view equality, DST edges, replay isolation, no 500s); no findings | bcad841 |
+| P5-T3 | Replay clock + candle fill model | - | accepted | 2 | fix a2: corrupt open -> bad_bar; RC breaker 18/18 | 6471d51 |
+| P5-T4 | Replay hooks in engine/broker/proposals | - | accepted | 2 | fix a2: same-bar pass widens reopened bar; on_candles_for for close-time exits | 6471d51 |
+| P5-T5 | Replay data source | - | accepted | 2 | fix a2: biased days recomputed from daily bars (orb_sip trades); chunked loads, 130x800 scale test bounded; cron quiet times | 6471d51 |
+| P5-T6 | Replay runner | - | accepted | 2 | fix a2: forced close never carries overnight; lock race via pg_locks; offline window kept 09:15-16:30 (breaker pins it; cron quiet times cover 08:00/09:20) | 6471d51 |
+| P5-T7 | Replay API + SSE | - | accepted | 2 | fix a2: GW breaker 29/29 + web 16/16; no value echo in 422s; cancel-before-launch 409; live_or_unscoped in §7.1 | 36ac2bc |
+| P5-T8 | Web Replay page | - | accepted | 2 | fix a2: double-submit guard on start/cancel; CompareTable keeps % (breaker pins it) | 36ac2bc |
+| P5-T9 | Weekly report + Claude commentary | - | fixing | 2 | GN breaker 13/16: trip ratios not x100 (good commentary rejected), </facts> in ticker, cost cap not pre-estimated -> fix a2 | 18a35e4 |
+| P5-T10 | Telegram/relay additions | - | fixing | 2 | GN relay breakers all pass; nits (1 wins, run-to-date bound) in fix a2 | ad8ab72 |
+| P5-T11 | Kill-switch trips end to end (tests) | - | accepted | 1 | tests only (8 e2e): every switch trips/alerts/resets via real engine+relay; works in replay; no prod bugs | 8477c12 |
+| P5-T12 | Reports API + CSV columns | - | accepted | 2 | fix a2: weekly reports served from live runs only; year-1 overflow clamped (404) | 36ac2bc |
+| P5-T13 | Web Reports commentary | - | accepted | 2 | fix a2: no code change needed; web breaker green | 36ac2bc |
+| P5-T14 | Error log mirror | - | fixing | 2 | GO breaker: 4 mirror fails (DSN leak via multiline traceback, deep non-string secrets, re-entry recursion, inline flush ignores timeout) -> fix a2 | c7db4e5 |
+| P5-T15 | Job retries + restart recovery | - | fixing | 2 | GO: retries hold; must-fix stranded sending rows never surfaced -> settle as unknown at worker start; retry deadline -> fix a2 | ad0addd |
+| P5-T16 | Compose limits | - | accepted | 1 | GO gauntlet: compose limits + every P4 setting, dev+prod, parsed as YAML; no findings | 0214068 |
 | P5-T17 | Wiring | - | todo | 1 | - | - |
 | P5-T18 | End to end + LIVE | - | todo | 1 | - | - |
 | P5-REVIEW | Phase 5 review | - | todo | 1 | - | - |
@@ -1717,3 +1717,179 @@ None open.
 - Gate: gate.sh passed (pytest 2612 passed, 12 skipped, web 367 passed)
 - Findings fixed: API market-data DB steps ran on the event loop (OffLoopMarketData), job/worker detail JSON unmasked, AuthUser repr showed the CSRF token, dead auth._totp_step, trades SSE topic did not refresh the journal, quotes/services docstrings (5 s settings lag), new client-vs-route contract test, §7.1 Web API row updated
 - Left: settings fallback duplicated 4x outside QuietSettings (should-fix), proxy subnet default unchecked (should-fix), owner DB URL and admin password in the container env (should-fix before prod), nits (duplicated helpers, str-match in killswitch, prod TRADER_TAG without :?, SPEC deploy wording)
+
+### 2026-09-27 16:58 MT · P5-T7 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-10 ticked
+- Commits: 6ea87b5
+- Gate: gate.sh passed (2660 passed, 2 skipped, web 367 passed)
+- Notes: shared filter feed.live_or_unscoped (run_id null or of a live-mode run) used by feed, dashboard and system. Replay client methods removed from PENDING_ROUTES in test_web_client_contract.py
+
+### 2026-09-27 16:51 MT · P5-T8 · Builder · attempt 1 · started
+- Notes: Web Replay page, worktree agent-a97daca3d10e9222f on trunk 6ea87b5
+
+### 2026-09-27 16:45 MT · P5-T3 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-11 ticked
+- Commits: 6444417
+- Gate: gate.sh passed (2556 Python tests, 366 web tests), 39 new T3 tests
+- Notes: bar open not range-checked (the T4 same-bar pass reopens the bar at the entry fill, which can exceed the high, pinned by a test). slip and fees delegate to QuoteFillModel. Sell stop-limit mirrors the buy (below_limit).
+
+### 2026-09-27 16:54 MT · P5-T12 · Builder · attempt 1 · started
+- Notes: Reports API (weekly) and CSV export columns, worktree agent-ae41eaa979475788f on trunk 6444417
+
+### 2026-09-27 16:52 MT · P5-T4 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-9 and the gate step ticked
+- Commits: ec158e2
+- Gate: gate.sh passed (2638 passed, 13 skipped, web 367 passed)
+- Notes: 27 new T4 tests, including the real CandleFillModel same-bar test (green now that T3 is on trunk). Existing P2/P3 broker, engine, strategies, integration and breaker tests unchanged and green
+
+### 2026-09-27 16:58 MT · P5-T13 · Builder · attempt 1 · started
+- Web Reports commentary (Reports.tsx, reports/Commentary.tsx, Reports.test.tsx)
+
+### 2026-09-27 17:05 MT · P5-T6 · Builder · attempt 1 · finished
+- Result: done. All 12 plan checkboxes ticked, build notes added to the P5 plan
+- Commits: acb608c
+- Gate: gate.sh passed (2697 pytest, 3 skipped, 367 vitest). An earlier gate failed only on my own extra ReplayDeps field (T1 pins the fields), which I removed
+- Notes: 38 new tests (test_runner 34, test_setup 4), also green against the real P5-T3 ReplayClock. open_replay_deps builds QuestradeAuth directly because trader.runtime imports Telegram. The default config_writer test skips until P5-T4 lands
+
+### 2026-09-27 16:59 MT · P5-T14 · Builder · attempt 1 · started
+- Notes: error log mirror to event_log (trader/logging_mirror.py, tests/test_logging_mirror.py)
+
+### 2026-09-27 17:05 MT · P5-T10 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-8 ticked
+- Commits: ad8ab72
+- Gate: gate.sh passed (2641 passed, 12 skipped, web 367 passed)
+- Notes: 29 new tests (messages 16, relay 6, postclose run-to-date 7). P3 notify/relay/postclose/breakers/worker_day unchanged and green. daily_summary_view gains keyword expectancy_min_trades (None means no metrics).
+
+### 2026-09-27 17:06 MT · P5-T15 · Builder · attempt 1 · started
+- Notes: job retries (trader/jobs/runner.py) and restart recovery test (tests/jobs/test_runner_retry.py, tests/integration/test_restart_recovery.py)
+
+### 2026-09-27 17:11 MT · P5-T12 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-4 ticked
+- Commits: 9407204
+- Gate: gate.sh passed (2784 pytest, 367 vitest); 18 new T12 tests
+- Notes: weekly lookup is week_start in [week-6d, week] (no calendar, so week_window from T9 not needed). weeklyReport removed from PENDING_ROUTES (now empty). New CSV text cells go through safe_cell
+
+### 2026-09-27 17:20 MT · P5-T8 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-9 ticked
+- Commits: 608ab04
+- Gate: gate.sh passed (pytest 2764 passed 2 skipped, vitest 401 passed, tsc clean)
+- Notes: default range is 20 weekdays ending at latest_allowed (web has no session calendar). 422 locs joined after body with dots. Differences exact BigInt decimals. Trades and equity refetched when replay status or sessions_done changes (replay rows never move trading SSE topics).
+
+### 2026-09-27 17:14 MT · P5-T16 · Builder · attempt 1 · started
+- Notes: compose resource and log limits (docker/docker-compose.dev.yml, docker/docker-compose.prod.yml, tests/test_docker_limits.py)
+
+### 2026-09-27 17:15 MT · P5-T13 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-6 ticked
+- Commits: 5077622
+- Gate: gate.sh passed (pytest 2726 passed, 2 skipped, vitest 384 passed, ruff, mypy, tsc clean)
+- Notes: P4 gauntlet web_pages_breaker.test.tsx untouched and does not pin the old note line. Commentary is plain text, never auto-linked.
+
+### 2026-09-27 17:18 MT · P5-GW (T7, T8, T12, T13) · Gauntlet (verify + break + review) · attempt 1 · started
+- Notes: tests in tests/gauntlet/test_p5_gw_breaker.py and web/src/gauntlet/p5_web_breaker.test.tsx
+
+### 2026-09-27 17:18 MT · P5-T5 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-10 pass (13 tests in tests/replay/test_data.py and test_catalysts.py)
+- Commits: 38897bc
+- Gate: gate.sh passed (2625 passed, 12 skipped, web 367 passed)
+- Notes: FiveMinutes fetched per symbol once over the still-missing in-window sessions, windows at most MAX_CANDLES_PER_REQUEST. Biased members carry names only. Extra helper held_counts()
+
+### 2026-09-27 17:19 MT · P5-RC (T3, T4, T5, T6) · Spec + Code reviewer · attempt 1 · started
+- Notes: read-only review of the replay core on origin/trunk; log in docs/build/agents/P5-RC-reviewer-a1.md
+
+### 2026-09-27 17:47 MT · P5-RC (T3, T4, T5, T6) · Spec + Code reviewer · attempt 1 · finished
+- Result: FAIL (1 must-fix, 3 should-fix, nits)
+- Findings: MUST T5 biased-day members get avg_volume None, so orb_sip rejects every candidate (avg_volume_below_min) and a biased replay never trades; SHOULD T6 run_replay's single try of REPLAY_LOCK can lose to reconcile_abandoned (list route) and the run is later marked abandoned; SHOULD T6 full mode decided only at creation, so a full replay started just before 09:15 ET or near the 20:00 nightly fetches at 4 rps during them; SHOULD T5 opening and daily bars for all future sessions held from the first load (about 100-200 MB peak for a 130-session biased run)
+- Notes: fill rules, same-bar pass, cutoffs, lookahead filters, audit_auto, registry scope and on_quotes equivalence all check out. Builder decisions accepted except the T5 null-out of avg_volume
+
+### 2026-09-27 17:19 MT · P5-RC (T3,T4,T5,T6) · Verifier+Breaker · attempt 1 · started
+- Notes: verify replay core (6444417, ec158e2, 38897bc, acb608c) and write tests/gauntlet/test_p5_rc_breaker.py
+
+### 2026-09-27 17:32 MT · P5-T14 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-9 and the gate step ticked, build notes added to the P5 plan
+- Commits: c7db4e5
+- Gate: gate.sh passed (2807 pytest passed, 2 skipped, 367 vitest)
+- Notes: 14 new tests in tests/test_logging_mirror.py. Rate limits are applied in the writer thread, so emit only masks the line and queues it. dropped counts queue-full, rate-limit and failed-write losses, all reported in the "log mirror dropped N lines" row. The P5-T1 stub test now leaves a harmless None-factory handler and daemon thread in the test process
+
+### 2026-09-27 17:50 MT · P5-T9 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-10 ticked
+- Commits: 18a35e4
+- Gate: gate.sh passed (2648 pytest passed, 12 skipped, 367 vitest)
+- Notes: build_facts gains keyword settings=, the length rule lives in check_length (rejected, retried once), compute_metrics monkeypatched in tests (T2 was a stub at build time)
+
+### 2026-09-27 17:58 MT · P5-GW (T7, T8, T12, T13) · Gauntlet (verify + break + review) · attempt 1 · finished
+- Result: VERIFY PASS (clean tree, boxes ticked, gate green on 5077622, pytest 2813, vitest 432 without the new tests). BREAKER FAIL (5 of 16 tests)
+- Commits: d47963d (tests/gauntlet/test_p5_gw_breaker.py, web/src/gauntlet/p5_web_breaker.test.tsx)
+- Failing: 422 echoes strategy param values (entry_cancel_at, exit_at), ?week=0001-01-01 is 500, weekly report of a replay run is served, same-tick double Start and double Stop each send 2 requests
+- Notes: isolation sweep of every live route, SSE watermarks on updates, real-runner 409, offline window, cancel race, launcher, CSRF sweep and CSV guard all pass
+
+### 2026-09-27 17:35 MT · P5-T16 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-4 ticked
+- Commits: 0214068
+- Gate: gate.sh passed (pytest 2822 passed, vitest 418 passed)
+- Notes: both compose files gain mem_limit/memswap_limit 1g, cpus 2.0, pids_limit 256, nofile 4096/8192, json-file 10m x 5, with comments (replay shares the limits). All P4 settings kept (no TRADER_FORWARDED_ALLOW_IPS on trunk to keep). 9 new tests in tests/test_docker_limits.py. docker compose config validates both files. No deploy (T18).
+
+### 2026-09-27 17:37 MT · P5-GW · Builder · attempt 2 · started
+- Result: fix round for group W (T7 replay API, T8 web Replay, T12 reports API, T13 web Reports) gauntlet findings
+
+### 2026-09-27 17:42 MT · P5-RC (T3,T4,T5,T6) · Verifier+Breaker · attempt 1 · finished
+- Result: Verify: git status clean, all T3/T4/T5/T6 boxes ticked, T4/T3-gated tests now run (no skips in tests/replay, test_engine_candles). Breaker: FAIL (1 of 18)
+- Commits: bd5bc0c (tests/gauntlet/test_p5_rc_breaker.py)
+- Gate: 2825 passed, 1 failed: test_p4_backend_b_breaker::test_run_worker_exit_codes_and_signal_forwarding (timing 0.94s > 0.9s at load avg 19, passes alone, unrelated to replay)
+- Findings: test_11_forced_close_with_zero_volume_bars_to_the_close: a zero-volume (or unusable) real bar ending at the close blocks the forced exit (synthetic bar only when no bar exists), so the replay leaves a position open past the close
+
+### 2026-09-27 17:44 MT · P5-RC · Builder · attempt 2 · started
+- Result: fix round (verify+fix) for replay core T3-T6: forced close, biased days, lock race, full-mode window, memory, nits, P4 flaky threshold
+
+### 2026-09-27 17:58 MT · P5-T2 · Builder · attempt 1 · finished
+- Result: done. All 8 plan checkboxes ticked, build notes added to the P5 plan
+- Commits: bcad841
+- Gate: gate.sh passed (2626 pytest, 12 skipped, 367 vitest)
+- Notes: kept performance.compute_metrics/histogram_bins (P4-T18 callers) as thin wrappers. Plan conflict: the P4-T7 ranged-drawdown fixture had flat equity with hand-set drawdown_pct, so it now has consistent equity and the assertion (0.03) is unchanged. After the final rebase, 3 tests in tests/gauntlet/test_p5_gw_breaker.py fail on the replays/reports routers (T7/T12 breaker findings), not in T2 files
+
+### 2026-09-27 18:05 MT · P5-T11 · Builder · attempt 1 · finished
+- Result: done. Tests only (tests/integration/test_killswitch_trips.py, 8 tests). No production defect, nothing xfailed
+- Commits: 8477c12
+- Gate: gate.sh passed (2848 pytest, 418 vitest)
+- Notes: a 15 percent drawdown in three sessions needs one day worse than 5 percent, so the daily switch also trips on that fill in test 2. A web-app pause is not relayed to Telegram (P3 and P5-T10 design)
+
+### 2026-09-27 18:25 MT · P5-T15 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-9 ticked
+- Commits: ad0addd
+- Gate: gate.sh 2929 passed, 3 failed, all in tests/gauntlet/test_p5_gw_breaker.py (another task's reports/replays breaker, unrelated to the runner)
+- Notes: 18 new tests (runner retry 16, restart recovery 2). P3 jobs/engine/integration/gauntlet/worker/runtime/contracts 928 passed. Deviation: nothing on trunk turns `sending` into `unknown`; the notifier already never re-sends `sending`, so test 6 checks the row stays `sending`. The killed day uses two kills (A, B) and worker C, so both footprints are real.
+
+### 2026-09-27 17:53 MT · P5-GN (T2,T9,T10) · Verifier+Breaker+Reviewer · attempt 1 · started
+- Result: gauntlet for group N (metrics, weekly report, Telegram relay)
+
+### 2026-09-27 17:53 MT · P5-GO (T14,T15,T16) · Verifier+Breaker+Reviewer · attempt 1 · started
+- Result: verify, break (test_p5_go_breaker.py) and review group O: log mirror, job retries, compose limits
+
+### 2026-09-27 17:56 MT · P5-GW · Builder · attempt 2 · finished
+- Result: all 16 P5-GW breaker tests pass (Python 29/29, web 16/16), MUST items fixed, nits fixed except the "pp" label (a breaker test pins "%")
+- Commits: 36ac2bc
+- Gate: gate.sh 2951 passed, 1 failed = tests/gauntlet/test_p5_rc_breaker.py::test_11_forced_close_with_zero_volume_bars_to_the_close (replay-core, not this group), web check 436 passed
+- Notes: 0001-01-01 is 404 (breaker pins 404, not 422), _settings kept (no public helper in deps)
+
+### 2026-09-27 18:20 MT · P5-GN (T2,T9,T10) · Verifier+Breaker+Reviewer · attempt 1 · finished
+- Result: Verify PASS (git status clean, all T2/T9/T10 boxes ticked). Breaker FAIL (3 of 16 tests, 18 cases). Review: 0 must-fix, 3 should-fix, nits
+- Commits: bf513fd (tests/gauntlet/test_p5_gn_breaker.py)
+- Gate: 2976 passed, 4 failed, none in group N: 3 in test_p5_gw_breaker.py (excused), test_p5_rc_breaker::test_11 (open P5-RC finding)
+- Findings: test_05 kill-switch trip value/threshold quoted as percentages are rejected by the number check (weekly.py _is_ratio). test_07 a ticker containing </facts> closes the prompt's facts block (claude/reports.py build_prompt). test_08 no worst-case cost check before the call, so a large facts payload costs 0.20 against the 0.05 cap (jobs/weekly.py _commentary)
+
+### 2026-09-27 18:09 MT · P5-GN · Builder · attempt 2 · started
+- Fix round for group N (T9 weekly report, T10 messages/relay): breaker t05/t07/t08 plus nits
+
+### 2026-09-27 18:20 MT · P5-GO (T14,T15,T16) · Verifier+Breaker+Reviewer · attempt 1 · finished
+- Result: Verify PASS (status clean, T14 1-10, T15 1-9, T16 1-4 ticked). Breaker FAIL (4 of 16, all T14). Review: 1 must-fix (T15 sending row never surfaced), should-fixes on T14
+- Commits: 9298714 (tests/gauntlet/test_p5_go_breaker.py)
+- Gate: 2989 passed, 8 failed: 4 new P5-GO (01, 03, 05, 10), 3 test_p5_gw_breaker (separate fix round), 1 test_p5_rc_breaker test_11 (P5-RC fix round)
+- Findings: mirror leaks a DSN password from a structlog exc_info traceback (last-line parse), keeps non-str secrets below depth 4, re-enters its own handler (87 rows from one line), flush/close ignore timeout without a writer thread. T15: a `sending` notification left by a hard kill is never re-sent AND never shown (System UNDELIVERED is failed/unknown only)
+
+### 2026-09-27 18:13 MT · P5-GO · Builder · attempt 2 · started
+- Result: fix round for group O (P5-T14 log mirror, P5-T15 retries/restart recovery) gauntlet findings
+
+### 2026-09-27 18:25 MT · P5-RC · Builder · attempt 2 · finished
+- Result: all MUST items fixed, plus should-fix 3 and 5, the crontab part of 4, and every nit. 4's offline-window widening NOT done: it conflicts with RC Breaker test 17 (09:14:59 must be full)
+- Commits: 6471d51
+- Gate: gate.sh ran 3045 passed and 7 failed. All 7 failures are in P5-GN/P5-GO breaker evidence files (other groups). Targeted run 257 passed, RC breaker 18/18
+- Notes: new Engine.on_candles_for, ReplayData(created_at=, quiet_sleep=), reconcile uses pg_locks

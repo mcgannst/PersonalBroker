@@ -2,3 +2,4 @@
 - 16:28:03 MT started, pulled trunk (8ddff8e), read plans | next: read sim_broker, orchestrator, proposals, registry
 - 16:33:19 MT implemented broker on_candles, engine on_candles, audit_auto, registry scope; broker candle tests 10 passed | next: engine, proposals, registry tests
 - 16:41:56 MT all 26 T4 tests green (1 skip: T3 stub), targeted P2/P3 broker/engine/strategies/integration/breakers 585 passed; rebased on 97416bc | next: full gate via gate.sh
+- 16:57:07 MT gate passed (2638 py passed, 13 skipped, 367 web); committed and pushed ec158e2; after rebase T3 landed and the real-model same-bar test runs green | next: finished

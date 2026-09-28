@@ -965,6 +965,54 @@ async def test_10_a_pass_blocked_by_the_final_pass_returns_final(db_factory: ses
     assert rows(db_factory, w.run_id) and all(r.final for r in rows(db_factory, w.run_id))
 
 
+async def test_a_rebuild_of_a_final_day_keeps_it_final(db_factory: sessionmaker[Session]) -> None:
+    """Fix round 1 nit: `rebuild=True` with `final=False` (e.g. `trader decisions record --rebuild`) rebuilds
+    a frozen day but never un-freezes it."""
+    w = scan_world(db_factory)
+    d = deps(db_factory)
+    assert (await record_day(d, w.run_id, D, final=True)).final
+    res = await record_day(d, w.run_id, D, rebuild=True)
+    assert res.skipped is None and res.final
+    assert all(r.final for r in rows(db_factory, w.run_id))
+    assert (await record_day(d, w.run_id, D)).skipped == "final"
+
+
+async def test_the_fingerprint_covers_the_settings_the_rows_use_and_the_watchlist(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """Fix round 1 nit: the pre-market gap threshold, the cost buffer, the fee settings, the FinViz filters
+    and the day's manual watchlist are shown on rows, so a change to any of them rebuilds a day not yet
+    final."""
+    w = scan_world(db_factory)
+    base: dict[str, Any] = {}
+    assert (await record_day(deps(db_factory), w.run_id, D)).skipped is None
+    for key, value in (
+        ("premarket.gap_min_pct", "0.05"),
+        ("slippage_buffer", "0.01"),
+        ("fees.ecn_per_share", "0.0040"),
+        ("universe.finviz_filters", "ind_stocksonly,geo_usa"),
+    ):
+        base[key] = value
+        changed = deps(db_factory, settings=RuntimeSettings.model_validate(dict(base)))
+        assert (await record_day(changed, w.run_id, D)).skipped is None, key
+        assert (await record_day(changed, w.run_id, D)).skipped == "unchanged", key
+    same = deps(db_factory, settings=RuntimeSettings.model_validate(dict(base)))
+    with session_scope(db_factory) as s:
+        s.add(
+            m.ManualWatchlist(
+                session_date=D,
+                tickers=["R01"],
+                filename="mine.csv",
+                uploaded_at=et(8, 0),
+                uploaded_by="stephen",
+            )
+        )
+    assert (await record_day(same, w.run_id, D)).skipped is None
+    (universe,) = rows(db_factory, w.run_id, "universe")
+    assert universe.data["watchlist"] == "mine.csv"
+    assert universe.data["finviz_filters"] == "ind_stocksonly,geo_usa"
+
+
 # --- 11: masking and caps ---------------------------------------------------------------------------------
 def test_11_cap_data_truncates_long_lists_with_a_marker() -> None:
     big = {"notes": [{"message": f"note {i} " + "y" * 100} for i in range(200)], "count": 200, "token": "abc"}

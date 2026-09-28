@@ -117,6 +117,8 @@ def test_an_unknown_run_is_404(db_factory: sessionmaker[Session]) -> None:
         {"limit": 5001},
         {"limit": 0},
         {"offset": -1},
+        {"offset": 2**31},  # fix round 1: capped (2**31 - 1), so past-bigint offsets are 422, never a 500
+        {"offset": 10**19},
         {"run_id": "abc"},
     ],
 )

@@ -13,6 +13,7 @@ from trader.db.session import session_scope
 from trader.decisions import prune as prune_mod
 from trader.decisions.prune import PruneResult, prune
 from trader.market.clock import FixedClock
+from trader.replay.types import ACTIVE_STATUSES
 from trader.settings_store import RuntimeSettings
 
 pytestmark = pytest.mark.db
@@ -63,7 +64,7 @@ def test_18_prune_live_and_replay_rows(
         _rows(s, live, TODAY, 1)
         _rows(s, old_replay, TODAY - timedelta(days=40), 7)
         _rows(s, new_replay, TODAY - timedelta(days=40), 2)
-        _rows(s, running, TODAY - timedelta(days=900), 1)  # not finished: kept
+        _rows(s, running, TODAY - timedelta(days=900), 1)  # still running: kept
     res = prune(db_factory, FixedClock(NOW), RuntimeSettings())
     assert res == PruneResult(live_deleted=7, replay_deleted=7)
     assert _count(db_factory, live) == 5
@@ -71,6 +72,32 @@ def test_18_prune_live_and_replay_rows(
     assert _count(db_factory, new_replay) == 2
     assert _count(db_factory, running) == 1
     assert prune(db_factory, FixedClock(NOW), RuntimeSettings()) == PruneResult(0, 0)
+
+
+def test_prune_ages_an_abandoned_replay_from_its_last_progress_else_its_start(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """Gauntlet nit (fix round 1): a settled replay whose `finished_at` is NULL is pruned once its last
+    progress write, or its start when it wrote none, is older than the retention. A queued or running replay
+    is left alone (`reconcile_abandoned` settles an abandoned one with a `finished_at`)."""
+    with session_scope(db_factory) as s:
+        no_progress = add_run(s, mode="replay", status="cancelled", started_at=NOW - timedelta(days=31))
+        stale = add_run(s, mode="replay", status="failed", started_at=NOW - timedelta(days=60))
+        s.get(m.Run, stale).updated_at = NOW - timedelta(days=31)  # type: ignore[union-attr]
+        recent = add_run(s, mode="replay", status="failed", started_at=NOW - timedelta(days=60))
+        s.get(m.Run, recent).updated_at = NOW - timedelta(days=29)  # type: ignore[union-attr]
+        running = add_run(s, mode="replay", status="running", started_at=NOW - timedelta(days=90))
+        queued = add_run(s, mode="replay", status="queued", started_at=NOW - timedelta(days=90))
+        s.flush()
+        runs = (no_progress, stale, recent, running, queued)
+        for run in runs:
+            _rows(s, run, TODAY - timedelta(days=60), 2)
+    assert prune(db_factory, FixedClock(NOW), RuntimeSettings()) == PruneResult(0, 4)
+    assert [_count(db_factory, r) for r in runs] == [0, 0, 2, 2, 2]
+
+
+def test_the_active_replay_statuses_equal_the_runners() -> None:
+    assert prune_mod.ACTIVE_REPLAY_STATUSES == ACTIVE_STATUSES
 
 
 def test_18_prune_follows_the_settings(db_factory: sessionmaker[Session]) -> None:

@@ -11,6 +11,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from sqlalchemy import event, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.factories import add_run, add_symbol
@@ -321,15 +322,57 @@ def test_list_days_newest_first_with_counts(db_factory: sessionmaker[Session]) -
     with db_factory() as s:
         run = add_run(s)
         seed_day(s, run, D1, proposals=0, trades=0, prefix="A")
-        seed_day(s, run, D2, prefix="B")
+        seed_day(s, run, D2, final=False, prefix="B")
         seed_day(s, run, D3, final=False, with_day_row=False, prefix="C")
         s.commit()
     days = read.list_days(db_factory, run_id=None)
-    assert [(d.session_date, d.final) for d in days] == [(D3, False), (D2, True), (D1, True)]
-    assert (days[1].proposals, days[1].trades, days[1].summary_text) == (1, 1, SUMMARY_TEXT)
-    assert (days[2].proposals, days[2].trades) == (0, 0)
-    assert (days[0].proposals, days[0].trades, days[0].summary_text) == (0, 0, None)
-    assert [d.session_date for d in read.list_days(db_factory, run_id=None, limit=2)] == [D3, D2]
+    # Fix round 1: only `day` rows are read (the recorder writes one per day in the same transaction), so a
+    # day with rows but no day row (never visible in practice) is not listed.
+    assert [(d.session_date, d.final) for d in days] == [(D2, False), (D1, True)]
+    assert (days[0].proposals, days[0].trades, days[0].summary_text) == (1, 1, SUMMARY_TEXT)
+    assert (days[1].proposals, days[1].trades) == (0, 0)
+    assert [d.session_date for d in read.list_days(db_factory, run_id=None, limit=1)] == [D2]
+    assert [d.session_date for d in read.list_days(db_factory, run_id=run, limit=1)] == [D2]
+
+
+def test_list_days_reads_only_the_day_rows_through_the_run_day_stage_index(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """Gauntlet should-fix: the day list must not group every row of every day (≈1,000 scan rows a day).
+    The query per run is `run_id = ? AND stage = 'day' ORDER BY session_date DESC LIMIT n`, served by
+    `ix_decision_log_run_day_stage` (seq scans off, so the tiny test table can't hide the plan)."""
+    with db_factory() as s:
+        run = add_run(s)
+        seed_day(s, run, D1, prefix="A")
+        s.commit()
+    statements: list[str] = []
+
+    def spy(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        statements.append(statement)
+
+    engine = db_factory.kw["bind"]
+    event.listen(engine, "before_cursor_execute", spy)
+    try:
+        assert [d.session_date for d in read.list_days(db_factory, run_id=None)] == [D1]
+    finally:
+        event.remove(engine, "before_cursor_execute", spy)
+    on_log = [x for x in statements if "decision_log" in x]
+    assert on_log and all("GROUP BY" not in x.upper() for x in on_log), on_log
+    with db_factory() as s:
+        s.execute(text("SET LOCAL enable_seqscan = off"))
+        plan = "\n".join(
+            s.execute(
+                text(
+                    "EXPLAIN SELECT * FROM trader.decision_log WHERE run_id = :r AND stage = 'day' "
+                    "ORDER BY session_date DESC, stage DESC LIMIT 30"
+                ),
+                {"r": run},
+            ).scalars()
+        )
+    assert "ix_decision_log_run_day_stage" in plan, plan
+    # `stage` is checked in the index (no heap visit per scan row) and no sort is needed
+    cond = next(line for line in plan.splitlines() if "Index Cond" in line)
+    assert "stage" in cond and "Sort" not in plan, plan
 
 
 # --- isolation (test 5) -------------------------------------------------------------------------------------
@@ -370,3 +413,25 @@ def test_an_older_live_runs_days_still_show(db_factory: sessionmaker[Session]) -
     ]
     view = read.load_day(db_factory, None, D1)
     assert view is not None and view.run_id == old
+
+
+def test_a_date_two_live_runs_recorded_is_listed_once_as_the_run_load_day_serves(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """Fix round 1 nit: the "Recent days" list has one item per date, and it is the run a date-only load
+    serves (the active live run when it has the day, else the newest live run)."""
+    with db_factory() as s:
+        active = add_run(s)
+        newer = add_run(s, status="completed")  # newer id, not active
+        newest = add_run(s, status="completed")
+        seed_day(s, active, D2, prefix="A")
+        seed_day(s, newer, D2, prefix="B")
+        seed_day(s, newer, D1, prefix="C")
+        seed_day(s, newest, D1, prefix="D")
+        s.commit()
+    days = read.list_days(db_factory, run_id=None)
+    assert [(d.run_id, d.session_date) for d in days] == [(active, D2), (newest, D1)]
+    for item in days:
+        view = read.load_day(db_factory, None, item.session_date)
+        assert view is not None and view.run_id == item.run_id
+    assert [d.session_date for d in read.list_days(db_factory, run_id=None, limit=1)] == [D2]

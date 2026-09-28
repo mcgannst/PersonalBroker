@@ -46,6 +46,7 @@ router = APIRouter(tags=["decisions"])
 
 MAX_ROWS = 5000
 MAX_DAYS = 400
+MAX_OFFSET = 2**31 - 1  # far past any day (≈1,000 rows), well inside bigint: a larger one is 422, not a 500
 
 RunIdQuery = Annotated[int | None, Query(ge=1, le=2**63 - 1)]
 
@@ -163,7 +164,7 @@ def decision_day(
     outcome: DecisionOutcome | None = None,
     ticker: Annotated[str | None, Query(max_length=20)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_ROWS)] = 2000,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    offset: Annotated[int, Query(ge=0, le=MAX_OFFSET)] = 0,
 ) -> DecisionDayOut:
     _check_run(services, run_id)
     view = read.load_day(

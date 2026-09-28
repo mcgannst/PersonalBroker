@@ -1,15 +1,17 @@
 """Decision log retention (P6-T10).
 
 `prune` deletes live-run rows whose `session_date` is older than `reports.decisions_retention_days` (ET
-today) and the rows of replay runs finished more than `reports.decisions_replay_retention_days` ago, in
-batches of 5,000 (one short transaction each), and returns the counts. It deletes `decision_log` rows only.
+today) and the rows of replay runs finished more than `reports.decisions_replay_retention_days` ago (a replay
+without `finished_at` that is no longer queued or running counts from its last progress write, else its
+start), in batches of 5,000 (one short transaction each), and returns the counts. It deletes `decision_log`
+rows only.
 """
 
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, delete, select
+from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -19,6 +21,7 @@ from trader.market.clock import Clock, et_date
 from trader.settings_store import RuntimeSettings
 
 BATCH = 5000
+ACTIVE_REPLAY_STATUSES = ("queued", "running")  # trader.replay.types.ACTIVE_STATUSES (test_prune pins it)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,8 +56,15 @@ def prune(factory: sessionmaker[Session], clock: Clock, settings: RuntimeSetting
         factory, (m.DecisionLog.run_id.in_(live_runs)) & (m.DecisionLog.session_date < cutoff)
     )
     replay_before = now - timedelta(days=settings.reports_decisions_replay_retention_days)
+    # A settled replay without `finished_at` (failed or cancelled by a path that didn't stamp it) ages from
+    # its last progress write, else its start, so its rows don't stay forever. A queued or running replay is
+    # never touched: if it was abandoned, `reconcile_abandoned` settles it with a `finished_at` (it ages from
+    # that).
+    last_seen = func.coalesce(m.Run.finished_at, m.Run.updated_at, m.Run.started_at)
     old_replays = select(m.Run.id).where(
-        m.Run.mode == "replay", m.Run.finished_at.is_not(None), m.Run.finished_at < replay_before
+        m.Run.mode == "replay",
+        m.Run.finished_at.is_not(None) | m.Run.status.not_in(ACTIVE_REPLAY_STATUSES),
+        last_seen < replay_before,
     )
     replay = _delete_batches(factory, m.DecisionLog.run_id.in_(old_replays))
     return PruneResult(live_deleted=live, replay_deleted=replay)

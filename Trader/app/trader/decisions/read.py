@@ -5,8 +5,9 @@ is that run; an unknown id is None.
 
 **Replay isolation.** Without an explicit run id only live runs are ever served (the `live_or_unscoped`
 rule: rows of an older, non-active live run are still live rows): `list_days(run_id=None)` lists the days of
-every live run, and `load_day(None, D)` serves the resolved live run's day D, or, when it has none, the
-newest live run that has rows for D. A replay's rows need its explicit `run_id`.
+every live run (one item per date, the run `load_day(None, date)` serves), and `load_day(None, D)` serves
+the resolved live run's day D, or, when it has none, the newest live run that has rows for D. A replay's rows
+need its explicit `run_id`.
 
 `load_day` orders rows by `seq`, filters by stage, outcome and ticker (case-insensitive), and takes the
 summary from the day's `day` row whatever the filters. The `day` row's `data` holds the `DaySummary` fields
@@ -98,32 +99,58 @@ def has_rows(s: Session, run_id: int, session_date: date) -> bool:
 
 
 def list_days(factory: sessionmaker[Session], *, run_id: int | None, limit: int = 30) -> list[DayItem]:
-    """The newest `limit` days with rows: of the given run, or (None) of every live run."""
+    """The newest `limit` recorded days, newest first: of the given run, or (None) of every live run, one
+    item per date. When two live runs recorded the same date, the item is the run `load_day(None, date)`
+    serves (the resolved live run, else the newest), so picking a date in the list opens that same run.
+
+    Only the `day` rows are read (one per recorded day: the recorder writes it last, in the same transaction
+    as the day's other rows, so a day without one is never visible). Per run, the query walks
+    `ix_decision_log_run_day_stage (run_id, session_date, stage)` backwards from the newest day, checking
+    `stage` in the index, and stops after `limit` day rows: it never reads or groups the scan rows."""
     d = m.DecisionLog
-    stmt = select(d.run_id, d.session_date, func.bool_and(d.final)).group_by(d.run_id, d.session_date)
-    if run_id is None:
-        stmt = stmt.join(m.Run, m.Run.id == d.run_id).where(m.Run.mode == LIVE)
-    else:
-        stmt = stmt.where(d.run_id == run_id)
-    stmt = stmt.order_by(d.session_date.desc(), d.run_id.desc()).limit(limit)
     with factory() as s:
-        keys = [(r, day, bool(final)) for r, day, final in s.execute(stmt)]
+        preferred: int | None = None
+        if run_id is None:
+            run_ids = list(s.scalars(select(m.Run.id).where(m.Run.mode == LIVE)))
+            resolved = _resolve(s, None)
+            preferred = None if resolved is None else resolved[0]
+        else:
+            run_ids = [run_id]
+        by_date: dict[date, m.DecisionLog] = {}
+        for rid in run_ids:
+            stmt = (
+                select(d)
+                .where(d.run_id == rid, d.stage == "day")
+                .order_by(d.session_date.desc(), d.stage.desc())
+                .limit(limit)
+            )
+            for row in s.scalars(stmt):
+                kept = by_date.get(row.session_date)
+                if kept is None or _serves_before(row.run_id, kept.run_id, preferred):
+                    by_date[row.session_date] = row
+        newest = sorted(by_date.values(), key=lambda r: r.session_date, reverse=True)[:limit]
         items: list[DayItem] = []
-        for r, day, all_final in keys:
-            day_row = _day_row(s, r, day)
-            data = _mapping(day_row.data) if day_row is not None else {}
+        for day_row in newest:
+            data = _mapping(day_row.data)
             src = _summary_source(data)
             items.append(
                 DayItem(
-                    run_id=r,
-                    session_date=day,
-                    final=day_row.final if day_row is not None else all_final,
+                    run_id=day_row.run_id,
+                    session_date=day_row.session_date,
+                    final=day_row.final,
                     summary_text=_text(data),
                     proposals=_int(src.get("proposals")) or 0,
                     trades=_int(src.get("trades")) or 0,
                 )
             )
     return items
+
+
+def _serves_before(candidate: int, kept: int, preferred: int | None) -> bool:
+    """`pick_run`'s order for one date: the resolved live run first, then the newest run."""
+    if kept == preferred:
+        return False
+    return candidate == preferred or candidate > kept
 
 
 def load_day(

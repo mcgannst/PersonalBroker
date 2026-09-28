@@ -158,3 +158,45 @@ def test_the_copied_constants_equal_their_sources() -> None:
     assert recorder.OVER_CAP_PREFIX == catalyst.OVER_CAP
     assert recorder.BUDGET_PREFIX == catalyst.BUDGET_EXCEEDED
     assert recorder.AUTO_FLATTEN_ACTOR == proposals.AUTO_FLATTEN_ACTOR
+
+
+def _string_constants(rel: str) -> set[str]:
+    tree = ast.parse((TRADER / rel).read_text())
+    return {n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+
+
+def _f_string_templates(rel: str) -> list[list[str | None]]:
+    """Every f-string in a module as its parts: literal text, or None for a formatted value."""
+    tree = ast.parse((TRADER / rel).read_text())
+    return [
+        [v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else None for v in node.values]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.JoinedStr)
+    ]
+
+
+def test_the_skipped_scan_notes_are_the_strategys_own_texts() -> None:
+    """Fix round 1 nit: the recorder recognises a skipped 9:35 scan by the orb_sip note text, so every key of
+    SKIPPED_NOTES must be a string the strategy writes (a reworded note would silently stop matching)."""
+    texts = _string_constants("strategies/orb_sip.py")
+    assert set(recorder.SKIPPED_NOTES) <= texts, set(recorder.SKIPPED_NOTES) - texts
+    assert set(recorder.SKIPPED_NOTES.values()) == {
+        "skipped:max_positions",
+        "skipped:stale_universe",
+        "skipped:no_universe",
+    }
+
+
+def test_the_entry_blocked_pattern_matches_the_engines_texts() -> None:
+    """Fix round 1 nit: a blocked approval is recognised by ProposalService's `entry blocked: {reason}`, and
+    the switch is read from the kill-switch guard's `kill switch {switch} is tripped`. Both templates are
+    taken from the engine's source and filled in the way the engine fills them."""
+    prefix = recorder.ENTRY_BLOCKED_PREFIX
+    (blocked,) = [t for t in _f_string_templates("engine/proposals.py") if t[:1] == [prefix]]
+    assert blocked == [prefix, None]
+    guard_text = ["kill switch ", None, " is tripped"]  # KillSwitches.entry_guard
+    (guard,) = [t for t in _f_string_templates("engine/killswitch.py") if t == guard_text]
+    reason = "".join(p if p is not None else "daily_loss" for p in guard)
+    error = "".join(p if p is not None else reason for p in blocked)
+    hit = recorder._BLOCKED_SWITCH.search(error)
+    assert hit is not None and hit.group(1) == "daily_loss", error

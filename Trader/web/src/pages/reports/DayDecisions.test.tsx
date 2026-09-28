@@ -10,7 +10,7 @@ import { FakeApiClient } from "../../test/fakeApi";
 import * as fx from "../../test/fixtures";
 import { renderWithProviders } from "../../test/render";
 import ReportsPage from "../Reports";
-import { DAY_PAGE_SIZE, dayHref } from "./DayDecisions";
+import { DAY_PAGE_SIZE, dayHref, uniqueDays } from "./DayDecisions";
 
 function table(): HTMLElement {
   return screen.getByRole("table", { name: "Decisions" });
@@ -139,6 +139,31 @@ describe("Reports Day view", () => {
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Recent days" }), "2026-10-05");
     expect(r.location().search).toBe("?day=2026-10-05");
     await waitFor(() => expect(r.api.callsTo("decisionDay").at(-1)).toEqual([{ date: "2026-10-05", limit: DAY_PAGE_SIZE, offset: 0 }]));
+  });
+
+  it("a date two live runs recorded is listed once, and picking it asks for the date alone", async () => {
+    // fix round 1: the server lists a date once (the run a date-only request serves); the picker keeps one
+    // option per date whatever it gets, so option values stay unique
+    const days = [
+      { run_id: 9, session_date: "2026-10-06", final: true, summary_text: "newer run", proposals: 1, trades: 1 },
+      { run_id: 7, session_date: "2026-10-06", final: true, summary_text: "older run", proposals: 0, trades: 0 },
+      { run_id: 7, session_date: "2026-10-05", final: true, summary_text: "older run", proposals: 0, trades: 0 },
+    ];
+    const api = new FakeApiClient({ decisionDays: { days } });
+    const r = renderWithProviders(<ReportsPage />, { route: "/reports?day=2026-10-06", api });
+    await screen.findByRole("table", { name: "Decisions" });
+    const picker = screen.getByRole("combobox", { name: "Recent days" });
+    expect(within(picker).getAllByRole("option").map((o) => o.getAttribute("value"))).toEqual(["2026-10-06", "2026-10-05"]);
+    await userEvent.selectOptions(picker, "2026-10-05");
+    expect(r.location().search).toBe("?day=2026-10-05");
+    await waitFor(() => expect(r.api.callsTo("decisionDay").at(-1)).toEqual([{ date: "2026-10-05", limit: DAY_PAGE_SIZE, offset: 0 }]));
+  });
+
+  it("uniqueDays keeps the first item of each date", () => {
+    const a = { session_date: "2026-10-06", run_id: 9 } as const;
+    const b = { session_date: "2026-10-06", run_id: 7 } as const;
+    const c = { session_date: "2026-10-05", run_id: 7 } as const;
+    expect(uniqueDays([a, b, c])).toEqual([a, c]);
   });
 
   it("no rows at all says so", async () => {

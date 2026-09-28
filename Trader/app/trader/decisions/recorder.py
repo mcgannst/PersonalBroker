@@ -49,6 +49,7 @@ from trader.decisions.types import (
     DecisionStage,
     RecorderDeps,
     RecordResult,
+    RecordSkip,
     ScanData,
     ScanDetail,
 )
@@ -97,7 +98,11 @@ SKIPPED_NOTES = {
     "orb: the universe is a stale fallback; no entries today": "skipped:stale_universe",
     "orb: no universe for this session": "skipped:no_universe",
 }
-_BLOCKED_SWITCH = re.compile(r"kill switch (\S+)")
+# trader.engine.proposals rejects a blocked entry with f"entry blocked: {reason}", the reason from the
+# kill-switch entry guard (trader.engine.killswitch: f"kill switch {switch} is tripped"); both pinned to
+# their sources by tests/decisions/test_static.py, as are the orb_sip note texts in SKIPPED_NOTES.
+ENTRY_BLOCKED_PREFIX = "entry blocked: "
+_BLOCKED_SWITCH = re.compile(r"kill switch (\S+) is tripped")
 _STAGE_INDEX = {s: i for i, s in enumerate(STAGE_ORDER)}
 
 
@@ -284,12 +289,37 @@ def _digest(s: Session, stmt: Any) -> str:
     return hashlib.sha256(repr([tuple(r) for r in rows]).encode()).hexdigest()[:16]
 
 
-def fingerprint(s: Session, calendar: SessionCalendar, run_id: int, d: date, detail: ScanDetail) -> str:
+def settings_used(settings: RuntimeSettings) -> dict[str, str]:
+    """The settings the rows are computed with (besides the scan detail): the pre-market gap threshold, the
+    proposal cost buffer, the fee and slippage settings behind `est_fees`, and the FinViz filters shown on the
+    universe row. Part of the fingerprint, so an edit rebuilds a day that is not final yet."""
+    return {
+        "premarket_gap_min_pct": str(settings.premarket_gap_min_pct),
+        "slippage_buffer": str(settings.slippage_buffer),
+        "slippage_min": str(settings.slippage_min),
+        "slippage_bps": str(settings.slippage_bps),
+        "stale_quote_seconds": str(settings.stale_quote_seconds),
+        "fees_commission": str(settings.fees_commission),
+        "fees_direct_route": str(settings.fees_direct_route),
+        "fees_ecn_per_share": str(settings.fees_ecn_per_share),
+        "fees_sec_rate": str(settings.fees_sec_rate),
+        "universe_finviz_filters": settings.universe_finviz_filters,
+    }
+
+
+def fingerprint(
+    s: Session,
+    calendar: SessionCalendar,
+    run_id: int,
+    d: date,
+    detail: ScanDetail,
+    settings: RuntimeSettings,
+) -> str:
     """A digest of the day's source rows. Run-scoped tables: count, max id and the columns that change in
     place (statuses, decisions, amended evidence); `catalysts` by D only (not run-scoped); `event_log` only
     the two strategy sources the recorder reads, for R within D (never the whole table, which the log mirror
     and alerts keep growing); the count of D's stored opening bars; the latest nightly and premarket job ids;
-    the scan detail setting."""
+    D's manual watchlist; the scan detail setting and the other settings the rows use (`settings_used`)."""
     start, end = _day_window(d)
     open_ = calendar.session_open(d)
     signal_ids = select(m.Signal.id).where(m.Signal.run_id == run_id, m.Signal.session_date == d)
@@ -385,7 +415,14 @@ def fingerprint(s: Session, calendar: SessionCalendar, run_id: int, d: date, det
             .group_by(m.UniverseSnapshot.source)
             .order_by(m.UniverseSnapshot.source),
         ),
+        "watchlist": _digest(
+            s,
+            select(m.ManualWatchlist.filename, m.ManualWatchlist.uploaded_at).where(
+                m.ManualWatchlist.session_date == d
+            ),
+        ),
         "detail": detail,
+        "settings": settings_used(settings),
     }
     return hashlib.sha256(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()
 
@@ -445,14 +482,29 @@ def _scan_needed(s: Session, run_id: int, d: date) -> bool:
     )
 
 
-def _peek(deps: RecorderDeps, run_id: int, d: date, detail: ScanDetail) -> _Peek:
+def _peek(
+    deps: RecorderDeps, run_id: int, d: date
+) -> tuple[RuntimeSettings, RecordSkip | None, _Peek | None]:
+    """The first worker-thread step of a pass: the settings (the live callable reads them from the database,
+    so it is called here, never on the event loop), the disabled and non-session checks, then the unlocked
+    peek at the day row and the fingerprint."""
+    settings = deps.settings()
+    if not settings.reports_decisions_enabled:
+        return settings, "disabled", None
+    if not deps.calendar.is_session(d):
+        return settings, "not_session", None
+    detail: ScanDetail = settings.reports_decisions_scan_detail
     with deps.factory() as s:
         row = _day_row(s, run_id, d)
-        return _Peek(
-            final=bool(row is not None and row.final),
-            stored=_stored_fp(row),
-            current=fingerprint(s, deps.calendar, run_id, d, detail),
-            scan_needed=_scan_needed(s, run_id, d),
+        return (
+            settings,
+            None,
+            _Peek(
+                final=bool(row is not None and row.final),
+                stored=_stored_fp(row),
+                current=fingerprint(s, deps.calendar, run_id, d, detail, settings),
+                scan_needed=_scan_needed(s, run_id, d),
+            ),
         )
 
 
@@ -470,13 +522,10 @@ async def record_day(
     deps: RecorderDeps, run_id: int, session_date: date, *, final: bool = False, rebuild: bool = False
 ) -> RecordResult:
     """Build (or skip) run `run_id`'s journal for `session_date`. See the module docstring."""
-    settings = deps.settings()
-    if not settings.reports_decisions_enabled:
-        return RecordResult(run_id, session_date, "disabled", {}, False)
-    if not deps.calendar.is_session(session_date):
-        return RecordResult(run_id, session_date, "not_session", {}, False)
+    settings, skip, peek = await asyncio.to_thread(_peek, deps, run_id, session_date)
+    if skip is not None or peek is None:
+        return RecordResult(run_id, session_date, skip or "disabled", {}, False)
     detail: ScanDetail = settings.reports_decisions_scan_detail
-    peek = await asyncio.to_thread(_peek, deps, run_id, session_date, detail)
     if peek.final and not rebuild:
         return RecordResult(run_id, session_date, "final", {}, True)
     if not rebuild and not final and peek.stored is not None and peek.stored == peek.current:
@@ -525,9 +574,11 @@ def write_locked(
     """The locked part of a pass (the caller holds the advisory lock in `s`'s transaction): the final and
     fingerprint checks, then the rebuild."""
     row = _day_row(s, run_id, d)
-    if row is not None and row.final and not rebuild:
-        return RecordResult(run_id, d, "final", {}, True)
-    current = fingerprint(s, deps.calendar, run_id, d, detail)
+    if row is not None and row.final:
+        if not rebuild:
+            return RecordResult(run_id, d, "final", {}, True)
+        final = True  # a rebuild of a frozen day keeps it frozen, whatever `final` the caller passed
+    current = fingerprint(s, deps.calendar, run_id, d, detail, settings)
     stored = _stored_fp(row)
     if not rebuild and not final and stored is not None and stored == current:
         return RecordResult(run_id, d, "unchanged", {}, False)
@@ -946,9 +997,14 @@ class _Builder:
                     if str(k).isdigit():
                         missing[int(k)] = str(v)
         self.load_tickers([c.symbol_id for c in cands])
+        # The overlay symbol never appears in the scan stage (it is the market filter, not a candidate), even
+        # when the strategy ranked it and stored a candidate for it: its row is dropped here and it is left
+        # out of every count, so the counts equal the rows; it keeps its place in the outside_top_n ranking.
+        overlay_cands = [c for c in cands if self._is_overlay(c)]
+        cand_ids = {c.symbol_id for c in cands}
+        cands = [c for c in cands if not self._is_overlay(c)]
         catalyst_rows = self._catalyst_rows([c.symbol_id for c in cands])
         rules: Counter[str] = Counter()
-        cand_ids = {c.symbol_id for c in cands}
         for c in cands:
             data = c.data if isinstance(c.data, dict) else {}
             stored_cat = data.get("catalyst")
@@ -1030,6 +1086,16 @@ class _Builder:
             "params_in_effect": params_info,
             "scan_detail": self.detail if self.scan is not None else "ranked",
             "universe_status": self._universe_status(),
+            "overlay_candidate": [
+                {
+                    "ticker": OVERLAY_SYMBOL,
+                    "rank": c.rank,
+                    "passed": c.passed,
+                    "reject_reason": c.reject_reason,
+                }
+                for c in overlay_cands
+            ]
+            or None,
             "notes": [
                 {"ts": n.ts.isoformat(), "level": n.level, "message": n.message, "data": n.data}
                 for n in notes[:MAX_NOTES]
@@ -1047,6 +1113,10 @@ class _Builder:
             reason=None if skipped is None else next(n.message for n in notes if n.message in SKIPPED_NOTES),
             data=summary,
         )
+
+    def _is_overlay(self, c: m.Candidate) -> bool:
+        data = c.data if isinstance(c.data, dict) else {}
+        return (self._tickers.get(c.symbol_id) or data.get("ticker")) == OVERLAY_SYMBOL
 
     def _universe_status(self) -> dict[str, Any]:
         job = self._latest_job("nightly")
@@ -1163,9 +1233,8 @@ class _Builder:
                     reason=reason,
                     data=base,
                 )
-        scanned = len([u for u in members if u.symbol_id not in cand_ids]) + len(
-            [c for c in cands if self._tickers.get(c.symbol_id) != OVERLAY_SYMBOL]
-        )
+        # `cands` excludes the overlay symbol's candidate, and `members` the overlay symbol
+        scanned = len([u for u in members if u.symbol_id not in cand_ids]) + len(cands)
         return {
             "scanned": scanned,
             "rvol_passed": len(cands) + outside,
@@ -1353,7 +1422,7 @@ class _Builder:
             outcome = "expired"
             if p.decided_by == AUTO_FLATTEN_ACTOR:
                 rule = "auto_executed_on_expiry"
-        elif p.status == "rejected" and error.startswith("entry blocked"):
+        elif p.status == "rejected" and error.startswith(ENTRY_BLOCKED_PREFIX):
             outcome = "blocked"
             hit = _BLOCKED_SWITCH.search(error)
             rule, reason = (hit.group(1) if hit else "entry_blocked"), error

@@ -81,6 +81,18 @@ const TONE: Partial<Record<DecisionOutcome, "ok" | "warn" | "bad" | "info" | "mu
   error: "bad",
 };
 
+/** One item per date, the first kept. The server already lists a date once, as the run a date-only request
+ * serves (two live runs can record the same session), so picking the date opens that run; this guards the
+ * picker (unique option values) whatever the list holds. */
+export function uniqueDays<T extends { session_date: IsoDate }>(days: readonly T[]): T[] {
+  const seen = new Set<IsoDate>();
+  return days.filter((d) => {
+    if (seen.has(d.session_date)) return false;
+    seen.add(d.session_date);
+    return true;
+  });
+}
+
 /** The Day view's URL (`run` kept when given). */
 export function dayHref(day: IsoDate | "", runId: number | null): string {
   return runId === null ? `/reports?day=${day}` : `/reports?day=${day}&run=${runId}`;
@@ -377,7 +389,7 @@ export function DayDecisions({ day, runId }: { day: IsoDate | null; runId: numbe
   const [params, setParams] = useSearchParams();
   const daysQ: DecisionDaysQuery = runId === null ? { limit: RECENT_DAYS } : { limit: RECENT_DAYS, run_id: runId };
   const days = useQuery({ queryKey: qk.decisionDays(daysQ), queryFn: () => api.decisionDays(daysQ) });
-  const recent = days.data?.days ?? [];
+  const recent = uniqueDays(days.data?.days ?? []);
   const selected = day ?? recent[0]?.session_date ?? null;
 
   function go(value: string) {
@@ -408,7 +420,7 @@ export function DayDecisions({ day, runId }: { day: IsoDate | null; runId: numbe
             <select aria-label="Recent days" value={selected && known.has(selected) ? selected : ""} onChange={(e) => go(e.target.value)}>
               {!(selected && known.has(selected)) && <option value="">Choose a day</option>}
               {recent.map((d) => (
-                <option key={`${d.run_id}-${d.session_date}`} value={d.session_date}>
+                <option key={d.session_date} value={d.session_date}>
                   {d.session_date}
                   {d.final ? "" : " (in progress)"}
                   {d.proposals > 0 ? ` · ${d.proposals} proposal${d.proposals === 1 ? "" : "s"}` : ""}

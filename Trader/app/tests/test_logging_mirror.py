@@ -323,6 +323,100 @@ def test_logged_events_sqlalchemy_and_own_logger_are_skipped(
     assert [r.message for r in rows(db_factory)] == ["trader.x: kept"]
 
 
+@pytest.mark.usefixtures("fresh_logging")
+def test_only_exact_or_dotted_child_loggers_are_skipped(
+    db_factory: sessionmaker[Session], clock: FixedClock, mirrors: list[EventLogMirror]
+) -> None:
+    """Fix round 1: `sqlalchemy_utils` or `alembic_helpers` are other libraries, not the DB layer."""
+    mirror = make(mirrors, db_factory, clock)
+    logging.getLogger("sqlalchemy").error("skipped")
+    logging.getLogger("sqlalchemy_utils").error("kept 1")
+    logging.getLogger("alembic_helpers").error("kept 2")
+    logging.getLogger("trader.logging_mirror_extra").error("kept 3")
+    assert mirror.flush() == 3
+    assert [r.message for r in rows(db_factory)] == [
+        "sqlalchemy_utils: kept 1",
+        "alembic_helpers: kept 2",
+        "trader.logging_mirror_extra: kept 3",
+    ]
+
+
+# --- fix round 1: rendered tracebacks, depth, re-entrancy, flush timeout ------------------------------------
+
+
+@pytest.mark.usefixtures("fresh_logging")
+def test_a_chained_multiline_traceback_keeps_the_last_type_and_masks_the_whole_message(
+    db_factory: sessionmaker[Session], clock: FixedClock, mirrors: list[EventLogMirror]
+) -> None:
+    mirror = make(mirrors, db_factory, clock)
+    try:
+        try:
+            raise KeyError("inner")
+        except KeyError as inner:
+            raise ConnectionError(
+                'connection failed\nDETAIL: dsn "postgresql://u:SENTINEL-PW-FR1@h:5432/d"\nHINT: retry'
+            ) from inner
+    except ConnectionError as exc:
+        structlog.get_logger("trader.db").error("db.failed", exc_info=exc)
+    assert mirror.flush() == 1
+    (row,) = rows(db_factory)
+    assert "SENTINEL-PW-FR1" not in json.dumps(row.data)
+    assert row.data["exc_type"] == "ConnectionError"
+    assert row.data["exc_message"].startswith("connection failed DETAIL: dsn")
+    assert "HINT: retry" in row.data["exc_message"]
+    assert "Traceback" not in json.dumps(row.data)
+
+
+@pytest.mark.usefixtures("fresh_logging")
+def test_containers_below_the_depth_limit_become_a_placeholder(
+    db_factory: sessionmaker[Session], clock: FixedClock, mirrors: list[EventLogMirror]
+) -> None:
+    mirror = make(mirrors, db_factory, clock)
+    structlog.get_logger("trader.deep").error(
+        "deep", a={"b": {"c": {"token": 12345678, "d": {"e": [b"SENTINEL-FR1-BYTES"]}}}}
+    )
+    assert mirror.flush() == 1
+    (row,) = rows(db_factory)
+    assert row.data["a"]["b"]["c"] == {"token": "[REDACTED]", "d": "[nested too deep]"}
+
+
+def test_a_line_logged_inside_emit_is_dropped_and_counted(
+    clock: FixedClock, mirrors: list[EventLogMirror], clean_logging: None
+) -> None:
+    class Loud:
+        def __str__(self) -> str:
+            logging.getLogger("trader.loud").error("inner")
+            return "loud"
+
+    mirror = make(mirrors, None, clock)
+    logging.getLogger("trader.outer").error("outer", extra={"obj": Loud()})
+    assert mirror.queued() == 1
+    assert mirror.dropped >= 1  # the inner line (once per mirror handler that rendered Loud)
+
+
+def test_flush_without_a_writer_thread_honours_its_timeout(
+    clock: FixedClock, mirrors: list[EventLogMirror], clean_logging: None
+) -> None:
+    release = threading.Event()
+
+    def hung() -> Session:
+        release.wait(30)
+        raise ConnectionError("paused")
+
+    mirror = make(mirrors, hung, clock)
+    try:
+        logging.getLogger("trader.x").error("pending")
+        started = time.perf_counter()
+        assert mirror.flush(timeout=0.2) == 0
+        assert time.perf_counter() - started < 1.5
+    finally:
+        release.set()
+    deadline = time.monotonic() + 5
+    while mirror.dropped < 1 and time.monotonic() < deadline:  # the helper's failed write is counted once
+        time.sleep(0.02)
+    assert mirror.dropped == 1
+
+
 # --- 7. levels and off --------------------------------------------------------------------------------------
 
 

@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import queue
+import re
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -51,6 +52,10 @@ _RECORD_ATTRS = frozenset(logging.makeLogRecord({}).__dict__) | {"message", "asc
 
 _LEVELS = {"error": logging.ERROR, "critical": logging.CRITICAL}
 
+# Per thread: set while any mirror builds a row, so a line logged from inside that (a field's str() that
+# logs) is dropped by every mirror instead of recursing (one mirror's str() feeding another's emit).
+_EMITTING = threading.local()
+
 
 @dataclass(frozen=True, slots=True)
 class _Row:
@@ -63,17 +68,56 @@ class _Row:
 
 
 def _skipped_logger(name: str) -> bool:
-    """The mirror's own logger (and its children) and every `sqlalchemy*` / `alembic*` logger."""
-    own = SKIPPED_LOGGERS[0]
-    return name == own or name.startswith(own + ".") or name.startswith(SKIPPED_LOGGERS[1:])
+    """The mirror's own logger, `sqlalchemy` and `alembic`, each exactly or as a dotted child (so
+    `sqlalchemy.engine` is skipped but a `sqlalchemy_utils` line is mirrored)."""
+    return any(name == skipped or name.startswith(skipped + ".") for skipped in SKIPPED_LOGGERS)
 
 
 def _one_line(text: str, limit: int) -> str:
     return " ".join(redact_text(text).split())[:limit]
 
 
+# A traceback's header, and the "Type: message" (or bare "Type") line that ends each exception in it.
+_TRACEBACK_HEADER = "Traceback (most recent call last):"
+_EXC_TYPE = re.compile(r"[A-Za-z_][\w.]*")
+TOO_DEEP = "[nested too deep]"
+
+
+def _rendered_exception(rendered: str) -> dict[str, str]:
+    """`exc_type` and a one-line `exc_message` from a traceback structlog already rendered.
+
+    The WHOLE text is masked before anything is split, so a credential split across lines (or cut by a
+    colon inside a URL) can never survive. The exception starts at the first unindented line after the
+    last traceback header; everything from there to the end is its (possibly multi-line) message."""
+    masked = redact_text(rendered)
+    lines = masked.splitlines()
+    start: int | None = None
+    headers = [i for i, line in enumerate(lines) if line.startswith(_TRACEBACK_HEADER)]
+    if headers:
+        for i in range(headers[-1] + 1, len(lines)):
+            if lines[i].strip() and not lines[i][0].isspace():
+                start = i
+                break
+    if start is None:  # no recognisable traceback: fall back to its last non-empty line
+        nonblank = [i for i, line in enumerate(lines) if line.strip()]
+        if not nonblank:
+            return {}
+        start = nonblank[-1]
+    head, _, first = lines[start].partition(":")
+    exc_type = head.strip()
+    if not _EXC_TYPE.fullmatch(exc_type):
+        exc_type, first = "", lines[start]  # not "Type: message": the whole line is the message
+    message = "\n".join([first, *lines[start + 1 :]])
+    return {
+        "exc_type": _one_line(exc_type or "Exception", 100),
+        "exc_message": _one_line(message, EXC_MESSAGE_MAX),
+    }
+
+
 def _masked(value: Any, depth: int = 0) -> Any:
-    """A JSON-safe, masked copy: strings by pattern, secret-named keys entirely, other objects via str()."""
+    """A JSON-safe, masked copy: strings by pattern, secret-named keys entirely (at every depth the copy
+    reaches, whatever the value's type), other objects via str(). A container deeper than DEPTH_MAX is
+    replaced by a placeholder rather than rendered, so nothing below it can escape the key check."""
     if isinstance(value, str):
         return redact_text(value)[:VALUE_MAX]
     if value is None or isinstance(value, bool | int):
@@ -81,6 +125,8 @@ def _masked(value: Any, depth: int = 0) -> Any:
     if isinstance(value, float):
         return value if math.isfinite(value) else str(value)  # JSONB refuses NaN and Infinity
     if depth >= DEPTH_MAX:
+        if isinstance(value, Mapping | list | tuple | set | frozenset):
+            return TOO_DEEP
         return redact_text(str(value))[:VALUE_MAX]
     if isinstance(value, Mapping):
         return {
@@ -119,17 +165,14 @@ def _exception_fields(record: logging.LogRecord, event: Mapping[str, Any] | None
         elif isinstance(info, tuple) and len(info) == 3 and isinstance(info[1], BaseException):
             exc = info[1]
         elif isinstance(event.get("exception"), str):
-            # structlog's format_exc_info already rendered the traceback: its last line is "Type: message"
-            lines = [line for line in event["exception"].splitlines() if line.strip()]
-            if lines:
-                exc_type, _, message = lines[-1].partition(":")
-                return {
-                    "exc_type": exc_type.strip()[:100],
-                    "exc_message": _one_line(message, EXC_MESSAGE_MAX),
-                }
+            # structlog's format_exc_info already rendered the traceback
+            return _rendered_exception(event["exception"])
     if exc is None:
         return {}
-    return {"exc_type": type(exc).__name__, "exc_message": _one_line(str(exc), EXC_MESSAGE_MAX)}
+    return {
+        "exc_type": _one_line(type(exc).__name__, 100),
+        "exc_message": _one_line(str(exc), EXC_MESSAGE_MAX),  # the whole text is masked, then flattened
+    }
 
 
 class _MirrorHandler(logging.Handler):
@@ -208,7 +251,8 @@ class EventLogMirror:
         self._thread.start()
 
     def flush(self, timeout: float = 2.0) -> int:
-        """Write what is queued now; returns the rows written (0 when the write did not finish in time)."""
+        """Write what is queued now; returns the rows written (0 when the write did not finish in time).
+        Never waits much longer than `timeout`, with or without the writer thread."""
         try:
             thread = self._thread
             if thread is not None and thread.is_alive() and threading.get_ident() != self._thread_ident:
@@ -219,14 +263,29 @@ class EventLogMirror:
                     self._wake.set()
                     self._cond.wait_for(lambda: self._served >= ticket, timeout)
                     return self._written - before
-            if not self._write_lock.acquire(timeout=max(0.0, timeout)):
-                return 0
-            try:
-                return self._write_pending()
-            finally:
-                self._write_lock.release()
+            if threading.get_ident() == self._thread_ident:
+                return 0  # the writer thread itself: its own loop writes
+            return self._flush_on_helper(timeout)
         except Exception:
             return 0
+
+    def _flush_on_helper(self, timeout: float) -> int:
+        """No writer thread: write on a short-lived daemon thread and wait at most `timeout` for it, so a
+        hung database never hangs the caller (a process's shutdown). A write still going on at the
+        timeout finishes (or fails, and its lines are counted in `dropped`) on that thread."""
+        result: list[int] = []
+
+        def write() -> None:
+            try:
+                with self._write_lock:
+                    result.append(self._write_pending())
+            except Exception:
+                return
+
+        helper = threading.Thread(target=write, name="trader-log-mirror-flush", daemon=True)
+        helper.start()
+        helper.join(max(0.0, timeout))
+        return result[0] if result else 0
 
     def close(self) -> None:
         """Flush, stop the thread and remove the handler (a second call does nothing)."""
@@ -255,13 +314,23 @@ class EventLogMirror:
         try:
             if getattr(self._local, "busy", False) or threading.get_ident() == self._thread_ident:
                 return
-            row = self._row(record)
-            if row is None:
+            if getattr(_EMITTING, "active", False):
+                # a line logged while this thread builds a row in ANY mirror (a field's str() that logs):
+                # dropped and counted, never recursed into
+                if record.levelno >= _LEVELS[self.level]:
+                    self._count_dropped(1)
                 return
+            _EMITTING.active = True
             try:
-                self._queue.put_nowait(row)
-            except queue.Full:
-                self._count_dropped(1)
+                row = self._row(record)
+                if row is None:
+                    return
+                try:
+                    self._queue.put_nowait(row)
+                except queue.Full:
+                    self._count_dropped(1)
+            finally:
+                _EMITTING.active = False
         except Exception:
             return
 

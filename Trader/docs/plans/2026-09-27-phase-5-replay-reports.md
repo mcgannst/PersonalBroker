@@ -895,6 +895,28 @@ commentary rendered as text, the week asked for around DST and holidays, an erro
   `install_event_mirror(None, ...)`: each leaves a harmless handler or daemon thread with a `None` factory in the
   test process (every write fails and is counted). Left as is (T1 owns that file).
 
+**Fix round 1 (P5-GO builder attempt 2, 2026-09-27; gauntlet `tests/gauntlet/test_p5_go_breaker.py`):**
+- A structlog-rendered traceback is masked WHOLE with `redact_text` before any splitting (a multi-line
+  psycopg/SQLAlchemy message with a DSN can no longer leak its password through a split inside the URL);
+  `exc_type` is the unindented line after the last `Traceback (most recent call last):` header (masked, and
+  "Exception" when that line is not `Type: message`), `exc_message` is everything from there to the end,
+  masked and flattened to one line. The `record.exc_info` path masks `str(exc)` whole the same way.
+- Below `DEPTH_MAX` a container (mapping, list, tuple, set) becomes `"[nested too deep]"` instead of its
+  `str()`, so a secret-named key holding bytes or a number deep down cannot escape the key check.
+- A per-thread re-entrancy guard (shared by every mirror in the process) drops, and counts in `dropped`, a
+  line logged while any mirror is building a row (a field whose `str()` logs), instead of recursing.
+- `flush(timeout)` / `close()` without a writer thread run the write on a short-lived daemon thread joined
+  with the timeout, so a hung database never hangs a shutdown. A write still running at the timeout finishes
+  or fails on that thread, which counts its lines in `dropped` when it fails (not counted at the timeout
+  itself, so a line is never both written and counted).
+- The `sqlalchemy` / `alembic` / own-logger skip matches the exact name or a dotted child only
+  (`sqlalchemy_utils` is mirrored).
+- `trader/jobs/runner.py` passes `event_logged=True` on `job.outcome_unknown` and `job.record_success_failed`,
+  whose incidents are already critical events.
+- **For T17:** the replay process's mirror must be built with a `RealClock`, never the `ReplayClock`: its
+  rate windows and row timestamps are wall-clock facts about the process, and a replay clock jumping through
+  sessions would stamp log rows in the past and defeat the per-minute limit.
+
 ---
 
 ### Task P5-T15: Job retries and restart recovery
@@ -927,6 +949,29 @@ commentary rendered as text, the week asked for around DST and holidays, an erro
 - [x] 9. Gate and commit `P5-T15: ...`.
 
 *Builder note (P5-T15):* on trunk nothing turns a `sending` notification into `unknown`; the P3 notifier already treats `sending` exactly like `unknown` (never claimed or re-sent again), so test 6 checks it stays `sending` and is never re-sent. The notification and cursor footprints need a fill before a kill while test 6 also wants a working entry order after one, so the killed day has two kills (A at 09:35:40 with the entry working and orb_open `running`; B at 09:36:00 inside the ENTRY FILLED send) and worker C finishes it; test 8's expiring proposal is a second test.
+
+**Fix round 1 (P5-GO builder attempt 2, 2026-09-27; T15 review must-fix and gauntlet findings):**
+- **Stuck `sending` rows (test 6 restored):** `trader/notify/notifier.py` gains `settle_interrupted_sends(factory,
+  clock)`: rows `sending` since before `SENDING_STALE_AFTER` (15 min, well above one part's worst case
+  `PART_MAX_SECONDS` = pacing + two 80 s API calls + the 30 s 429 wait) become `unknown` with error
+  "interrupted by restart" and are never re-sent (`unknown` is never claimed again). `Worker.recover_after_lock()`
+  calls it once the single-instance lock is held (in `Worker.run`, before the `starting` heartbeat; a failure is
+  logged and the worker starts). A row a live process (API, CLI job) is sending is younger than the threshold and
+  is left alone, and if a send ever outlasted it, the notifier's final update by id would still win. The restart
+  test now checks C's start (10 s after B's claim) leaves the row `sending`, and a worker D started at 16:30
+  settles it `unknown` without sending anything. Unit tests: `tests/notify/test_interrupted_sends.py`.
+- **Deadline:** `RetryPolicy(deadline=<aware datetime>)`: a wait that would end after it is never started; that
+  failure is the final one, at the caller's level, "<job> failed for <date> after attempt k of n (retries
+  stopped: deadline)" with `data.stopped = "deadline"`. `RetryPolicy` validates attempts ≥ 1, a finite delay
+  ≥ 0, a finite backoff ≥ 1 and an aware deadline; `from_settings(s, deadline=...)` passes it through.
+  Settings bounds tightened: `jobs.retry_attempts` 1–3 and `jobs.retry_delay_seconds` 10–600 (so 600 + 1200 s
+  at most).
+- **For T17 (wiring the day-level jobs):** pass deadlines. `preopen`: 09:28 ET of the session (its retries must
+  never run into the open); `premarket`: before the preopen run (09:28 ET at the latest, earlier if preopen is
+  scheduled earlier); `nightly`, `postclose` and `weekly`: none needed beyond the bounds.
+- A body's own `attempts` detail key is never overwritten: the retry count then goes in `retry_attempts`.
+- `job.outcome_unknown` and `job.record_success_failed` log lines carry `event_logged=True` (the critical event
+  is the record), so the T14 mirror adds no second row.
 
 ---
 

@@ -47,6 +47,7 @@ from trader.events import log_event
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock, et_date
 from trader.market.sessions import SessionPhase, session_phase
+from trader.notify.notifier import settle_interrupted_sends
 from trader.settings_store import RuntimeSettings
 
 log = structlog.get_logger("worker")
@@ -475,6 +476,18 @@ class Worker:
         stop.set()
         return False
 
+    def recover_after_lock(self) -> None:
+        """Once the single-instance lock is held (P5-GO fix round 1): notifications a dead process left
+        `sending` (claimed, then killed mid-send) are settled `unknown` so the System page lists them as
+        undelivered; they are never re-sent. Best effort: a failure is logged and the worker starts."""
+        try:
+            settled = settle_interrupted_sends(self.deps.factory, self.deps.clock)
+        except Exception as exc:
+            log.error("worker.settle_sends_failed", error=_describe(exc))
+            return
+        if settled:
+            log.warning("worker.interrupted_sends_settled", count=settled)
+
     # --- the loop ---------------------------------------------------------------------------------------
 
     async def run(self, stop: asyncio.Event, *, once: bool = False) -> None:
@@ -493,6 +506,7 @@ class Worker:
         removers: list[Callable[[], object]] = []
         try:
             self._started_at = self.deps.clock.now()
+            self.recover_after_lock()
             self._beat("starting")
             if once:
                 await self.step()

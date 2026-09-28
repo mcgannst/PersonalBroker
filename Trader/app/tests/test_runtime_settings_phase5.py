@@ -32,8 +32,8 @@ BOUNDS: dict[str, tuple[Any, Any, Any]] = {
     "replay.questrade_window_days": (1, 120, 1),
     "replay.max_sessions": (1, 500, 1),
     "reports.weekly_max_cost_usd": (Decimal("0"), Decimal("1"), Decimal("0.01")),
-    "jobs.retry_attempts": (1, 5, 1),
-    "jobs.retry_delay_seconds": (10, 1800, 1),
+    "jobs.retry_attempts": (1, 3, 1),  # P5-GO fix round 1 (was 1-5)
+    "jobs.retry_delay_seconds": (10, 600, 1),  # P5-GO fix round 1 (was 10-1800)
     "logging.mirror_max_per_minute": (1, 600, 1),
 }
 

@@ -29,7 +29,7 @@ import asyncio
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import ClassVar, Literal
 
 import structlog
@@ -399,6 +399,38 @@ class TelegramNotifier:
                 )
         except Exception as exc:
             log.error("notify.db_failed", step="record_failed", notification_id=row_id, error=_describe(exc))
+
+
+# --- restart recovery (P5-GO fix round 1) -------------------------------------------------------------------
+
+API_CALL_MAX_SECONDS = (
+    4 * 20.0
+)  # one Telegram call: connect, write, read and pool timeouts (api.py, 20 s each)
+PART_MAX_SECONDS = MIN_SEND_INTERVAL + 2 * API_CALL_MAX_SECONDS + MAX_RETRY_AFTER  # a call, a wait, a retry
+# A claimed row may also queue behind the process's other sends (the notifier's lock) and have several
+# parts, so the threshold is well above one part's worst case: a row still `sending` after it was claimed
+# this long ago belongs to a process that died (or hung) mid-send.
+SENDING_STALE_AFTER = timedelta(minutes=15)
+INTERRUPTED_BY_RESTART = "interrupted by restart"
+
+
+def settle_interrupted_sends(factory: sessionmaker[Session], clock: Clock) -> int:
+    """Mark `notifications` rows left `sending` since before SENDING_STALE_AFTER as `unknown` (error
+    "interrupted by restart"), so the System page lists them as undelivered; returns how many.
+
+    Called by the worker once it holds the single-instance lock. The claim happened before the send, so
+    Telegram may or may not have the message: it is never re-sent (`unknown` is never claimed again). A row
+    another live process is sending right now is younger than the threshold and is left alone; and should
+    a live send outlast it, the notifier's own final update (by id, whatever the status) still wins."""
+    cutoff = clock.now() - SENDING_STALE_AFTER
+    with session_scope(factory) as session:
+        result = session.execute(
+            update(Notification)
+            .where(Notification.status == "sending", Notification.created_at < cutoff)
+            .values(status="unknown", error=INTERRUPTED_BY_RESTART)
+            .returning(Notification.id)
+        )
+        return len(result.all())
 
 
 class NullNotifier:

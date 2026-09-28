@@ -36,15 +36,22 @@ re-raised as above) and a success that could not be recorded. An interrupt durin
 `error` event (at `failure_level`) saying the retries stopped, and is re-raised with the lock released.
 A (job, session) therefore can have `failed` rows followed by a `succeeded` one: its result is its latest
 row. `None` or one attempt behaves exactly as above.
+
+A policy's `deadline` (fix round 1) bounds the waits: a wait that would end after it is never started, and
+that failure is the final, alerting one ("... (retries stopped: deadline)", data `stopped: deadline`).
+Callers that must finish by a fixed time (preopen by 09:28 ET, premarket before preopen) pass one.
+Log lines that duplicate a critical event written here carry `event_logged=True`, so the log mirror
+(P5-T14) does not add a second row for the same incident.
 """
 
 import asyncio
 import hashlib
+import math
 import time
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Any, Literal
 
 import structlog
@@ -67,15 +74,34 @@ OUTCOME_UNKNOWN = "outcome unknown: not re-run automatically"
 @dataclass(frozen=True)
 class RetryPolicy:
     """In-process retries of a day-level job (SPEC §9 as amended in Phase 5): up to `attempts` runs in all,
-    waiting `first_delay_s`, then `first_delay_s * backoff`, and so on."""
+    waiting `first_delay_s`, then `first_delay_s * backoff`, and so on.
+
+    `deadline` (an aware datetime, fix round 1): a wait that would end after it is never started. The
+    failure that would have been retried is then the final one and alerts ("retries stopped: deadline"),
+    so a pre-open job never retries into the open."""
 
     attempts: int = 1
     first_delay_s: float = 120.0
     backoff: float = 2.0
+    deadline: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.attempts < 1:
+            raise ValueError("RetryPolicy.attempts must be at least 1")
+        if not math.isfinite(self.first_delay_s) or self.first_delay_s < 0:
+            raise ValueError("RetryPolicy.first_delay_s must be a finite number of seconds, at least 0")
+        if not math.isfinite(self.backoff) or self.backoff < 1:
+            raise ValueError("RetryPolicy.backoff must be finite and at least 1")
+        if self.deadline is not None and self.deadline.utcoffset() is None:
+            raise ValueError("RetryPolicy.deadline must be timezone-aware")
 
     @classmethod
-    def from_settings(cls, s: RuntimeSettings) -> "RetryPolicy":
-        return cls(attempts=s.jobs_retry_attempts, first_delay_s=float(s.jobs_retry_delay_seconds))
+    def from_settings(cls, s: RuntimeSettings, *, deadline: datetime | None = None) -> "RetryPolicy":
+        return cls(
+            attempts=s.jobs_retry_attempts,
+            first_delay_s=float(s.jobs_retry_delay_seconds),
+            deadline=deadline,
+        )
 
     def delay(self, attempt: int) -> float:
         """The wait after failed attempt `attempt` (1-based)."""
@@ -294,7 +320,10 @@ def _start(
                     "automatically. Check the orders, then run it by hand with --force if needed.",
                     {"job_run_ids": leftover, "session_date": session_date.isoformat()},
                 )
-                log.critical("job.outcome_unknown", job=job, session_date=session_date.isoformat())
+                # the critical event above is the record: the log mirror must not add a second row
+                log.critical(
+                    "job.outcome_unknown", job=job, session_date=session_date.isoformat(), event_logged=True
+                )
                 return JobOutcome("failed", {"reason": "outcome unknown"}, error=OUTCOME_UNKNOWN)
         s.execute(
             update(JobRun)
@@ -322,8 +351,15 @@ class _Tries:
     def attempts(self) -> int:
         return _attempts(self.retry)
 
+    def _past_deadline(self, attempt: int) -> bool:
+        """Whether the wait after failed attempt `attempt` would end after the policy's deadline."""
+        if self.retry is None or self.retry.deadline is None:
+            return False
+        wait = timedelta(seconds=self.retry.delay(attempt))
+        return self.clock.now() + wait > self.retry.deadline
+
     def again(self, exc: BaseException, attempt: int) -> bool:
-        return attempt < self.attempts and _retryable(exc)
+        return attempt < self.attempts and _retryable(exc) and not self._past_deadline(attempt)
 
     def _data(self, error: str, attempt: int) -> dict[str, Any]:
         if self.attempts == 1:
@@ -335,8 +371,13 @@ class _Tries:
         (interrupt, cancellation) once recorded."""
         error = _describe(exc)
         message = f"{self.job} failed for {self.session_date}"
-        if self.attempts > 1 and attempt == self.attempts and _retryable(exc):
-            message += f" after {self.attempts} attempts"
+        data = self._data(error, attempt)
+        if self.attempts > 1 and _retryable(exc):
+            if attempt == self.attempts:
+                message += f" after {self.attempts} attempts"
+            else:  # retries were left, but the next wait would end after the deadline
+                message += f" after attempt {attempt} of {self.attempts} (retries stopped: deadline)"
+                data["stopped"] = "deadline"
         _record_failure(
             self.factory,
             self.clock,
@@ -346,7 +387,7 @@ class _Tries:
             error,
             self.failure_level,
             message=message,
-            data=self._data(error, attempt),
+            data=data,
         )
         if not isinstance(exc, Exception):
             raise exc
@@ -407,7 +448,12 @@ class _Tries:
 
     @staticmethod
     def detail(detail: dict[str, Any], attempt: int) -> dict[str, Any]:
-        return {**detail, "attempts": attempt} if attempt > 1 else detail
+        """The body's detail, plus the attempts it took when more than one. A body's own `attempts` key
+        is never overwritten: the count then goes in `retry_attempts`."""
+        if attempt <= 1:
+            return detail
+        key = "retry_attempts" if "attempts" in detail else "attempts"
+        return {**detail, key: attempt}
 
 
 def _record_success(
@@ -425,12 +471,14 @@ def _record_success(
                 raise JobRunMissing(f"job_runs row {run_id} disappeared")
             row.status, row.finished_at, row.detail = "succeeded", clock.now(), detail
     except Exception as exc:
+        # the critical event written next is the record (if that fails too, its own log line is mirrored)
         log.critical(
             "job.record_success_failed",
             job=job,
             session_date=session_date.isoformat(),
             run_id=run_id,
             error_type=type(exc).__name__,
+            event_logged=True,
         )
         _alert_unrecorded_success(factory, clock, job, session_date, run_id, type(exc).__name__)
         return JobOutcome(

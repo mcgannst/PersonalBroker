@@ -55,6 +55,7 @@ from tests.integration.test_worker_day import world as world  # the P3 fixture, 
 from trader.db import models as m
 from trader.db.session import session_scope
 from trader.jobs.runner import OUTCOME_UNKNOWN
+from trader.notify.notifier import INTERRUPTED_BY_RESTART
 from trader.worker import acquire_single_instance, release_single_instance
 
 pytestmark = pytest.mark.db
@@ -68,9 +69,10 @@ class HardKill(BaseException):
 
 
 def take_lock(d: Driver, at: datetime) -> Connection:
-    """What `Worker.run` does first, at `at`: the single-instance lock. A new worker gets it once the old
-    process is gone; the server frees a dead session's lock as soon as it notices the disconnect, so poll
-    briefly."""
+    """What `Worker.run` does first, at `at`: the single-instance lock, then its restart recovery
+    (`recover_after_lock`: stale `sending` notifications become `unknown`). A new worker gets the lock once
+    the old process is gone; the server frees a dead session's lock as soon as it notices the disconnect,
+    so poll briefly."""
     d.w.clock.set(at)
     engine = d.w.core.engine
     deadline = wall.monotonic() + 5.0
@@ -80,6 +82,7 @@ def take_lock(d: Driver, at: datetime) -> Connection:
             d.worker._lock = conn
             d.worker._started_at = d.w.clock.now()
             _held.append(conn)
+            d.worker.recover_after_lock()
             return conn
         assert wall.monotonic() < deadline, "the dead worker's lock was never freed"
         wall.sleep(0.05)
@@ -267,6 +270,8 @@ async def test_hard_kills_mid_session_duplicate_nothing(world: World) -> None:
 
     async def worker_c(d: Driver) -> None:
         take_lock(d, et(9, 36, 10))
+        # 10 s after the claim, the row could still be a live process's send: C's start leaves it alone
+        assert notification_status(world, f"fill:{entry_fill}") == "sending"
         sent_before = len(world.api.sent)
         report = await d.at(et(9, 36, 10))
         assert report.fired == [] and report.fills == 0  # nothing re-fired, the entry is not filled twice
@@ -291,9 +296,24 @@ async def test_hard_kills_mid_session_duplicate_nothing(world: World) -> None:
         stop(d)
 
     await with_worker(world, worker_c)
+    assert notification_status(world, f"fill:{entry_fill}") == "sending"  # C never touched it
 
-    # test 6: the in-flight notification is never re-sent
-    assert notification_status(world, f"fill:{entry_fill}") == "sending"
+    # test 6: the next worker start settles the interrupted send as `unknown` (the System page's
+    # UNDELIVERED list), and it is never re-sent
+    async def worker_d(d: Driver) -> None:
+        sent_before = len(world.api.sent)
+        take_lock(d, et(16, 30))  # long past SENDING_STALE_AFTER since B's claim at 09:36
+        with world.factory() as s:
+            row = s.execute(
+                select(m.Notification).where(m.Notification.dedupe_key == f"fill:{entry_fill}")
+            ).scalar_one()
+        assert (row.status, row.error) == ("unknown", INTERRUPTED_BY_RESTART)
+        await d.at(et(16, 30, 5))
+        assert len(world.api.sent) == sent_before
+        stop(d)
+
+    await with_worker(world, worker_d)
+    assert notification_status(world, f"fill:{entry_fill}") == "unknown"
     assert events_of(world, "job.event:orb_open") == [
         (
             "critical",
@@ -342,7 +362,7 @@ async def test_hard_kills_mid_session_duplicate_nothing(world: World) -> None:
     with world.factory() as s:
         closed_at = s.execute(select(m.Position.closed_at)).scalar_one()
     assert closed_at is not None and closed_at < t.close
-    assert [k for k, st in notifications(world) if st not in ("sent", "sending")] == []
+    assert [k for k, st in notifications(world) if st != "sent"] == [f"fill:{entry_fill}"]
 
 
 # --- test 8: a pending entry proposal of the dead worker expires on time ------------------------------------

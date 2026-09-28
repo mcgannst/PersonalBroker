@@ -191,8 +191,10 @@ class RuntimeSettings(BaseModel):
     reports_weekly_max_cost_usd: Decimal = Field(
         Decimal("0.05"), ge=0, le=Decimal("1"), allow_inf_nan=False, alias="reports.weekly_max_cost_usd"
     )
-    jobs_retry_attempts: int = Field(3, ge=1, le=5, alias="jobs.retry_attempts")
-    jobs_retry_delay_seconds: int = Field(120, ge=10, le=1800, alias="jobs.retry_delay_seconds")
+    # P5-GO fix round 1: at most 3 attempts and a 600 s first wait (600 + 1200 s), so a day-level job's
+    # retries end well inside its window; jobs with a hard stop also pass a RetryPolicy deadline.
+    jobs_retry_attempts: int = Field(3, ge=1, le=3, alias="jobs.retry_attempts")
+    jobs_retry_delay_seconds: int = Field(120, ge=10, le=600, alias="jobs.retry_delay_seconds")
     logging_mirror_level: Literal["error", "critical", "off"] = Field("error", alias="logging.mirror_level")
     logging_mirror_max_per_minute: int = Field(30, ge=1, le=600, alias="logging.mirror_max_per_minute")
 

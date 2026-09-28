@@ -503,8 +503,8 @@ def test_load_replay_run_refuses_the_live_run_and_unknown_ids(db_factory: sessio
 
 
 def test_retry_policy_from_settings() -> None:
-    s = RuntimeSettings.model_validate({"jobs.retry_attempts": 4, "jobs.retry_delay_seconds": 90})
-    assert RetryPolicy.from_settings(s) == RetryPolicy(attempts=4, first_delay_s=90.0, backoff=2.0)
+    s = RuntimeSettings.model_validate({"jobs.retry_attempts": 2, "jobs.retry_delay_seconds": 90})
+    assert RetryPolicy.from_settings(s) == RetryPolicy(attempts=2, first_delay_s=90.0, backoff=2.0)
     assert RetryPolicy.from_settings(RuntimeSettings()) == RetryPolicy(3, 120.0, 2.0)
     assert RetryPolicy() == RetryPolicy(1, 120.0, 2.0)
     with pytest.raises(dataclasses.FrozenInstanceError):

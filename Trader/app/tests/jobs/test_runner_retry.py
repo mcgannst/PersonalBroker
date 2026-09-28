@@ -8,13 +8,14 @@ tests.
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session, sessionmaker
+from structlog.testing import capture_logs
 
 from tests.factories import add_run
 from tests.fakes_telegram import FakeMessenger, RecordingNotifier
@@ -378,3 +379,96 @@ async def test_async_second_process_is_skipped_while_the_first_waits(
     out = await run_job_async(db_factory, CLOCK, "premarket", D, fn, retry=THREE, sleep=AsyncSleep(second))
     assert other == [JobOutcome("skipped", {"reason": "already running"})]
     assert out == JobOutcome("succeeded", {"n": 1, "attempts": 2})
+
+
+# --- fix round 1 (P5-GO): deadline, validation, detail key, one row per incident -------------------------
+
+
+def test_a_wait_past_the_deadline_is_never_started_and_the_failure_alerts(
+    db_factory: sessionmaker[Session],
+) -> None:
+    fn, calls = flaky(5)
+    slept: list[float] = []
+    # the first wait (120 s) ends before the deadline, the second (240 s) would end after it
+    policy = RetryPolicy(attempts=3, first_delay_s=120.0, deadline=CLOCK.now() + timedelta(seconds=200))
+    out = run_job(db_factory, CLOCK, "preopen", D, fn, retry=policy, sleep=slept.append)
+    assert out.status == "failed" and len(calls) == 2 and slept == [120.0]
+    assert rows(db_factory) == [
+        ("failed", "RuntimeError: FinViz down #1"),
+        ("failed", "RuntimeError: FinViz down #2"),
+    ]
+    assert levels(db_factory) == ["warning", "error"]
+    _, _, message, data = events(db_factory)[-1]
+    assert message == "preopen failed for 2026-10-06 after attempt 2 of 3 (retries stopped: deadline)"
+    assert data == {
+        "error": "RuntimeError: FinViz down #2",
+        "attempt": 2,
+        "attempts": 3,
+        "stopped": "deadline",
+    }
+
+
+def test_a_wait_ending_exactly_at_the_deadline_still_runs(db_factory: sessionmaker[Session]) -> None:
+    fn, _ = flaky(1)
+    slept: list[float] = []
+    policy = RetryPolicy(attempts=3, first_delay_s=120.0, deadline=CLOCK.now() + timedelta(seconds=120))
+    out = run_job(db_factory, CLOCK, "preopen", D, fn, retry=policy, sleep=slept.append)
+    assert out == JobOutcome("succeeded", {"n": 1, "attempts": 2}) and slept == [120.0]
+
+
+async def test_async_deadline_already_passed_means_one_attempt_only(
+    db_factory: sessionmaker[Session],
+) -> None:
+    fn, calls = aflaky(3)
+    policy = RetryPolicy(attempts=3, first_delay_s=10.0, deadline=CLOCK.now())
+    out = await run_job_async(db_factory, CLOCK, "premarket", D, fn, retry=policy, sleep=AsyncSleep())
+    assert out.status == "failed" and len(calls) == 1
+    assert levels(db_factory) == ["error"]
+    assert events(db_factory)[-1][3]["stopped"] == "deadline"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"attempts": 0},
+        {"first_delay_s": -1.0},
+        {"first_delay_s": float("inf")},
+        {"backoff": 0.5},
+        {"deadline": datetime(2026, 10, 6, 13, 28)},  # naive
+    ],
+)
+def test_retry_policy_is_validated(kwargs: dict[str, Any]) -> None:
+    with pytest.raises(ValueError):
+        RetryPolicy(**kwargs)
+
+
+def test_retry_policy_from_settings_takes_a_deadline() -> None:
+    deadline = datetime(2026, 10, 6, 9, 28, tzinfo=ZoneInfo("America/New_York"))
+    policy = RetryPolicy.from_settings(RuntimeSettings(), deadline=deadline)
+    assert policy == RetryPolicy(3, 120.0, 2.0, deadline)
+
+
+def test_a_body_attempts_key_is_kept_and_the_count_goes_in_retry_attempts(
+    db_factory: sessionmaker[Session],
+) -> None:
+    calls: list[int] = []
+
+    def fn() -> dict[str, Any]:
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("once")
+        return {"attempts": 7}
+
+    out = run_job(db_factory, CLOCK, "nightly", D, fn, retry=THREE, sleep=lambda _: None)
+    assert out == JobOutcome("succeeded", {"attempts": 7, "retry_attempts": 2})
+
+
+def test_outcome_unknown_log_line_is_marked_event_logged(db_factory: sessionmaker[Session]) -> None:
+    """The critical event is the record: the log mirror (P5-T14) must not write a second row for it."""
+    with session_scope(db_factory) as s:
+        s.add(m.JobRun(job="event:orb_open", session_date=D, started_at=CLOCK.now(), status="running"))
+    with capture_logs() as logs:
+        out = run_job(db_factory, CLOCK, "event:orb_open", D, dict, rerun_abandoned=False)
+    assert out.status == "failed"
+    [line] = [e for e in logs if e["event"] == "job.outcome_unknown"]
+    assert line["event_logged"] is True

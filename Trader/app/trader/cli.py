@@ -758,6 +758,131 @@ def weekly(
     _report("weekly", week_ending, out)
 
 
+# --- P6-T2: the soak report and marks -----------------------------------------------------------------------
+
+
+def _soak_deps(core: "Core", notifier: Any = None, render: Any = None) -> Any:
+    """The read-only SoakDeps: settings through `quiet_settings` (defaults on an unusable row, no event),
+    plans through `soak.readonly_plan` (never `runtime.plan_builder`)."""
+    from trader import runtime
+    from trader.jobs import soak
+    from trader.notify.notifier import NullNotifier
+
+    settings = runtime.quiet_settings(core)
+    return soak.SoakDeps(
+        factory=core.factory,
+        clock=core.clock,
+        calendar=core.calendar,
+        settings=settings,
+        plan=soak.readonly_plan(core.factory, core.clock, core.calendar, settings),
+        orb_enabled=soak.orb_enabled_reader(core.factory, core.clock),
+        notifier=notifier if notifier is not None else NullNotifier(),
+        render=render if render is not None else runtime.build_renderer(core),
+        env=core.env.app_env,
+    )
+
+
+@app.command("soak-report")
+def soak_report(
+    through: str | None = typer.Option(
+        None, "--through", help="Last session YYYY-MM-DD (default: the latest session up to today in ET)"
+    ),
+    sessions: int = typer.Option(20, "--sessions", min=1, max=250, help="Sessions in the window"),
+    target: int = typer.Option(10, "--target", min=1, max=250, help="Consecutive clean days wanted"),
+    as_json: bool = typer.Option(False, "--json", help="Print the report as JSON"),
+    notify: bool = typer.Option(False, "--notify", help="Send the day's line through the configured bot"),
+    final: bool = typer.Option(False, "--final", help="The Saturday line settling the week's last session"),
+) -> None:
+    """The soak report (P6-T2): the clean-day verdict of each recent session, the run of consecutive clean
+    days and the earliest finish. Read-only (never a `job_runs` row). Exit 0 whether or not the days are
+    clean; 1 only when the database can't be read."""
+    _setup_logging()
+    import asyncio
+    import json
+    from contextlib import AsyncExitStack
+
+    from trader import runtime
+    from trader.jobs import soak
+    from trader.market.clock import et_date
+
+    # No log mirror: the report writes nothing (a day plan's own error lines would otherwise become rows).
+    core = _core("soak-report", mirror=False)
+    last: date | None = None
+    if through:
+        try:
+            last = date.fromisoformat(through)
+            core.calendar.is_session(last)
+        except ValueError:
+            _fail(f"soak-report: --through {through} is not a date in the trading calendar (use YYYY-MM-DD)")
+    elif notify and not final and not core.calendar.is_session(et_date(core.clock.now())):
+        typer.echo("soak-report: not a trading session, nothing to send")
+        return
+    deps = _soak_deps(core)
+    try:
+        report = soak.load_report(deps, through=last, sessions=sessions, target=target)
+    except Exception as exc:
+        _fail(f"soak-report: failed: {_one_line(exc)}")
+    if as_json:
+        typer.echo(json.dumps(soak.report_json(report)))
+    else:
+        for line in soak.report_lines(report):
+            typer.echo(line)
+    if not notify:
+        return
+    if not runtime.telegram_configured(core.env):
+        typer.echo("Telegram not configured")
+        return
+
+    async def send() -> bool:
+        async with AsyncExitStack() as stack:
+            api = await runtime.open_telegram(core, stack)
+            sending = _soak_deps(core, runtime.build_notifier(core, api), runtime.build_renderer(core))
+            return await soak.notify_report(sending, report, final=final)
+
+    try:
+        sent = asyncio.run(send())
+    except Exception as exc:
+        _fail(f"soak-report: the line was not sent: {_one_line(exc)}")
+    label = soak.dedupe_key(report.through, final=final)
+    typer.echo(f"sent {label}" if sent else f"already sent {label}, nothing to send")
+
+
+@app.command("soak-mark")
+def soak_mark(
+    kind: str = typer.Argument(..., help="reset, outage or clear"),
+    date_: str = typer.Option(..., "--date", help="The session YYYY-MM-DD"),
+    reason: str = typer.Option(..., "--reason", help="Why (1-200 characters)"),
+) -> None:
+    """Mark a soak day (P6-T2): `reset` restarts the count on that session (a trading-change deploy), `outage`
+    makes it not clean, `clear` removes the day's mark. One `info` event (source `soak`), never relayed."""
+    _setup_logging()
+    from trader import runtime
+    from trader.jobs import soak
+
+    if kind not in soak.MARK_KINDS:
+        _fail(f"soak-mark: the mark must be one of {', '.join(soak.MARK_KINDS)}")
+    if not 1 <= len(reason.strip()) <= soak.MAX_REASON or len(reason) > soak.MAX_REASON:
+        _fail(f"soak-mark: reason must be 1-{soak.MAX_REASON} characters")
+    try:
+        day = date.fromisoformat(date_)
+    except ValueError:
+        _fail(f"soak-mark: --date {date_} is not a valid date (use YYYY-MM-DD)")
+    core = _core("soak-mark")
+    try:
+        is_session = core.calendar.is_session(day)
+    except ValueError:
+        is_session = False
+    if not is_session:
+        _fail(f"soak-mark: {day} is not a trading session")
+    try:
+        soak.record_mark(
+            core.factory, core.clock, runtime.active_live_run_id(core.factory), kind, day, reason
+        )
+    except Exception as exc:
+        _fail(f"soak-mark: failed: {_one_line(exc)}")
+    typer.echo(f"marked {kind} {day}")
+
+
 def _lower_priority() -> None:
     """A replay shares the container's CPUs with the live worker: run it at nice 10 (best effort)."""
     import os

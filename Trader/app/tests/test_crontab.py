@@ -33,6 +33,8 @@ EXPECTED = {
     ("58 15 * * 1-5", "trader event flatten"),
     ("15 16 * * 1-5", "trader postclose"),
     ("0 9 * * 6", "trader weekly"),  # P5-T17: Saturday 09:00 ET, the week just ended (SPEC §9)
+    ("5 18 * * 1-5", "trader soak-report --notify"),  # P6-T2: 18:05 ET = 16:05 MT, after the post-close
+    ("30 10 * * 6", "trader soak-report --notify --final"),  # P6-T2: Sat 10:30 ET, after the weekly report
 }
 # SPEC §9 times (ET) of the weekday jobs, plus the documented 12:55 flatten and 12:32 / 15:32 overlay backups.
 WEEKDAY_ET = {
@@ -44,6 +46,7 @@ WEEKDAY_ET = {
     "trader event flatten": [time(12, 55), time(12, 58), time(15, 55), time(15, 58)],
     "trader checkin --at 13:30": [time(13, 30)],
     "trader postclose": [time(16, 15)],
+    "trader soak-report --notify": [time(18, 5)],
 }
 RANGES = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 7)]
 

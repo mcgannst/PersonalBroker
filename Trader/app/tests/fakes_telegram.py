@@ -25,6 +25,7 @@ from trader.notify.types import (
     PositionLine,
     PreopenView,
     ProposalView,
+    SoakLineView,
     StatusView,
     WeeklyReportView,
 )
@@ -203,6 +204,11 @@ class FakeRenderer:
 
     def weekly_report(self, v: WeeklyReportView) -> OutboundMessage:
         return self._msg("weekly_report", "weekly_report", v)
+
+    def soak_line(self, view: SoakLineView) -> OutboundMessage:
+        msg = self._msg("soak_line", "soak", view)
+        key = f"soak:{view.session_date.isoformat()}" + (":final" if view.final else "")
+        return OutboundMessage(kind=msg.kind, text=msg.text, dedupe_key=key)
 
 
 class FakeIssuer:

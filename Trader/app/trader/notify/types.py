@@ -30,6 +30,7 @@ MessageKind = Literal[
     "preopen",
     "checkin",
     "reply",
+    "soak",  # P6-T2: the daily soak (dev) / ops (prod) line
 ]
 
 
@@ -229,6 +230,24 @@ class PreopenView:
     checks: tuple[Check, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class SoakLineView:
+    """The daily soak line (P6-T2, trader.jobs.soak.line_view) for one session. `failed` names the failed
+    checks (with a short masked error) of a not-clean day, or the checks still open of a pending one;
+    `changed` lists earlier days that became final with another verdict than the previous line showed."""
+
+    session_date: date
+    verdict: str  # clean | not_clean | pending
+    failed: tuple[str, ...]
+    orb_open_seconds: float | None  # None: the 9:35 scan did not succeed on time, or is off
+    consecutive_clean: int
+    target: int
+    earliest_finish: date | None  # None once the target is reached
+    changed: tuple[tuple[date, str], ...]
+    final: bool  # the Saturday line settling the week's last session (dedupe `soak:<date>:final`)
+    env: str  # dev ("Soak") | prod ("Ops": no target, no finish date)
+
+
 class Notifier(Protocol):
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message. Never raises; a message whose dedupe_key was already sent is skipped."""
@@ -273,3 +292,5 @@ class Renderer(Protocol):
     def weekly_link(self, week_ending: date) -> OutboundMessage: ...
 
     def weekly_report(self, v: WeeklyReportView) -> OutboundMessage: ...
+
+    def soak_line(self, view: SoakLineView) -> OutboundMessage: ...

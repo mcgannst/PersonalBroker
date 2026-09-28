@@ -107,6 +107,11 @@ QUIET_TIMES: tuple[tuple[time, frozenset[int]], ...] = (
     (time(15, 58), _WEEKDAYS),  # event flatten
     (time(16, 15), _WEEKDAYS),  # postclose
     (time(9, 0), frozenset({5})),  # weekly report, Saturday
+    (
+        time(18, 5),
+        _WEEKDAYS,
+    ),  # soak-report --notify (P6-T2; database only, listed to keep the sync test whole)
+    (time(10, 30), frozenset({5})),  # soak-report --notify --final, Saturday (P6-T2)
 )
 QUIET_MARGIN = timedelta(minutes=10)
 

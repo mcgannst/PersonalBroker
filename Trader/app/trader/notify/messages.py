@@ -31,6 +31,7 @@ from trader.notify.types import (
     ProposalView,
     Renderer,
     RunToDateView,
+    SoakLineView,
     StatusView,
     WeeklyReportView,
 )
@@ -692,6 +693,52 @@ class MessageRenderer:
             body = ""
         lines = [top, body, tail] if body else [top, tail]
         return self._msg("weekly_report", lines)
+
+    # --- the soak / ops line (P6-T2) ---------------------------------------------------------------------
+
+    def soak_line(self, view: SoakLineView) -> OutboundMessage:
+        """One line per session: the verdict, the 9:35 scan, the run of clean days and the earliest finish
+        (dev "Soak"; prod "Ops" without target and finish), the time in MT, then one line per earlier day
+        whose verdict changed. Silent unless the day is not clean. Dedupe `soak:<date>[:final]`."""
+        prefix = "Ops" if view.env == "prod" else "Soak"
+        head = f"<b>{prefix} {soak_day_label(view.session_date)}</b>"
+        if view.final:
+            head += " (final)"
+        if view.verdict == "clean":
+            verdict = "clean ✅"
+        elif view.verdict == "pending":
+            open_ = [
+                "weekly report due Sat" if name == "weekly" else f"{_e(name)} pending" for name in view.failed
+            ]
+            verdict = "pending ⏳" + (f" ({', '.join(open_)})" if open_ else "")
+        else:
+            verdict = "NOT clean ❌" + (f" {_e('; '.join(view.failed))}" if view.failed else "")
+        parts = [f"{head}: {verdict}"]
+        if view.orb_open_seconds is not None:
+            parts.append(f"9:35 scan {round(view.orb_open_seconds)} s")
+        elif not any(f.startswith("event:orb_open") for f in view.failed):
+            parts.append("9:35 scan off")
+        if view.env != "prod":
+            n = view.consecutive_clean
+            if n:
+                parts.append(f"{n} clean day{'' if n == 1 else 's'} in a row (target {view.target})")
+            else:
+                parts.append(f"count 0 (target {view.target})")
+            if view.earliest_finish is not None:
+                parts.append(f"earliest finish {soak_day_label(view.earliest_finish)}")
+            else:
+                parts.append("target reached")
+        parts.append(self._time(self.clock.now()))
+        lines = [" · ".join(parts)]
+        lines += [f"{soak_day_label(d)} is now {_e(text)}" for d, text in view.changed]
+        key = f"soak:{view.session_date.isoformat()}" + (":final" if view.final else "")
+        msg = self._msg("soak", lines, silent=view.verdict != "not_clean")
+        return OutboundMessage(kind=msg.kind, text=msg.text, dedupe_key=key, silent=msg.silent)
+
+
+def soak_day_label(d: date) -> str:
+    """`Mon 28 Sep`: weekday, day and month (the soak line's dates)."""
+    return f"{d:%a} {d.day} {d:%b}"
 
 
 if TYPE_CHECKING:  # mypy verifies that MessageRenderer satisfies the Renderer protocol

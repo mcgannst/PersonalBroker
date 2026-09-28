@@ -9,7 +9,9 @@
 # close (the flatten is a safety event, so its failures never settle it). The Saturday 09:00 `trader weekly`
 # line (P5-T17) reports the Monday-Friday week just ended, keyed by that week's last session; it runs although
 # Saturday is not a session and does nothing for a week without one. Retries of the day-level jobs happen
-# in-process (SPEC section 9), so there are no retry lines here.
+# in-process (SPEC section 9), so there are no retry lines here. The two `soak-report --notify` lines (P6-T2)
+# send one read-only soak/ops line per session: weekdays 18:05 after the post-close and its retries, and
+# Saturday 10:30 after the weekly report, settling the week's last session (`--final`).
 CRON_TZ=America/New_York
 0 2 * * *      trader token-refresh
 0 20 * * 0-4   trader nightly
@@ -26,3 +28,5 @@ CRON_TZ=America/New_York
 58 15 * * 1-5  trader event flatten
 15 16 * * 1-5  trader postclose
 0 9 * * 6      trader weekly
+5 18 * * 1-5   trader soak-report --notify
+30 10 * * 6    trader soak-report --notify --final

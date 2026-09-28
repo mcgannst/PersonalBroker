@@ -9,7 +9,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Current phase | 5 (Phase 4 COMPLETE ~17:05 MT Sep 27, tag phase-4-complete) |
 | Current task | P5 gauntlets (group W; replay core) + builders T2, T9, T11, T14, T15, T16 |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-28T00:16:12Z |
+| Last updated (UTC) | 2026-09-28T04:02:31Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
 | Token last refreshed (UTC) | 2026-09-27T17:21:56Z (re-seeded from Stephen's new token after .env.dev rebuild; token removed from .env.dev) |
@@ -27,6 +27,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Phase 5 started | 15:52 MT Sep 27 (P5-T1 contracts); estimate ~5.5 h: finish ~21:00-21:30 MT |
 | Phase 4 estimate | revised 15:52 MT: T19 deploy + P4-REVIEW, finish ~17:30 MT |
 | OPEN checks | Tonight 18:10 MT: nightly job_run on trader-dev; Mon 06:10 MT premarket; Mon 07:25 MT preopen message + job_runs; Stephen tap on msg 45 |
+| Stephen requests (after P5, 2026-09-27) | (1) Full activity/decision logging while running, for end-of-day analysis and tuning (every candidate, filter result, catalyst grade, ORB levels, proposal, approval, fill, exit, with reasons) plus a daily analysis export. (2) Move usernames/passwords/API keys to GitHub secrets (Stephen chose goal (c) recovery AND security: GitHub environment secrets (dev/prod) + a deploy workflow on a LAN self-hosted runner that writes the env file on the Docker host at deploy time; nothing secret kept on the Mac; the rotating Questrade token stays in the DB). Plan both as Phase 6 additions |
 | Backlog P4 | settings-fallback copied 4x (deps/system/meta/stream) - use QuietSettings; pin proxy subnet (TRADER_FORWARDED_ALLOW_IPS in env / deploy.sh check); prod: one-shot migrate container so docker exec can't read owner URL/admin password; SPEC 15 deploy text outdated; small helper duplication |
 
 ## Task board
@@ -110,17 +111,26 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P5-T6 | Replay runner | - | accepted | 2 | fix a2: forced close never carries overnight; lock race via pg_locks; offline window kept 09:15-16:30 (breaker pins it; cron quiet times cover 08:00/09:20) | 6471d51 |
 | P5-T7 | Replay API + SSE | - | accepted | 2 | fix a2: GW breaker 29/29 + web 16/16; no value echo in 422s; cancel-before-launch 409; live_or_unscoped in §7.1 | 36ac2bc |
 | P5-T8 | Web Replay page | - | accepted | 2 | fix a2: double-submit guard on start/cancel; CompareTable keeps % (breaker pins it) | 36ac2bc |
-| P5-T9 | Weekly report + Claude commentary | - | fixing | 2 | GN breaker 13/16: trip ratios not x100 (good commentary rejected), </facts> in ticker, cost cap not pre-estimated -> fix a2 | 18a35e4 |
-| P5-T10 | Telegram/relay additions | - | fixing | 2 | GN relay breakers all pass; nits (1 wins, run-to-date bound) in fix a2 | ad8ab72 |
+| P5-T9 | Weekly report + Claude commentary | - | accepted | 2 | fix a2: GN breaker 18/18; trip %s accepted; facts < escaped; worst-case cost fit (trips trimmed or Claude skipped); DB off loop | da90a2e |
+| P5-T10 | Telegram/relay additions | - | accepted | 2 | fix a2: run-to-date bounded by session day, shared counting helper; 1 trade | da90a2e |
 | P5-T11 | Kill-switch trips end to end (tests) | - | accepted | 1 | tests only (8 e2e): every switch trips/alerts/resets via real engine+relay; works in replay; no prod bugs | 8477c12 |
 | P5-T12 | Reports API + CSV columns | - | accepted | 2 | fix a2: weekly reports served from live runs only; year-1 overflow clamped (404) | 36ac2bc |
 | P5-T13 | Web Reports commentary | - | accepted | 2 | fix a2: no code change needed; web breaker green | 36ac2bc |
-| P5-T14 | Error log mirror | - | fixing | 2 | GO breaker: 4 mirror fails (DSN leak via multiline traceback, deep non-string secrets, re-entry recursion, inline flush ignores timeout) -> fix a2 | c7db4e5 |
-| P5-T15 | Job retries + restart recovery | - | fixing | 2 | GO: retries hold; must-fix stranded sending rows never surfaced -> settle as unknown at worker start; retry deadline -> fix a2 | ad0addd |
+| P5-T14 | Error log mirror | - | accepted | 2 | fix a2: GO breaker 16/16; tracebacks masked whole, deep values placeholdered, re-entry guard, bounded flush/close | e798889 |
+| P5-T15 | Job retries + restart recovery | - | accepted | 2 | fix a2: stuck sending rows settled as unknown at worker start (15 min); RetryPolicy deadline + validation; bounds 1-3 attempts, 10-600 s | e798889 |
 | P5-T16 | Compose limits | - | accepted | 1 | GO gauntlet: compose limits + every P4 setting, dev+prod, parsed as YAML; no findings | 0214068 |
-| P5-T17 | Wiring | - | todo | 1 | - | - |
-| P5-T18 | End to end + LIVE | - | todo | 1 | - | - |
-| P5-REVIEW | Phase 5 review | - | todo | 1 | - | - |
+| P5-T17 | Wiring | - | accepted | 1 | T17 gauntlet: V+B+R PASS (14 breakers/23 cases); six builder deviations accepted; nits only | c491a3e |
+| P5-T18 | End to end + LIVE | - | accepted | 1 | 9 e2e tests (golden x3 identical, isolation, static scan, weekly day); LIVE: deployed 9918781 w/ FinViz fix, health/0006/crontab/limits OK, 2 real replays identical, peak 370 MiB; deferred LIVE 5-7; replay universe fallback gap -> review | 9918781 |
+| P5-REVIEW | Phase 5 review | - | accepted | 1 | replay biased-universe fallback fixed (newest snapshot); gate 3180 py + 436 web; redeployed eaafe21; cross-task pass incomplete (agent stopped) -> backlog; tagged phase-5-complete | eaafe21 |
+| P6-T0 | Write the Phase 6 plan | P5 | accepted | 1 | plan verify+fix PASS (6 must-fix fixed in plan) | 76d0e5b |
+| P6-T1 | Live rechecks (S2, S4, S1) | T0 | todo | 1 | - | - |
+| P6-T2 | Soak report + daily line | P5-T17 | todo | 1 | - | - |
+| P6-T3 | 10 clean trading days | T2 | todo | 1 | - | - |
+| P6-T4 | Stephen's manual check | T0 | todo | 1 | - | - |
+| P6-T5 | Promote to prod | T1,T3,T4,T6,T7,T8 | todo | 1 | - | - |
+| P6-T6 | Promotion tooling | P5-T17 | todo | 1 | - | - |
+| P6-T7 | Stephen's prod credentials | T8 | todo | 1 | - | - |
+| P6-T8 | Prod infra prep (LIVE) | T6 | todo | 1 | - | - |
 
 ## Escalations
 
@@ -1893,3 +1903,65 @@ None open.
 - Commits: 6471d51
 - Gate: gate.sh ran 3045 passed and 7 failed. All 7 failures are in P5-GN/P5-GO breaker evidence files (other groups). Targeted run 257 passed, RC breaker 18/18
 - Notes: new Engine.on_candles_for, ReplayData(created_at=, quiet_sleep=), reconcile uses pg_locks
+
+### 2026-09-27 18:35 MT · P5-GN · Builder · attempt 2 · finished
+- Result: breaker t05/t07/t08 fixed (pct trip ratios, < escaped in facts JSON, worst-case cost estimate with trips trim or facts-only skip). Nits fixed except "1 wins" (breaker test_09 asserts that text) and claude_spent day attribution (documented as conservative)
+- Commits: da90a2e
+- Gate: gate.sh 3057 passed, 4 failed, all in tests/gauntlet/test_p5_go_breaker.py (logging_mirror, another round). All 16 P5-GN breaker tests pass
+- Notes: T9/T10 build notes carry "Fix round 1" and a T17 note (weekly AsyncAnthropic timeout=30, max_retries=1)
+
+### 2026-09-27 18:55 MT · P5-GO · Builder · attempt 2 · finished
+- Result: all MUST (1-5), SHOULD (6-7) and nits fixed. All 16 test_p5_go_breaker functions pass
+- Commits: e798889
+- Gate: 3070 passed, 3 failed (test_p5_gn_breaker 05/07/08, weekly report, owned by the P5-GN round)
+- Notes: stale `sending` notifications settle `unknown` at worker start (15 min threshold). RetryPolicy.deadline added, T17 must pass preopen/premarket deadlines. Settings bounds now attempts 1-3, delay 10-600
+
+### 2026-09-27 18:36 MT · P5-T17 · Builder · attempt 1 · started
+- Wiring: CLI, runtime, API services, launcher, crontab, SPEC §9 amendment, §7.1 rows
+
+### 2026-09-27 18:37 MT · P6-T0 · Planner · attempt 1 · started
+- Notes: writing Trader/docs/plans/2026-09-27-phase-6-promotion.md (spec plan, soak and promotion)
+
+### 2026-09-27 18:58 MT · P6-T0 · Planner · attempt 1 · finished
+- Result: done, Phase 6 plan written (8 tasks: T1 live rechecks, T2 soak report, T3 10 clean days, T4 Stephen manual check, T5 promote, T6 promotion tooling, T7 Stephen credentials, T8 prod infra prep)
+- Commits: f7c8522
+- Gate: not run (plan only, test lanes left to Phase 5)
+- Notes: critical path T0, T2, T3 (soak to Fri 2026-10-09, final Sat 10-10 08:30 MT), T5. Max width 5 (2 builders: T2, T6). T2 and T6 wait for P5-T17 past its Verifier
+
+### 2026-09-27 18:59 MT · P6-T0 · Verifier+Spec reviewer · attempt 1 · started
+- Notes: combined planning verify+fix of Trader/docs/plans/2026-09-27-phase-6-promotion.md (f7c8522)
+
+### 2026-09-27 19:25 MT · P6-T0 · Verifier+Spec reviewer · attempt 1 · finished
+- Result: PASS after fixes in place (6 must-fix, 6 should-fix)
+- Commits: 76d0e5b
+- Gate: not run (plan only)
+- Notes: soak report plans via live_day_plan (plan_builder writes), token check stable on re-evaluation, event deadlines by started_at, premarket deadline 09:30, orb_open only while orb_sip enabled, cron_gap pins --date, D2 rule 2 exempts reporting cron lines, no sshpass -p, SCRAM verifiers, T2/T6 wait for P5-T17 accepted
+
+### 2026-09-27 19:25 MT · P5-T17 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-9 ticked
+- Commits: c491a3e
+- Gate: gate.sh passed (pytest 3125 passed, web 436 passed, ruff and mypy clean)
+- Notes: tests/conftest.py pins one attempt for runtime.RetryPolicy (P3 breaker tests of a failing postclose would otherwise sleep 6 min). Typer 0.27 vendors click, so CLI mirrors close via main(ctx).call_on_close. trader weekly refuses an unfinished week. docker/.env.example added.
+
+### 2026-09-27 19:34 MT · P5-T17 · Verifier+Breaker+Spec/Code reviewer · attempt 1 · started
+- Notes: gauntlet of c491a3e (wiring), breaker tests in tests/gauntlet/test_p5_t17_breaker.py
+
+### 2026-09-27 20:05 MT · P5-T17 · Verifier+Breaker+Spec/Code reviewer · attempt 1 · finished
+- Result: Verifier PASS, Breaker PASS, review PASS (no must-fix)
+- Commits: 61be266 (tests/gauntlet/test_p5_t17_breaker.py, 14 tests / 23 cases, all pass)
+- Gate: gate.sh green on c491a3e (3125 py + 436 web), tree clean, T17 boxes ticked
+- Findings: should-fix none. Nits: atexit re-registered per install (cli.py:469), duplicate Claude timeout literal in premarket (cli.py:314), replay --run of a run cancelled before start exits 1 (launcher warning), SPEC 9 has an extra deadline sentence (accurate), test fixtures set aside stray mirror handlers instead of failing on leaks
+
+### 2026-09-27 19:47 MT · P5-T18 · Builder · attempt 1 · started
+- Scope: golden determinism test, isolation tests, weekly day test, smoke /replay, then LIVE deploy of trader-dev (carries FinViz fix 5cd8a3f) and LIVE checks
+
+### 2026-09-27 20:30 MT · P5-T18 · Builder · attempt 1 · finished
+- Result: tests 1-5 done, LIVE 1-4 done, LIVE 5-7 deferred (need a trading day or Saturday)
+- Commits: 9918781 (tests, golden files, smoke), b19678f (plan LIVE notes)
+- Gate: gate.sh passed (3178 pytest, 436 vitest)
+- LIVE: trader-dev deployed 9918781 at 20:21 MT (carries FinViz fix 5cd8a3f). Health 200 in 18 s, meta 9918781, alembic 0006 head, crontab valid with weekly line, limits ok, worker idle and fresh. Downtime skipped no cron line. Earnings screens dry-read ok in the container.
+- LIVE replays 18 and 19 (2026-09-11..09-25, full data): exit 0, identical, isolated (0 notifications, 0 job_runs, 0 live or no-run events), peak memory 36 percent. Caveat: 0 candidates because the only universe snapshot is 2026-09-28, after the wall date, so the biased fallback finds none.
+- OPEN (non-blocking): LIVE 5 manual weekday `trader weekly --date` run. LIVE 6 market-hours restart (10:30-11:15 or 12:00-13:15 ET, normal session). LIVE 7 first Saturday cron weekly (2026-10-03). A replay re-run on a weekday evening once a universe snapshot dated on or before that day exists, so strategy trades are covered.
+
+### 2026-09-27 20:40 MT · P5-REVIEW · Phase reviewer · attempt 1 · started
+- Scope: whole-phase review + fix; must-fix biased-universe fallback (P5-T18 LIVE finding); backlog of open nits

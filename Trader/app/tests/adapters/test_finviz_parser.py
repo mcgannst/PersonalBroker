@@ -3,7 +3,9 @@ from decimal import Decimal
 from pathlib import Path
 
 from trader.adapters.finviz.parser import (
+    EARNINGS_COLUMN,
     blocked_reason,
+    parse_earnings,
     parse_news,
     parse_news_page,
     parse_screener,
@@ -215,3 +217,59 @@ def test_verified_empty_needs_a_zero_count_no_rows_and_a_ticker_header_if_a_tabl
         '<div class="count-text">0 Total</div><table class="screener_table"><tr><th>Symbol</th></tr></table>'
     )
     assert not parse_screener(no_ticker).verified_empty
+
+
+# --- Earnings window fix (2026-09-27): the Earnings column of custom view 152 ("Sep 25/a", "Sep 25/b") ---
+# Live pages fetched Sunday 2026-09-27 with the scraper's own headers, scripts stripped (no secrets):
+#   raw_screener_earnings_prevdays5.html   f=earningsdate_prevdays5, v=152, c=0,1,2,65,67,68, o=-earningsdate
+#   raw_screener_earnings_thisweek_p1/p2   f=earningsdate_thisweek, same view, o=earningsdate (38 names)
+#   raw_screener_earnings_zero.html        f=earningsdate_yesterdayafter on a Sunday: "0 Total", no table
+
+
+def test_parse_earnings_reads_date_and_before_or_after() -> None:
+    near = date(2026, 9, 28)
+    assert parse_earnings("Sep 25/a", near) == (date(2026, 9, 25), "a")
+    assert parse_earnings("Sep 28/b", near) == (date(2026, 9, 28), "b")
+    assert parse_earnings(" Oct 01/a ", near) == (date(2026, 10, 1), "a")
+    assert parse_earnings("Sep 5/b", near) == (date(2026, 9, 5), "b")
+
+
+def test_parse_earnings_picks_the_year_nearest_the_session() -> None:
+    assert parse_earnings("Dec 31/a", date(2027, 1, 4)) == (date(2026, 12, 31), "a")
+    assert parse_earnings("Jan 04/b", date(2026, 12, 31)) == (date(2027, 1, 4), "b")
+    assert parse_earnings("Feb 29/a", date(2028, 3, 1)) == (date(2028, 2, 29), "a")
+
+
+def test_parse_earnings_returns_none_for_anything_unreadable() -> None:
+    near = date(2026, 9, 28)
+    for bad in ("", "-", "Sep 25", "Sep 25/x", "Sep 25/A", "25 Sep/a", "Sept 25/a", "Feb 30/a", "Sep 25/ab"):
+        assert parse_earnings(bad, near) is None, bad
+
+
+def test_live_earnings_page_has_the_earnings_column_with_a_and_b_marks() -> None:
+    page = parse_screener((FIX / "raw_screener_earnings_prevdays5.html").read_text(encoding="utf-8"))
+    assert page.total == 25 and len(page.rows) == 20 and page.bad_rows == 0
+    assert page.header == ["No.", "Ticker", "Company", "Price", "Volume", EARNINGS_COLUMN]
+    got = {r["Ticker"]: parse_earnings(r[EARNINGS_COLUMN], date(2026, 9, 28)) for r in page.rows}
+    # Friday 2026-09-25: one before-open reporter and no after-close reporter anywhere in the market
+    assert got["TBN"] == (date(2026, 9, 25), "b")
+    assert [t for t, v in got.items() if v is not None and v[0] == date(2026, 9, 25) and v[1] == "a"] == []
+    assert got["COST"] == (date(2026, 9, 24), "a") and got["DRI"] == (date(2026, 9, 24), "b")
+    assert None not in got.values()
+
+
+def test_live_this_week_pages_cover_monday_to_friday() -> None:
+    rows = [
+        r
+        for name in ("raw_screener_earnings_thisweek_p1.html", "raw_screener_earnings_thisweek_p2.html")
+        for r in parse_screener((FIX / name).read_text(encoding="utf-8")).rows
+    ]
+    assert len(rows) == 38 and len({r["Ticker"] for r in rows}) == 38
+    marks = [parse_earnings(r[EARNINGS_COLUMN], date(2026, 9, 22)) for r in rows]
+    assert None not in marks
+    assert {m[0] for m in marks if m is not None} == {date(2026, 9, d) for d in range(21, 26)}
+
+
+def test_live_earnings_zero_page_is_verified_empty() -> None:
+    page = parse_screener((FIX / "raw_screener_earnings_zero.html").read_text(encoding="utf-8"))
+    assert page.total == 0 and page.rows == [] and page.verified_empty

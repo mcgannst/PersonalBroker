@@ -77,13 +77,21 @@ class FakeFinviz:
         self.screens: list[str] = []
         self.news_calls: list[str] = []
 
-    def screen(self, filters: str, view: int = 111, signal: str | None = None) -> ScreenerPage:
+    def screen(
+        self, filters: str, view: int = 111, signal: str | None = None, *, columns: str | None = None
+    ) -> ScreenerPage:
         self.screens.append(filters)
         got = self.news_rows if "news_date_today" in filters else self.earnings_rows
         if isinstance(got, Exception):
             raise got
         rows = [{"No.": str(i), "Ticker": t} for i, t in enumerate(got, start=1)]
-        return ScreenerPage(len(got), ["No.", "Ticker"], rows)
+        if columns is None:
+            return ScreenerPage(len(got), ["No.", "Ticker"], rows)
+        # the earnings session window's screens (v=152 with the Earnings column): every earnings name is
+        # inside the window, before today's open (the previous session's close is the day before DAY)
+        for row in rows:
+            row["Earnings"] = f"{DAY:%b %d}/b"
+        return ScreenerPage(len(got), ["No.", "Ticker", "Earnings"], rows)
 
     def news(self, ticker: str, today_et: date) -> list[Headline]:
         self.news_calls.append(ticker)
@@ -229,7 +237,10 @@ async def test_finviz_zero_total_screen_is_empty_not_a_failure(db_factory: sessi
 
     def handler(request: httpx.Request) -> httpx.Response:
         f = request.url.params.get("f", "")
-        return httpx.Response(200, text=_full_market_page() if f == "" else _zero_total_page())
+        # the whole market, or an empty screen's market-wide cross-check (never 0 on a real morning)
+        if f == "" or not f.startswith(FILTERS):
+            return httpx.Response(200, text=_full_market_page())
+        return httpx.Response(200, text=_zero_total_page())
 
     http = httpx.Client(transport=httpx.MockTransport(handler))
     scraper = FinvizScraper(http, min_interval_s=2.0, cache_dir=None, sleep=lambda _s: None)

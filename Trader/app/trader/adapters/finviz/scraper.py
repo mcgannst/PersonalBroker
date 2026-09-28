@@ -259,11 +259,19 @@ class FinvizScraper:
     # --- screener ---
 
     def _page(
-        self, filters: str, view: int, start: int, signal: str | None, saves: list[SaveToCache]
+        self,
+        filters: str,
+        view: int,
+        start: int,
+        signal: str | None,
+        saves: list[SaveToCache],
+        columns: str | None = None,
     ) -> ScreenerPage:
         params = {"v": str(view), "f": filters, "r": str(start)}
         if signal:
             params["s"] = signal
+        if columns:
+            params["c"] = columns  # custom view (v=152) column ids, e.g. "0,1,2,68" (68 = Earnings)
         page, save = self._fetch(
             "/screener.ashx", params, _checked_screener, retry_blocked=True, use_cache=self._cache_screens
         )
@@ -293,9 +301,10 @@ class FinvizScraper:
         signal: str | None,
         required: tuple[str, ...] = ("Ticker",),
         allow_empty: bool = True,
+        columns: str | None = None,
     ) -> ScreenerPage:
         saves: list[SaveToCache] = []
-        first = self._page(filters, view, 1, signal, saves)
+        first = self._page(filters, view, 1, signal, saves, columns)
         total = _total(first)
         if first.verified_empty:
             # FinViz matched nothing ("0 Total", no rows). No column check: the page may have no table.
@@ -316,7 +325,7 @@ class FinvizScraper:
         while len(rows) < total:
             if pages >= MAX_PAGES:
                 raise FinvizParseError(f"hit the MAX_PAGES cap ({MAX_PAGES}) with {len(rows)}/{total}")
-            page = self._page(filters, view, start, signal, saves)
+            page = self._page(filters, view, start, signal, saves, columns)
             if page.header != first.header:
                 raise FinvizParseError(f"screener header changed on row {start}: {page.header}")
             if not page.rows:
@@ -336,10 +345,13 @@ class FinvizScraper:
             save()
         return ScreenerPage(total, first.header, list(unique.values()))
 
-    def screen(self, filters: str, view: int = 111, signal: str | None = None) -> ScreenerPage:
+    def screen(
+        self, filters: str, view: int = 111, signal: str | None = None, *, columns: str | None = None
+    ) -> ScreenerPage:
         """All pages merged and de-duplicated by ticker. Raises FinvizError unless the rows are
-        exactly the count FinViz reports; FinViz's verified "0 Total" page is an empty result."""
-        return self._screen(filters, view, signal)
+        exactly the count FinViz reports; FinViz's verified "0 Total" page is an empty result.
+        `columns` picks the custom view's columns (with view=152), e.g. EARNINGS_COLUMNS."""
+        return self._screen(filters, view, signal, columns=columns)
 
     def count(self, filters: str, view: int = 111) -> int:
         """The result count FinViz reports for `filters`, from the first page only (one request).

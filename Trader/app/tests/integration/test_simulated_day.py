@@ -72,7 +72,9 @@ class FakeFinviz:
             UniverseRow(t, f"{t} Inc", "Tech", "Software", Decimal("20"), 2_000_000) for t in ("AAA", "BBB")
         ]
 
-    def screen(self, filters: str, view: int = 111, signal: str | None = None) -> ScreenerPage:
+    def screen(
+        self, filters: str, view: int = 111, signal: str | None = None, *, columns: str | None = None
+    ) -> ScreenerPage:
         tickers = ["AAA"] if "news_date_today" in filters else []
         return ScreenerPage(len(tickers), ["Ticker"], [{"Ticker": t} for t in tickers])
 

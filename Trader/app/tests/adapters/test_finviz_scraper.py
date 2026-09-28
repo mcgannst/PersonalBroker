@@ -572,3 +572,39 @@ def test_count_reads_the_first_page_only() -> None:
     serve({("x", "1"): page_html(None, ["A"])})
     with pytest.raises(FinvizParseError, match="count"):
         scraper(Timer()).count("x")
+
+
+# --- Earnings window fix: custom view 152 with an explicit column list ---
+
+EARN_FIX = Path(__file__).parents[1] / "fixtures/finviz"
+
+
+@respx.mock
+def test_screen_with_columns_sends_the_custom_view_and_reads_the_earnings_column() -> None:
+    live = (EARN_FIX / "raw_screener_earnings_thisweek_p1.html").read_text(encoding="utf-8")
+    live2 = (EARN_FIX / "raw_screener_earnings_thisweek_p2.html").read_text(encoding="utf-8")
+    route = serve({("earningsdate_thisweek", "1"): live, ("earningsdate_thisweek", "21"): live2})
+    page = scraper(Timer()).screen("earningsdate_thisweek", 152, columns="0,1,2,68")
+    assert page.total == 38 and len(page.rows) == 38 and page.rows[0]["Earnings"] == "Sep 21/b"
+    sent = [c.request.url.params for c in route.calls]
+    screens = [p for p in sent if p.get("f")]
+    assert all(p.get("v") == "152" and p.get("c") == "0,1,2,68" for p in screens)
+    assert len(screens) == 2 and any(p.get("f") == "" for p in sent)  # both pages + the baseline
+
+
+@respx.mock
+def test_columns_are_part_of_the_cache_key(tmp_path: Path) -> None:
+    route = serve({("geo_usa", "1"): page_html(2, ["A", "B"])})
+    s = scraper(Timer(), tmp_path)
+    s.screen("geo_usa", 152, columns="0,1")
+    s.screen("geo_usa", 152, columns="0,1,68")
+    s.screen("geo_usa", 152, columns="0,1")  # cached
+    assert sum(1 for c in route.calls if c.request.url.params.get("f") == "geo_usa") == 2
+
+
+@respx.mock
+def test_live_earnings_zero_page_is_an_empty_screen_with_columns() -> None:
+    zero = (EARN_FIX / "raw_screener_earnings_zero.html").read_text(encoding="utf-8")
+    serve({("x,earningsdate_yesterdayafter", "1"): zero})
+    page = scraper(Timer()).screen("x,earningsdate_yesterdayafter", 152, columns="0,1,2,68")
+    assert page.total == 0 and page.rows == []

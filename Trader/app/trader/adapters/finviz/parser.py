@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
+from typing import Literal
 
 from selectolax.parser import HTMLParser, Node
 
@@ -29,6 +30,19 @@ _BLOCK_MARKERS = ("just a moment", "cf-challenge", "captcha", "attention require
 MIN_PAGE_BYTES = 1000  # anything shorter is an empty body, not a real FinViz page
 UNIVERSE_COLUMNS = ("Ticker", "Company", "Sector", "Industry", "Price", "Volume")
 BLOCK_STATUSES = frozenset({403, 429, 503})
+# The Earnings column of the custom view (v=152, column id 68; verified live 2026-09-27): "Sep 25/a" is
+# after the close, "Sep 25/b" before the open.
+EARNINGS_COLUMN = "Earnings"
+EARNINGS_VIEW = 152
+EARNINGS_COLUMNS = "0,1,2,68"  # No., Ticker, Company, Earnings
+_EARNINGS_RE = re.compile(r"^([A-Z][a-z]{2}) (\d{1,2})/([ab])$")
+_MONTHS = {
+    m: i
+    for i, m in enumerate(
+        ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), start=1
+    )
+}
+type EarningsTime = Literal["a", "b"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +147,32 @@ def parse_screener(html: str) -> ScreenerPage:
                 rec[name] = _cell_text(td)
         rows.append(rec)
     return ScreenerPage(total, header, rows, bad_rows)
+
+
+def parse_earnings(text: str, near: date) -> tuple[date, EarningsTime] | None:
+    """An Earnings cell ("Sep 25/a" = after the close, "Sep 25/b" = before the open) as (date, "a"|"b").
+
+    FinViz omits the year: the one of near.year - 1, near.year and near.year + 1 closest to `near` (the
+    session asking) wins. Anything else (blank, "-", no /a or /b mark, an impossible date) gives None;
+    the caller must count such a row, never drop it silently.
+    """
+    m = _EARNINGS_RE.match(text.strip())
+    if m is None:
+        return None
+    month = _MONTHS.get(m.group(1))
+    if month is None:
+        return None
+    day = int(m.group(2))
+    candidates: list[date] = []
+    for year in (near.year - 1, near.year, near.year + 1):
+        try:
+            candidates.append(date(year, month, day))
+        except ValueError:
+            continue
+    if not candidates:
+        return None
+    when: EarningsTime = "a" if m.group(3) == "a" else "b"
+    return min(candidates, key=lambda d: abs((d - near).days)), when
 
 
 def _decimal(text: str) -> Decimal | None:

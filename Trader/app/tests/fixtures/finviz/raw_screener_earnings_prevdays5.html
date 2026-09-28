@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en" class=" dark">
+<head>
+<title>Stock Screener - Custom prevdays5 earningsdate</title>
+<meta charset="UTF-8"><meta name="viewport" content="width=1024"><meta name="description" content="Stock screener for investors and traders, financial visualizations.">
+<meta name="robots" content="noindex">
+
+            <link rel="preload" href="/fonts/ibm-plex-sans-latin-normal.woff2" as="font" type="font/woff2" crossorigin>
+            <link rel="preload" href="/fonts/ibm-plex-sans-latin-italic.woff2" as="font" type="font/woff2" crossorigin>
+            <link rel="stylesheet" href="/assets/dist/redesign.567fe0b1.css" type="text/css" onerror="window.handleScriptNotLoaded(this)">
+<link rel="stylesheet" href="/assets/dist/main.c2e186ed.css" type="text/css" onerror="window.handleScriptNotLoaded(this)">
+
+
+<link rel="icon" type="image/png" href="/favicon_2x.png" sizes="32x32">
+<link rel="icon" type="image/png" href="/favicon.png" sizes="16x16">
+
+
+<link rel="preload" as="script" href="/assets/dist/9218.v1.4a0fd54c.js" data-chunk-id="screener-presets-select"></head>
+
+          
+          <body class="m-0 is-screener">    <div class="flex w-full items-center justify-center overflow-hidden py-2.5">
+        <div id="banner_position" class="flex items-center justify-center">
+            <div id="IC_D_728x90_1"class="relative overflow-hidden flex items-center justify-center w-full mx-auto" style="width:728px;height:90px;max-height:90px"></div>
+        </div>
+    </div>    
+    <div class="flex w-full items-start border-y border-violet-500/16 bg-violet-500/12 px-4 py-2 font-sans text-sm text-violet-500 dark:text-violet-300 sm:items-center sm:py-1.5" data-fv-notice="elite-top-banner-anonymous" data-nosnippet>
+        <div class="flex flex-1 flex-col items-center justify-center gap-2 text-center sm:flex-row sm:text-left">
+            <div class="flex items-center gap-2">
+                <svg width="16" height="16" class="shrink-0 fill-current">
+    <use href="/assets/dist-icons/icons.aa8a6c8e.svg#starOutlined"/>
+</svg>
+                <span><strong class="font-medium">Elite members</strong> get real-time data, technical charting, alerts, and no ads - starting at $24.96/mo.</span>
+            </div>
+            <a href="/register?poster=trial&utm_source=finviz&utm_medium=banner&utm_campaign=elite-top-banner" onclick="window.TrackPromotionEvent && window.TrackPromotionEvent('select_promotion', { creative_slot: 'top-banner', creative_name: 'bannerEliteTopAnonymous', promotion_id: 'elite_top_banner', promotion_name: 'Elite Top Banner' });" class="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md border-none bg-violet-500 px-3 text-2xs font-medium text-white outline-none ring-gray-200 hover:bg-violet-600 active:bg-violet-700 focus-visible:ring-2 dark:ring-gray-500 dark:hover:bg-violet-400">
+                Try Elite for Free
+                <svg width="16" height="16" class="shrink-0 fill-current">
+    <use href="/assets/dist-icons/icons.aa8a6c8e.svg#arrowLongRight"/>
+</svg>
+            </a>
+        </div>
+            <a title="Close" class="ml-2 flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-violet-500/20 max-lg:size-7" href="javascript:void(0)" onclick="window.FinvizCloseNotice('elite-top-banner-anonymous')">
+        <svg width="16" height="16" class="shrink-0 max-lg:size-5">
+    <use href="/assets/dist-icons/icons.aa8a6c8e.svg#clear"/>
+</svg>
+    </a>
+    </div>
+    <div id="js-elite-features-root"></div><span class="absolute invisible size-0 overflow-hidden"><span id="ic_us_privacy"></span></span>
+            
+            
+        <div id="notifications-container"></div><div id="notifications-react-root"></div><div id="dialogs-react-root"></div><div id="dialog-portal-root" style="display:contents"></div>
+<div class="header  flex items-center">
+    <div class="header-container flex items-center">
+        <div class="pr-6.75">
+            <a href="/" class="flex items-center gap-2.5">
+<svg width="213" height="32" class="block">
+    
+<use href="/img/logo.svg?rev=53b44e68#free-v2" class="dark:hidden" />
+<use href="/img/logo.svg?rev=53b44e68#free-v2-dark" class="hidden dark:block" />
+</svg>            </a>
+        </div>
+        <div class="flex items-center">
+            <div id="search" class="w-95">
+                <form action="/search">
+    <div class="navbar-search-placeholder max-w-95">
+        <span class="icon-wrapper">
+            <svg xmlns="http://www.w3.org/2000/svg" class="icon" fill="none" viewBox="0 0 24 24" width="16" height="16">
+                <path d="M16.9 15.5l4 4c.2.2.1.5 0 .7l-.7.7a.5.5 0 01-.8 0l-4-4c0-.2-.2-.3-.3-.4l-.7-1a7 7 0 01-11.2-4 7 7 0 1112.2 3l1 .6.5.4zM5 10a5 5 0 1010 0 5 5 0 00-10 0z" />
+            </svg>
+        </span>
+        <input name="p" placeholder="Search ticker, company or profile" class="search-input is-free"/>
+    </div>
+</form>
+            </div>
+            <div id="microbar_position" class="flex items-center pl-2"><div><div id="IC_D_88x31_1"class="relative overflow-hidden flex items-center justify-center w-full mx-auto" style="width:88px;height:31px;max-height:31px"></div></div></div>
+        </div>
+        <div class="flex-1"></div>
+        <div class="flex items-center gap-2.5">
+                <div class="relative">
+        <a data-testid="chart-layout-theme" href="#" class="!flex !bg-transparent !border-b-0 !p-0" title="Toggle Light/Dark mode" onclick="setChartThemeCookie('light', true)">
+            <div class="relative box-content flex rounded-full w-10 h-5 border border-white text-default bg-primary dark:border-gray-750 justify-end">
+                <div class="box-border w-1/2 rounded-full p-px border border-white bg-gray-100 dark:border-gray-800 dark:bg-gray-600 flex justify-center items-center">
+                    <svg width="16" height="16" class="fill-current inline-block -ml-px">
+    <use href="/assets/dist-icons/icons.aa8a6c8e.svg#moonOutlined"/>
+</svg>
+                </div>
+            </div>
+        </a>
+    </div>
+
+            <div class="flex items-center gap-4">
+                    <a href="/login" class="flex items-center gap-1 rounded px-2 py-1.5 text-2xs leading-4 font-medium whitespace-nowrap hover:bg-gray-100 dark:hover:bg-gray-600 text-gray-700 hover:text-gray-900 dark:text-gray-50 dark:hover:text-white">
+                        <svg width="16" height="16" class="shrink-0 fill-current text-muted-2">
+    <use href="/assets/dist-icons/icons.aa8a6c8e.svg#userBig"/>
+</svg>
+                        Login
+                    </a>
+                    <a href="/register" class="inline-flex h-7 items-center justify-center rounded-md bg-blue-400 px-3 text-2xs leading-4 font-medium whitespace-nowrap text-white hover:bg-blue-500 active:bg-blue-600">Sign up free</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="navbar  flex items-center min-h-8.5">
+    <div class="header-container flex items-center">
+            <a class="nav-link is-first" href="/">Home</a>
+            <a class="nav-link is-active" href="/screener">Screener</a>
+            <a class="nav-link" href="/map">Maps</a>
+            <a class="nav-link" href="javascript:window.openEliteFeaturesDialog?.(&#x27;multi-charts&#x27;, event)">Charts</a>
+            <a class="nav-link" href="/news">News</a>
+            <a class="nav-link" href="/groups">Groups</a>
+            <a class="nav-link" href="/insidertrading">Insider</a>
+            <a class="nav-link" href="/futures">Futures</a>
+            <a class="nav-link" href="/forex">Forex</a>
+            <a class="nav-link" href="/crypto">Crypto</a>
+            <a class="nav-link" href="/portfolio">Portfolio</a>
+            <a class="nav-link" href="/calendar/earnings/season-preview">Calendar</a>
+        <div class="relative flex-1">
+            <div class="absolute inset-0 flex items-center justify-end">
+                <div id="time" class="w-full"></div>
+            </div>
+        </div>
+        <div class="mx-2 h-3.5 w-px bg-gray-200/30 dark:bg-gray-500/30"></div>
+            <a class="nav-link is-elite" href="/elite">Pricing</a>
+        <div id="js-knowledge-base-static">
+            <a href="/knowledge-base" class="nav-link is-help px-4">Help</a>
+        </div>
+            <div id="js-knowledge-base-root" class="hidden"></div>
+        
+
+    </div>
+</div>
+
+          <div id="js-feature-discovery-root"></div>    <div class="w-full flex justify-center dark:bg-violet-800 bg-violet-600 font-sans" data-fv-notice="promo-similar-charts" data-nosnippet>
+        <div class="h-10 relative flex gap-2.5 items-center dark:text-violet-200 text-white">
+            <div class="py-3 text-sm font-medium dark:text-violet-200 text-violet-100">
+                    <p><span class="text-white">New Elite Feature:</span>&nbsp;&nbsp;&nbsp;Find Similar Charts in Seconds</p>
+            </div>
+            <a title="Learn How" href="/blog/find-similar-charts-breakouts-and-patterns-that-match-your-trading-style/" class="inline-flex items-center justify-center rounded-md border-none outline-none ring-gray-200 font-medium focus-visible:ring-2 dark:ring-gray-500 bg-violet-500 hover:bg-gray-200/50 dark:bg-gray-500/30 dark:text-gray-50 text-white dark:hover:bg-gray-500/50 h-7 min-w-8 px-2.5 text-2xs" onclick="window.FinvizCloseNoticeRedirect(event, 'promo-similar-charts', this.href)">Learn How</a>
+            <a title="Close" class="flex h-6 w-6 items-center justify-center" style="filter: drop-shadow(0.5px 0.5px 0px rgba(34, 38, 47, 0.8));" href="javascript:void(0)" onclick="window.FinvizCloseNotice('promo-similar-charts');">
+                <svg width="20" height="20" class="shrink-0">
+    <use href="/assets/dist-icons/icons.aa8a6c8e.svg#clear"/>
+</svg>
+            </a>
+        </div>
+    </div><div class="content "><table cellpadding="0" class="fv-container is-tight"><tr>
+<td>
+<div id="screener-react"></div>
+<table id="filter-table-top" class="screener-groups_table-filter filter-table-filters" width="100%" cellpadding="0" cellspacing="0" border="0">
+<tr>
+<td><img class="w-1.5 h-1.5" src="gfx/nic2x2.gif" alt="" border="0"></td>
+<td align="center" valign="center" width="17%" style="max-width:0">
+
+<div id="screener-presets-root" style="width:100%"><div class="relative w-full"><button class="fv-select block w-full cursor-pointer overflow-hidden bg-none! text-left" type="button"><span class="block truncate">My Presets</span><svg width="16" height="16" class="pointer-events-none block shrink-0 fill-current absolute top-1/2 right-1 -translate-y-1/2 text-muted transition-transform duration-200 motion-reduce:duration-0">
+    <use href="/assets/dist-icons/icons.aa8a6c8e.svg#caretDown"/>
+</svg></button></div></div></td>
+<td class="screener-groups_filter-label text-right" width="6%">
+<span class="body-combo-title" style="cursor:pointer;" data-boxover-html="&lt;div style=&#39;max-width:300px&#39;&gt;&lt;b&gt;Order by&lt;/b&gt;&lt;br&gt;Select the criteria by which the output information will be sorted. The order settings apply to all views. Use the &lt;b&gt;ascending&lt;/b&gt; and &lt;b&gt;descending&lt;/b&gt; option to invert the current order.&lt;br&gt;&lt;br&gt; TIP: In table views you can click on top of a column to sort the table by the underlying values.&lt;/div&gt;">Order by</span></td>
+<td align="left" width="20%" class="pl-1">
+<select id="orderSelect" style="width:100%;" class="body-combo-text fv-select" onchange='window.location=document.getElementById("orderSelect").value'>
+<option value="screener?v=152&f=earningsdate_prevdays5&o=-ticker&c=0,1,2,65,67,68">Ticker</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-tickersfilter&c=0,1,2,65,67,68">Tickers Input Filter</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-company&c=0,1,2,65,67,68">Company</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-sector&c=0,1,2,65,67,68">Sector</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-industry&c=0,1,2,65,67,68">Industry</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-country&c=0,1,2,65,67,68">Country</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-index&c=0,1,2,65,67,68">Index</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-exchange&c=0,1,2,65,67,68">Exchange</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-marketcap&c=0,1,2,65,67,68">Market Cap.</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-pe&c=0,1,2,65,67,68">Price/Earnings</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-forwardpe&c=0,1,2,65,67,68">Forward Price/Earnings</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-peg&c=0,1,2,65,67,68">PEG (Price/Earnings/Growth)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-ps&c=0,1,2,65,67,68">Price/Sales</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-pb&c=0,1,2,65,67,68">Price/Book</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-pc&c=0,1,2,65,67,68">Price/Cash</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-pfcf&c=0,1,2,65,67,68">Price/Free Cash Flow</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-dividendyield&c=0,1,2,65,67,68">Dividend Yield</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-payoutratio&c=0,1,2,65,67,68">Payout Ratio</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-eps&c=0,1,2,65,67,68">EPS (TTM)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-estq1&c=0,1,2,65,67,68">EPS Estimate Next Quarter</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-epsyoy&c=0,1,2,65,67,68">EPS Growth This Year</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-epsyoy1&c=0,1,2,65,67,68">EPS Growth Next Year</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-eps3years&c=0,1,2,65,67,68">EPS Growth Past 3 Years</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-eps5years&c=0,1,2,65,67,68">EPS Growth Past 5 Years</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-estltgrowth&c=0,1,2,65,67,68">EPS Growth Next 5 Years</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-epsqoq&c=0,1,2,65,67,68">EPS Growth Qtr Over Qtr</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-epsyoyttm&c=0,1,2,65,67,68">EPS Year Over Year TTM</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-sales3years&c=0,1,2,65,67,68">Sales Growth Past 3 Years</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-sales5years&c=0,1,2,65,67,68">Sales Growth Past 5 Years</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-salesqoq&c=0,1,2,65,67,68">Sales Growth Qtr Over Qtr</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-salesyoyttm&c=0,1,2,65,67,68">Sales Year Over Year TTM</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-epssurprise&c=0,1,2,65,67,68">EPS Surprise</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-revenuesurprise&c=0,1,2,65,67,68">Revenue Surprise</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-sharesoutstanding2&c=0,1,2,65,67,68">Shares Outstanding</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-sharesfloat&c=0,1,2,65,67,68">Shares Float</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-floatoutstandingpct&c=0,1,2,65,67,68">Float/Outstanding</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-insiderown&c=0,1,2,65,67,68">Insider Ownership</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-insidertrans&c=0,1,2,65,67,68">Insider Transactions</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-instown&c=0,1,2,65,67,68">Institutional Ownership</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-insttrans&c=0,1,2,65,67,68">Institutional Transactions</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-shortinterestshare&c=0,1,2,65,67,68">Short Interest Share</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-shortinterestratio&c=0,1,2,65,67,68">Short Interest Ratio</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-shortinterest&c=0,1,2,65,67,68">Short Interest</option><option selected="selected" value="screener?v=152&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Earnings Date</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-news_date&c=0,1,2,65,67,68">Latest News</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-roa&c=0,1,2,65,67,68">Return on Assets</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-roe&c=0,1,2,65,67,68">Return on Equity</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-roi&c=0,1,2,65,67,68">Return on Invested Capital</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-curratio&c=0,1,2,65,67,68">Current Ratio</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-quickratio&c=0,1,2,65,67,68">Quick Ratio</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-ltdebteq&c=0,1,2,65,67,68">LT Debt/Equity</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-debteq&c=0,1,2,65,67,68">Total Debt/Equity</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-grossmargin&c=0,1,2,65,67,68">Gross Margin</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-opermargin&c=0,1,2,65,67,68">Operating Margin</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-netmargin&c=0,1,2,65,67,68">Net Profit Margin</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-recom&c=0,1,2,65,67,68">Analyst Recommendation</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-perf1w&c=0,1,2,65,67,68">Performance (Week)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-perf4w&c=0,1,2,65,67,68">Performance (Month)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-perf13w&c=0,1,2,65,67,68">Performance (Quarter)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-perf26w&c=0,1,2,65,67,68">Performance (Half Year)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-perfytd&c=0,1,2,65,67,68">Performance (Year To Date)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-perf52w&c=0,1,2,65,67,68">Performance (Year)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-perf3y&c=0,1,2,65,67,68">Performance (3 Years)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-perf5y&c=0,1,2,65,67,68">Performance (5 Years)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-perf10y&c=0,1,2,65,67,68">Performance (10 Years)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-beta&c=0,1,2,65,67,68">Beta</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-averagetruerange&c=0,1,2,65,67,68">Average True Range</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-volatility1w&c=0,1,2,65,67,68">Volatility (Week)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-volatility4w&c=0,1,2,65,67,68">Volatility (Month)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-sma20&c=0,1,2,65,67,68">20-Day SMA (Relative)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-sma50&c=0,1,2,65,67,68">50-Day SMA (Relative)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-sma200&c=0,1,2,65,67,68">200-Day SMA (Relative)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-high50d&c=0,1,2,65,67,68">50-Day High (Relative)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-low50d&c=0,1,2,65,67,68">50-Day Low (Relative)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-high52w&c=0,1,2,65,67,68">52-Week High (Relative)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-low52w&c=0,1,2,65,67,68">52-Week Low (Relative)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-52wrange&c=0,1,2,65,67,68">52-Week Range</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-highat&c=0,1,2,65,67,68">All-Time High (Relative)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-lowat&c=0,1,2,65,67,68">All-Time Low (Relative)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-rsi&c=0,1,2,65,67,68">Relative Strength Index (14)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-averagevolume&c=0,1,2,65,67,68">Average Volume (3 Month)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-relativevolume&c=0,1,2,65,67,68">Relative Volume</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-change&c=0,1,2,65,67,68">Change %</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-changeopen&c=0,1,2,65,67,68">Change from Open %</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-gap&c=0,1,2,65,67,68">Gap</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-volume&c=0,1,2,65,67,68">Volume</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-open&c=0,1,2,65,67,68">Open</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-high&c=0,1,2,65,67,68">High</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-low&c=0,1,2,65,67,68">Low</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-price&c=0,1,2,65,67,68">Price</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-prevclose&c=0,1,2,65,67,68">Previous Close</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-targetprice&c=0,1,2,65,67,68">Target Price</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-ipodate&c=0,1,2,65,67,68">IPO Date</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-book&c=0,1,2,65,67,68">Book Value per Share</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-cashpershare&c=0,1,2,65,67,68">Cash per Share</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-dividend&c=0,1,2,65,67,68">Dividend</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-dividendexdate&c=0,1,2,65,67,68">Dividend Ex-Date</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-dividendttm&c=0,1,2,65,67,68">Dividend TTM</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-dividend1y&c=0,1,2,65,67,68">Dividend Growth (1 Year)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-dividend3y&c=0,1,2,65,67,68">Dividend Growth (3 Year)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-dividend5y&c=0,1,2,65,67,68">Dividend Growth (5 Year)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-employees&c=0,1,2,65,67,68">Employees</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-income&c=0,1,2,65,67,68">Income</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-sales&c=0,1,2,65,67,68">Sales</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-enterpriseValue&c=0,1,2,65,67,68">Enterprise Value</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-evebitda&c=0,1,2,65,67,68">EV/EBITDA</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-evsales&c=0,1,2,65,67,68">EV/Sales</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-optionable&c=0,1,2,65,67,68">Optionable</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-shortable&c=0,1,2,65,67,68">Shortable</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-newsurl&c=0,1,2,65,67,68">News URL</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-newstitle&c=0,1,2,65,67,68">News Title</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-newstime&c=0,1,2,65,67,68">News Time</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-wiimdailydigest&c=0,1,2,65,67,68">Daily Digest</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.category&c=0,1,2,65,67,68">ETF - Single Category</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.tags&c=0,1,2,65,67,68">ETF - Tags</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.totalholdings&c=0,1,2,65,67,68">ETF - Total Holdings</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.assetsundermanagement&c=0,1,2,65,67,68">ETF - Assets Under Management</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.netflows1month&c=0,1,2,65,67,68">ETF - Net Fund Flows (1 Month)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.netflows1monthpct&c=0,1,2,65,67,68">ETF - Net Fund Flows% (1 Month)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.netflows3month&c=0,1,2,65,67,68">ETF - Net Fund Flows (3 Month)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.netflows3monthpct&c=0,1,2,65,67,68">ETF - Net Fund Flows% (3 Month)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.netflowsytd&c=0,1,2,65,67,68">ETF - Net Fund Flows (YTD)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.netflowsytdpct&c=0,1,2,65,67,68">ETF - Net Fund Flows% (YTD)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.return1year&c=0,1,2,65,67,68">ETF - Annualized Return (1 Year)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.return3year&c=0,1,2,65,67,68">ETF - Annualized Return (3 Year)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.return5year&c=0,1,2,65,67,68">ETF - Annualized Return (5 Year)</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.netexpenseratio&c=0,1,2,65,67,68">ETF - Net Expense Ratio</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.activepassive&c=0,1,2,65,67,68">ETF - Active Passive</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.assettype&c=0,1,2,65,67,68">ETF - Asset Type</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.etftype&c=0,1,2,65,67,68">ETF - Type</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.sectortheme&c=0,1,2,65,67,68">ETF - Sector/Theme</option><option value="screener?v=152&f=earningsdate_prevdays5&o=-e.linkedindexname&c=0,1,2,65,67,68">ETF - Tracked Index</option></select>
+</td>
+<td align="left" width="6%" class="pl-1">
+<select id="orderDirSelect" style="width: 100%;" class="body-combo-text fv-select" onchange='window.location=document.getElementById("orderDirSelect").value'>
+<option value="screener?v=152&f=earningsdate_prevdays5&o=earningsdate&c=0,1,2,65,67,68">Asc</option><option selected="selected" value="screener?v=152&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Desc</option></select>
+</td>
+<td class="screener-groups_filter-label text-right" width="6%">
+<span class="body-combo-title" style="cursor:pointer;" data-boxover-html="&lt;div style=&#39;max-width:300px&#39;&gt;&lt;b&gt;Signal&lt;/b&gt;&lt;br&gt;You can screen the stocks by signal - an event, by which traders usually enter or exit positions.&lt;/div&gt;">Signal</span></td>
+<td align="left" width="15%" class="pl-1">
+<select id="signalSelect" style="width: 100%;"  class="fv-select body-combo-text" onchange='window.location=document.getElementById("signalSelect").value'>
+<option selected="selected" value="screener?v=152&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">None (all stocks)</option><option value="screener?v=152&s=ta_topgainers&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Top Gainers</option><option value="screener?v=152&s=ta_toplosers&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Top Losers</option><option value="screener?v=152&s=ta_newhigh&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">New High</option><option value="screener?v=152&s=ta_newlow&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">New Low</option><option value="screener?v=152&s=ta_mostvolatile&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Most Volatile</option><option value="screener?v=152&s=ta_mostactive&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Most Active</option><option value="screener?v=152&s=ta_unusualvolume&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Unusual Volume</option><option value="screener?v=152&s=ta_overbought&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Overbought</option><option value="screener?v=152&s=ta_oversold&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Oversold</option><option value="screener?v=152&s=n_downgrades&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Downgrades</option><option value="screener?v=152&s=n_upgrades&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Upgrades</option><option value="screener?v=152&s=n_earningsbefore&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Earnings Before</option><option value="screener?v=152&s=n_earningsafter&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Earnings After</option><option value="screener?v=152&s=it_latestbuys&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Recent Insider Buying</option><option value="screener?v=152&s=it_latestsales&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Recent Insider Selling</option><option value="screener?v=152&s=n_majornews&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Major News</option><option value="screener?v=152&s=ta_p_horizontal&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Horizontal S/R</option><option value="screener?v=152&s=ta_p_tlresistance&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">TL Resistance</option><option value="screener?v=152&s=ta_p_tlsupport&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">TL Support</option><option value="screener?v=152&s=ta_p_wedgeup&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Wedge Up</option><option value="screener?v=152&s=ta_p_wedgedown&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Wedge Down</option><option value="screener?v=152&s=ta_p_wedgeresistance&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Triangle Ascending</option><option value="screener?v=152&s=ta_p_wedgesupport&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Triangle Descending</option><option value="screener?v=152&s=ta_p_wedge&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Wedge</option><option value="screener?v=152&s=ta_p_channelup&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Channel Up</option><option value="screener?v=152&s=ta_p_channeldown&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Channel Down</option><option value="screener?v=152&s=ta_p_channel&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Channel</option><option value="screener?v=152&s=ta_p_doubletop&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Double Top</option><option value="screener?v=152&s=ta_p_doublebottom&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Double Bottom</option><option value="screener?v=152&s=ta_p_multipletop&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Multiple Top</option><option value="screener?v=152&s=ta_p_multiplebottom&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Multiple Bottom</option><option value="screener?v=152&s=ta_p_headandshoulders&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Head & Shoulders</option><option value="screener?v=152&s=ta_p_headandshouldersinv&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Head & Shoulders Inverse</option></select>
+</td>
+<td class="screener-groups_filter-label text-right" width="6%">
+<span class="body-combo-title" style="cursor:pointer;" data-boxover-html="&lt;div style=&#39;max-width:300px&#39;&gt;&lt;b&gt;Tickers&lt;/b&gt;&lt;br&gt;To screen through a selected set of stocks, you can enter one or more tickers directly, such as &#39;MSFT,GOOG,AAPL&#39;. The screening process will run only on the specified stocks. No input ticker(s) equals all stocks. The &lt;b&gt;open in screener&lt;/b&gt; option in the &lt;b&gt;Search&lt;/b&gt;, will copy the listed tickers to the screener&#39;s ticker box automatically.&lt;/div&gt;">Tickers</span></td>
+<td align="left" width="24%" class="pl-1">
+<table width="100%" cellpadding="0" cellspacing="0" style="table-layout:fixed;">
+<tr>
+<td align="left" width="100%">
+<input id="tickersInput" class="fv-input body-combo-text" style="width:100%" value="" type="text" onkeypress="if(event.keyCode==13){(window.FinvizScreenerNavigateWithCurrentMapDisplayOptions||function(q){var params=new URLSearchParams(q);var currentParams=new URLSearchParams(window.location.search);['show_etf','show_industry','preset_order','st','show_wiim','equal_size'].forEach(function(key){var value=currentParams.get(key);if(value===null){params.delete(key)}else{params.set(key,value)}});window.location='screener?'+params.toString()})('v=152\u0026f=earningsdate_prevdays5\u0026o=-earningsdate\u0026c=0,1,2,65,67,68\u0026t=' + window.FLibs.getSanitizedTicker(document.getElementById('tickersInput').value, true))}">
+</td>
+</tr>
+</table>
+</td>
+<td class="pl-1">
+<button data-boxover-text="Submit tickers" class="screener-combo-button fv-button screener_button is-arrow" style="cursor:pointer" onclick="(window.FinvizScreenerNavigateWithCurrentMapDisplayOptions||function(q){var params=new URLSearchParams(q);var currentParams=new URLSearchParams(window.location.search);['show_etf','show_industry','preset_order','st','show_wiim','equal_size'].forEach(function(key){var value=currentParams.get(key);if(value===null){params.delete(key)}else{params.set(key,value)}});window.location='screener?'+params.toString()})('v=152\u0026f=earningsdate_prevdays5\u0026o=-earningsdate\u0026c=0,1,2,65,67,68\u0026t=' + tickersInput.value)"/>
+    <svg width="16" height="16" class="-mx-1">
+    <use href="/assets/dist-icons/icons.aa8a6c8e.svg#chevronRight"/>
+</svg>
+</button></td>
+<td align="left" valign="center" class="pl-2"><a href="screener?v=151&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68" class="screener-combo-button fv-button is-small is-border screener_button is-active" data-boxover-html="&lt;div style=&#39;max-width:300px&#39;&gt;&lt;b&gt;Filters&lt;/b&gt;&lt;br&gt;To optimize the screening by various stock-related criteria, you can use one or more &lt;b&gt;Filters&lt;/b&gt;.&lt;/div&gt;">Filters <svg width="16" height="16" class="ml-1 -mr-px">
+    <use href="/assets/dist-icons/icons.aa8a6c8e.svg#caretDown"/>
+</svg></a></td>
+<td><img class="w-1.5 h-1.5" src="gfx/nic2x2.gif" alt="" border="0"></td>
+</tr>
+</table>
+</td>
+</tr>
+<tr><td>
+<div id="screener-content">
+<table id="screener-views-table" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td width="100%">
+<table width="100%" cellpadding="0" cellspacing="0" class="screener-view-table screener-view-switch">
+<tr>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="screener?v=112&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Overview</a></td>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="screener?v=122&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Valuation</a></td>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="screener?v=162&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Financial</a></td>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="screener?v=132&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Ownership</a></td>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="screener?v=142&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Performance</a></td>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="screener?v=172&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Technical</a></td>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="screener?v=182&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">ETF</a></td>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="screener?v=192&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">ETF Perf</a></td>
+<td class="screener-view-button is-screener is-active" style="cursor:pointer;"><a href="screener?v=152&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Custom</a></td>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="screener?v=212&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Charts</a></td>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="screener?v=412&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Tickers</a></td>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="screener?v=312&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Basic</a></td>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="screener?v=352&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">TA</a></td>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="screener?v=322&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">News</a></td>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="screener?v=342&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Snapshot</a></td>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="screener?v=712&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68">Maps</a></td>
+<td class="screener-view-button is-screener " style="cursor:pointer;"><a href="javascript:window.openEliteFeaturesDialog?.('stats', event)">Stats</a></td>
+</tr>
+</table>
+</td>
+</tr>
+<tr><td width="100%"><img src="gfx/nic2x2.gif" style="display:block;width:2px;height:6px" alt="" border="0"></td></tr>
+<tr>
+<td width="100%">
+<div class="relative w-full min-h-6"><div class="absolute bottom-0 left-0 right-0 top-0 flex justify-between items-center gap-x-6">
+<div id="screener-total" class="count-text whitespace-nowrap">#1 / 25 Total</div>
+<div id="screener-fullview-links" class="fullview-links flex space-x-3 lg:space-x-5 justify-center items-center overflow-hidden text-link"">
+<span class="tab-link whitespace-nowrap">
+<a data-testid="screener-open-in-compare-link" href="javascript:window.openEliteFeaturesDialog?.('compare-perf', event)" class="tab-link">Open in Compare</a> | 
+<a href="javascript:SavePortfolio(25,'v=152&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68')" class="tab-link">Save as Portfolio</a> | 
+<a data-testid="screener-create-alert-link" href="javascript:window.openEliteFeaturesDialog?.('notifications', event)" class="tab-link">Create Alert</a></span>
+<span style="white-space: nowrap"><span class="count-text"><b>Refresh:</b></span> <a href="/screener?v=152&f=earningsdate_prevdays5&o=-earningsdate&ar=180&c=0,1,2,65,67,68" class="tab-link ">3min</a> | <a href="/screener?v=152&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68" class="tab-link font-bold">Off</a></div><div class="grow"></div>
+    <div id="screener-table-config" class="ml-3" data-active-tab="columns">
+        <button class="flex items-center justify-center font-medium border border-transparent bg-gray-200/30 dark:bg-gray-500/30 px-1.5 text-2xs h-6 min-w-6 rounded-md shrink-0 whitespace-nowrap ring-gray-200 dark:ring-gray-500">
+            <span class="flex w-3 items-center justify-center"><svg width="16" height="16" class="block shrink-0 fill-current">
+    <use href="/assets/dist-icons/icons.aa8a6c8e.svg#settings"/>
+</svg></span>
+            <span class="grow text-left ml-1.5">Customize</span>
+        </button>
+    </div><div id="screener-page-select" class="flex justify-center items-center gap-1"><span class="screener-combo-button screener_button fv-button is-arrow is-disabled"><svg width="16" height="16">
+    <use href="/assets/dist-icons/icons.aa8a6c8e.svg#arrowBackward"/>
+</svg></span><select id="pageSelect"  class="pages-combo fv-select" onchange='trackPagination("top");url="screener?v=152&f=earningsdate_prevdays5&o=-earningsdate&r=123456&c=0,1,2,65,67,68";row="r=" + document.getElementById("pageSelect").value;url=url.replace(/r=123456/,row);window.location=url;'>
+<option selected="selected" value=1>Page 1 / 2</option><option value=21>Page 2 / 2</option></select>
+<a href="screener?v=152&f=earningsdate_prevdays5&o=-earningsdate&r=21&c=0,1,2,65,67,68" class="screener-combo-button screener_button fv-button is-arrow" onclick="trackPagination('top')"><svg width="16" height="16">
+    <use href="/assets/dist-icons/icons.aa8a6c8e.svg#arrowForward"/>
+</svg></a></div></div></div></td>
+</tr>
+<tr><td width="100%" colspan="30"><img src="gfx/nic2x2.gif" style="display:block;width:2px;height:6px" alt="" border="0"></td></tr>
+<tr id="screener-table"><td><table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+<td>
+<table class="styled-table-new is-rounded is-tabular-nums w-full screener_table">
+<thead>
+<tr align="center" valign="middle">
+<th class="table-header is-static w-9 cursor-default" align="right">No.</th>
+<th class="table-header cursor-pointer" align="left" onclick="window.location='screener?v=152&f=earningsdate_prevdays5&o=-ticker&c=0,1,2,65,67,68'">Ticker</th>
+<th class="table-header cursor-pointer" align="left" onclick="window.location='screener?v=152&f=earningsdate_prevdays5&o=-company&c=0,1,2,65,67,68'">Company</th>
+<th class="table-header cursor-pointer" align="right" onclick="window.location='screener?v=152&f=earningsdate_prevdays5&o=-price&c=0,1,2,65,67,68'">Price</th>
+<th class="table-header cursor-pointer" align="right" onclick="window.location='screener?v=152&f=earningsdate_prevdays5&o=-volume&c=0,1,2,65,67,68'">Volume</th>
+<th class="table-header cursor-pointer is-selected is-descending" align="right" onclick="window.location='screener?v=152&f=earningsdate_prevdays5&o=earningsdate&c=0,1,2,65,67,68'"><svg width="16" height="16" class="inline-block -mt-[5px] -mb-0.5 rotate-180">
+    <use href="/assets/dist-icons/icons.aa8a6c8e.svg#arrowUpLong"/>
+</svg>Earnings</th>
+</thead>
+<tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=TBN&ty=c&p=d&b=1" ">1</a></td><td height="10" align="left"data-boxover-ticker="TBN" data-boxover-company="Tamboran Resources Corp" data-boxover-industry="Oil &amp; Gas E&amp;P" data-boxover-country="Australia" data-boxover-value="1.22B"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=TBN&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #F0F3FA; --logo-url: url('https://logo.finviz.com/TBN.svg')"><img src="https://logo.finviz.com/TBN.svg" alt="TBN logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>T</span></a><a href="stock?t=TBN&ty=c&p=d&b=1" class="tab-link">TBN</a></span></td><td height="10" align="left"><a href="stock?t=TBN&ty=c&p=d&b=1" ">Tamboran Resources Corp</a></td><td height="10" align="right"data-boxover-ticker="TBN" data-boxover-company="Tamboran Resources Corp" data-boxover-industry="Oil &amp; Gas E&amp;P" data-boxover-country="Australia" data-boxover-value="1.22B"><a href="stock?t=TBN&ty=c&p=d&b=1" "><span class="color-text is-negative">35.11</span></a></td><td height="10" align="right"><a href="stock?t=TBN&ty=c&p=d&b=1" ">142,764</a></td><td height="10" align="right"><a href="stock?t=TBN&ty=c&p=d&b=1" ">Sep 25/b</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=SCHL&ty=c&p=d&b=1" ">2</a></td><td height="10" align="left"data-boxover-ticker="SCHL" data-boxover-company="Scholastic Corp" data-boxover-industry="Publishing" data-boxover-country="USA" data-boxover-value="613.51M"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=SCHL&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #E81111; --logo-url: url('https://logo.finviz.com/SCHL.svg')"><img src="https://logo.finviz.com/SCHL.svg" alt="SCHL logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>S</span></a><a href="stock?t=SCHL&ty=c&p=d&b=1" class="tab-link">SCHL</a></span></td><td height="10" align="left"><a href="stock?t=SCHL&ty=c&p=d&b=1" ">Scholastic Corp</a></td><td height="10" align="right"data-boxover-ticker="SCHL" data-boxover-company="Scholastic Corp" data-boxover-industry="Publishing" data-boxover-country="USA" data-boxover-value="613.51M"><a href="stock?t=SCHL&ty=c&p=d&b=1" "><span class="color-text is-negative">32.35</span></a></td><td height="10" align="right"><a href="stock?t=SCHL&ty=c&p=d&b=1" ">1,208,846</a></td><td height="10" align="right"><a href="stock?t=SCHL&ty=c&p=d&b=1" ">Sep 24/a</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=RZLT&ty=c&p=d&b=1" ">3</a></td><td height="10" align="left"data-boxover-ticker="RZLT" data-boxover-company="Rezolute Inc" data-boxover-industry="Biotechnology" data-boxover-country="USA" data-boxover-value="377.22M"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=RZLT&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #00325C; --logo-url: url('https://logo.finviz.com/RZLT.svg')"><img src="https://logo.finviz.com/RZLT.svg" alt="RZLT logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>R</span></a><a href="stock?t=RZLT&ty=c&p=d&b=1" class="tab-link">RZLT</a></span></td><td height="10" align="left"><a href="stock?t=RZLT&ty=c&p=d&b=1" ">Rezolute Inc</a></td><td height="10" align="right"data-boxover-ticker="RZLT" data-boxover-company="Rezolute Inc" data-boxover-industry="Biotechnology" data-boxover-country="USA" data-boxover-value="377.22M"><a href="stock?t=RZLT&ty=c&p=d&b=1" "><span class="color-text is-negative">3.90</span></a></td><td height="10" align="right"><a href="stock?t=RZLT&ty=c&p=d&b=1" ">2,046,748</a></td><td height="10" align="right"><a href="stock?t=RZLT&ty=c&p=d&b=1" ">Sep 24/a</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=NBTX&ty=c&p=d&b=1" ">4</a></td><td height="10" align="left"data-boxover-ticker="NBTX" data-boxover-company="Nanobiotix ADR" data-boxover-industry="Biotechnology" data-boxover-country="France" data-boxover-value="1.69B"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=NBTX&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #E0FE3D; --logo-url: url('https://logo.finviz.com/NBTX.svg')"><img src="https://logo.finviz.com/NBTX.svg" alt="NBTX logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>N</span></a><a href="stock?t=NBTX&ty=c&p=d&b=1" class="tab-link">NBTX</a></span></td><td height="10" align="left"><a href="stock?t=NBTX&ty=c&p=d&b=1" ">Nanobiotix ADR</a></td><td height="10" align="right"data-boxover-ticker="NBTX" data-boxover-company="Nanobiotix ADR" data-boxover-industry="Biotechnology" data-boxover-country="France" data-boxover-value="1.69B"><a href="stock?t=NBTX&ty=c&p=d&b=1" "><span class="color-text is-negative">33.31</span></a></td><td height="10" align="right"><a href="stock?t=NBTX&ty=c&p=d&b=1" ">124,579</a></td><td height="10" align="right"><a href="stock?t=NBTX&ty=c&p=d&b=1" ">Sep 24/a</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=LGCY&ty=c&p=d&b=1" ">5</a></td><td height="10" align="left"data-boxover-ticker="LGCY" data-boxover-company="Legacy Education Inc" data-boxover-industry="Education &amp; Training Services" data-boxover-country="USA" data-boxover-value="119.29M"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=LGCY&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #F0F3FA; --logo-url: url('https://logo.finviz.com/LGCY.svg')"><img src="https://logo.finviz.com/LGCY.svg" alt="LGCY logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>L</span></a><a href="stock?t=LGCY&ty=c&p=d&b=1" class="tab-link">LGCY</a></span></td><td height="10" align="left"><a href="stock?t=LGCY&ty=c&p=d&b=1" ">Legacy Education Inc</a></td><td height="10" align="right"data-boxover-ticker="LGCY" data-boxover-company="Legacy Education Inc" data-boxover-industry="Education &amp; Training Services" data-boxover-country="USA" data-boxover-value="119.29M"><a href="stock?t=LGCY&ty=c&p=d&b=1" "><span class="color-text is-negative">9.31</span></a></td><td height="10" align="right"><a href="stock?t=LGCY&ty=c&p=d&b=1" ">373,998</a></td><td height="10" align="right"><a href="stock?t=LGCY&ty=c&p=d&b=1" ">Sep 24/a</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=COST&ty=c&p=d&b=1" ">6</a></td><td height="10" align="left"data-boxover-ticker="COST" data-boxover-company="Costco Wholesale Corp" data-boxover-industry="Discount Stores" data-boxover-country="USA" data-boxover-value="409.23B"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=COST&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #1A1E21; --logo-url: url('https://logo.finviz.com/COST.svg')"><img src="https://logo.finviz.com/COST.svg" alt="COST logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>C</span></a><a href="stock?t=COST&ty=c&p=d&b=1" class="tab-link">COST</a></span></td><td height="10" align="left"><a href="stock?t=COST&ty=c&p=d&b=1" ">Costco Wholesale Corp</a></td><td height="10" align="right"data-boxover-ticker="COST" data-boxover-company="Costco Wholesale Corp" data-boxover-industry="Discount Stores" data-boxover-country="USA" data-boxover-value="409.23B"><a href="stock?t=COST&ty=c&p=d&b=1" "><span class="color-text is-positive">922.77</span></a></td><td height="10" align="right"><a href="stock?t=COST&ty=c&p=d&b=1" ">4,631,424</a></td><td height="10" align="right"><a href="stock?t=COST&ty=c&p=d&b=1" ">Sep 24/a</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=UXIN&ty=c&p=d&b=1" ">7</a></td><td height="10" align="left"data-boxover-ticker="UXIN" data-boxover-company="Uxin Ltd ADR" data-boxover-industry="Auto &amp; Truck Dealerships" data-boxover-country="China" data-boxover-value="287.99M"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=UXIN&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #FF642E; --logo-url: url('https://logo.finviz.com/UXIN.svg')"><img src="https://logo.finviz.com/UXIN.svg" alt="UXIN logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>U</span></a><a href="stock?t=UXIN&ty=c&p=d&b=1" class="tab-link">UXIN</a></span></td><td height="10" align="left"><a href="stock?t=UXIN&ty=c&p=d&b=1" ">Uxin Ltd ADR</a></td><td height="10" align="right"data-boxover-ticker="UXIN" data-boxover-company="Uxin Ltd ADR" data-boxover-industry="Auto &amp; Truck Dealerships" data-boxover-country="China" data-boxover-value="287.99M"><a href="stock?t=UXIN&ty=c&p=d&b=1" "><span class="color-text is-positive">1.31</span></a></td><td height="10" align="right"><a href="stock?t=UXIN&ty=c&p=d&b=1" ">979,611</a></td><td height="10" align="right"><a href="stock?t=UXIN&ty=c&p=d&b=1" ">Sep 24/b</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=TRT&ty=c&p=d&b=1" ">8</a></td><td height="10" align="left"data-boxover-ticker="TRT" data-boxover-company="Trio-Tech International" data-boxover-industry="Semiconductor Equipment &amp; Materials" data-boxover-country="USA" data-boxover-value="64.54M"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=TRT&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #F0F3FA; --logo-url: url('https://logo.finviz.com/TRT.svg')"><img src="https://logo.finviz.com/TRT.svg" alt="TRT logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>T</span></a><a href="stock?t=TRT&ty=c&p=d&b=1" class="tab-link">TRT</a></span></td><td height="10" align="left"><a href="stock?t=TRT&ty=c&p=d&b=1" ">Trio-Tech International</a></td><td height="10" align="right"data-boxover-ticker="TRT" data-boxover-company="Trio-Tech International" data-boxover-industry="Semiconductor Equipment &amp; Materials" data-boxover-country="USA" data-boxover-value="64.54M"><a href="stock?t=TRT&ty=c&p=d&b=1" "><span class="color-text is-negative">6.22</span></a></td><td height="10" align="right"><a href="stock?t=TRT&ty=c&p=d&b=1" ">1,572,266</a></td><td height="10" align="right"><a href="stock?t=TRT&ty=c&p=d&b=1" ">Sep 24/b</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=SNX&ty=c&p=d&b=1" ">9</a></td><td height="10" align="left"data-boxover-ticker="SNX" data-boxover-company="TD Synnex Corp" data-boxover-industry="Electronics &amp; Computer Distribution" data-boxover-country="USA" data-boxover-value="21.03B"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=SNX&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #F0F3FA; --logo-url: url('https://logo.finviz.com/SNX.svg')"><img src="https://logo.finviz.com/SNX.svg" alt="SNX logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>S</span></a><a href="stock?t=SNX&ty=c&p=d&b=1" class="tab-link">SNX</a></span></td><td height="10" align="left"><a href="stock?t=SNX&ty=c&p=d&b=1" ">TD Synnex Corp</a></td><td height="10" align="right"data-boxover-ticker="SNX" data-boxover-company="TD Synnex Corp" data-boxover-industry="Electronics &amp; Computer Distribution" data-boxover-country="USA" data-boxover-value="21.03B"><a href="stock?t=SNX&ty=c&p=d&b=1" "><span class="color-text is-positive">263.03</span></a></td><td height="10" align="right"><a href="stock?t=SNX&ty=c&p=d&b=1" ">1,441,890</a></td><td height="10" align="right"><a href="stock?t=SNX&ty=c&p=d&b=1" ">Sep 24/b</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=RAVE&ty=c&p=d&b=1" ">10</a></td><td height="10" align="left"data-boxover-ticker="RAVE" data-boxover-company="Rave Restaurant Group Inc" data-boxover-industry="Restaurants" data-boxover-country="USA" data-boxover-value="32.54M"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=RAVE&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #1A1E21; --logo-url: url('https://logo.finviz.com/RAVE.svg')"><img src="https://logo.finviz.com/RAVE.svg" alt="RAVE logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>R</span></a><a href="stock?t=RAVE&ty=c&p=d&b=1" class="tab-link">RAVE</a></span></td><td height="10" align="left"><a href="stock?t=RAVE&ty=c&p=d&b=1" ">Rave Restaurant Group Inc</a></td><td height="10" align="right"data-boxover-ticker="RAVE" data-boxover-company="Rave Restaurant Group Inc" data-boxover-industry="Restaurants" data-boxover-country="USA" data-boxover-value="32.54M"><a href="stock?t=RAVE&ty=c&p=d&b=1" ">2.29</a></td><td height="10" align="right"><a href="stock?t=RAVE&ty=c&p=d&b=1" ">320,904</a></td><td height="10" align="right"><a href="stock?t=RAVE&ty=c&p=d&b=1" ">Sep 24/b</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=QTEX&ty=c&p=d&b=1" ">11</a></td><td height="10" align="left"data-boxover-ticker="QTEX" data-boxover-company="QTREX Quantum Ltd" data-boxover-industry="Computer Hardware" data-boxover-country="Israel" data-boxover-value="52.05M"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=QTEX&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #F0F3FA; --logo-url: url('https://logo.finviz.com/QTEX.svg')"><img src="https://logo.finviz.com/QTEX.svg" alt="QTEX logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>Q</span></a><a href="stock?t=QTEX&ty=c&p=d&b=1" class="tab-link">QTEX</a></span></td><td height="10" align="left"><a href="stock?t=QTEX&ty=c&p=d&b=1" ">QTREX Quantum Ltd</a></td><td height="10" align="right"data-boxover-ticker="QTEX" data-boxover-company="QTREX Quantum Ltd" data-boxover-industry="Computer Hardware" data-boxover-country="Israel" data-boxover-value="52.05M"><a href="stock?t=QTEX&ty=c&p=d&b=1" "><span class="color-text is-positive">0.78</span></a></td><td height="10" align="right"><a href="stock?t=QTEX&ty=c&p=d&b=1" ">2,101,544</a></td><td height="10" align="right"><a href="stock?t=QTEX&ty=c&p=d&b=1" ">Sep 24/b</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=PSQL&ty=c&p=d&b=1" ">12</a></td><td height="10" align="left"data-boxover-ticker="PSQL" data-boxover-company="Pasqal Holding SA" data-boxover-industry="Computer Hardware" data-boxover-country="France" data-boxover-value="1.48B"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=PSQL&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #F0F3FA; --logo-url: url('https://logo.finviz.com/PSQL.svg')"><img src="https://logo.finviz.com/PSQL.svg" alt="PSQL logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>P</span></a><a href="stock?t=PSQL&ty=c&p=d&b=1" class="tab-link">PSQL</a></span></td><td height="10" align="left"><a href="stock?t=PSQL&ty=c&p=d&b=1" ">Pasqal Holding SA</a></td><td height="10" align="right"data-boxover-ticker="PSQL" data-boxover-company="Pasqal Holding SA" data-boxover-industry="Computer Hardware" data-boxover-country="France" data-boxover-value="1.48B"><a href="stock?t=PSQL&ty=c&p=d&b=1" "><span class="color-text is-negative">6.99</span></a></td><td height="10" align="right"><a href="stock?t=PSQL&ty=c&p=d&b=1" ">616,422</a></td><td height="10" align="right"><a href="stock?t=PSQL&ty=c&p=d&b=1" ">Sep 24/b</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=DRI&ty=c&p=d&b=1" ">13</a></td><td height="10" align="left"data-boxover-ticker="DRI" data-boxover-company="Darden Restaurants Inc" data-boxover-industry="Restaurants" data-boxover-country="USA" data-boxover-value="22.68B"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=DRI&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #FF1900; --logo-url: url('https://logo.finviz.com/DRI.svg')"><img src="https://logo.finviz.com/DRI.svg" alt="DRI logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>D</span></a><a href="stock?t=DRI&ty=c&p=d&b=1" class="tab-link">DRI</a></span></td><td height="10" align="left"><a href="stock?t=DRI&ty=c&p=d&b=1" ">Darden Restaurants Inc</a></td><td height="10" align="right"data-boxover-ticker="DRI" data-boxover-company="Darden Restaurants Inc" data-boxover-industry="Restaurants" data-boxover-country="USA" data-boxover-value="22.68B"><a href="stock?t=DRI&ty=c&p=d&b=1" "><span class="color-text is-negative">199.75</span></a></td><td height="10" align="right"><a href="stock?t=DRI&ty=c&p=d&b=1" ">1,913,837</a></td><td height="10" align="right"><a href="stock?t=DRI&ty=c&p=d&b=1" ">Sep 24/b</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=BB&ty=c&p=d&b=1" ">14</a></td><td height="10" align="left"data-boxover-ticker="BB" data-boxover-company="BlackBerry Ltd" data-boxover-industry="Software - Infrastructure" data-boxover-country="Canada" data-boxover-value="4.81B"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=BB&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #1A1E21; --logo-url: url('https://logo.finviz.com/BB.svg')"><img src="https://logo.finviz.com/BB.svg" alt="BB logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>B</span></a><a href="stock?t=BB&ty=c&p=d&b=1" class="tab-link">BB</a></span></td><td height="10" align="left"><a href="stock?t=BB&ty=c&p=d&b=1" ">BlackBerry Ltd</a></td><td height="10" align="right"data-boxover-ticker="BB" data-boxover-company="BlackBerry Ltd" data-boxover-industry="Software - Infrastructure" data-boxover-country="Canada" data-boxover-value="4.81B"><a href="stock?t=BB&ty=c&p=d&b=1" "><span class="color-text is-negative">8.21</span></a></td><td height="10" align="right"><a href="stock?t=BB&ty=c&p=d&b=1" ">32,315,843</a></td><td height="10" align="right"><a href="stock?t=BB&ty=c&p=d&b=1" ">Sep 24/b</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=ATCH&ty=c&p=d&b=1" ">15</a></td><td height="10" align="left"data-boxover-ticker="ATCH" data-boxover-company="AtlasClear Holdings Inc" data-boxover-industry="Capital Markets" data-boxover-country="USA" data-boxover-value="28.52M"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=ATCH&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #F0F3FA; --logo-url: url('https://logo.finviz.com/ATCH.svg')"><img src="https://logo.finviz.com/ATCH.svg" alt="ATCH logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>A</span></a><a href="stock?t=ATCH&ty=c&p=d&b=1" class="tab-link">ATCH</a></span></td><td height="10" align="left"><a href="stock?t=ATCH&ty=c&p=d&b=1" ">AtlasClear Holdings Inc</a></td><td height="10" align="right"data-boxover-ticker="ATCH" data-boxover-company="AtlasClear Holdings Inc" data-boxover-industry="Capital Markets" data-boxover-country="USA" data-boxover-value="28.52M"><a href="stock?t=ATCH&ty=c&p=d&b=1" "><span class="color-text is-negative">0.19</span></a></td><td height="10" align="right"><a href="stock?t=ATCH&ty=c&p=d&b=1" ">6,437,832</a></td><td height="10" align="right"><a href="stock?t=ATCH&ty=c&p=d&b=1" ">Sep 24/b</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=SFIX&ty=c&p=d&b=1" ">16</a></td><td height="10" align="left"data-boxover-ticker="SFIX" data-boxover-company="Stitch Fix Inc" data-boxover-industry="Apparel Retail" data-boxover-country="USA" data-boxover-value="287.92M"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=SFIX&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #21A6AA; --logo-url: url('https://logo.finviz.com/SFIX.svg')"><img src="https://logo.finviz.com/SFIX.svg" alt="SFIX logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>S</span></a><a href="stock?t=SFIX&ty=c&p=d&b=1" class="tab-link">SFIX</a></span></td><td height="10" align="left"><a href="stock?t=SFIX&ty=c&p=d&b=1" ">Stitch Fix Inc</a></td><td height="10" align="right"data-boxover-ticker="SFIX" data-boxover-company="Stitch Fix Inc" data-boxover-industry="Apparel Retail" data-boxover-country="USA" data-boxover-value="287.92M"><a href="stock?t=SFIX&ty=c&p=d&b=1" "><span class="color-text is-negative">2.15</span></a></td><td height="10" align="right"><a href="stock?t=SFIX&ty=c&p=d&b=1" ">5,004,059</a></td><td height="10" align="right"><a href="stock?t=SFIX&ty=c&p=d&b=1" ">Sep 23/a</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=NEOV&ty=c&p=d&b=1" ">17</a></td><td height="10" align="left"data-boxover-ticker="NEOV" data-boxover-company="NeoVolta Inc" data-boxover-industry="Electrical Equipment &amp; Parts" data-boxover-country="USA" data-boxover-value="129.24M"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=NEOV&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #F0F3FA; --logo-url: url('https://logo.finviz.com/NEOV.svg')"><img src="https://logo.finviz.com/NEOV.svg" alt="NEOV logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>N</span></a><a href="stock?t=NEOV&ty=c&p=d&b=1" class="tab-link">NEOV</a></span></td><td height="10" align="left"><a href="stock?t=NEOV&ty=c&p=d&b=1" ">NeoVolta Inc</a></td><td height="10" align="right"data-boxover-ticker="NEOV" data-boxover-company="NeoVolta Inc" data-boxover-industry="Electrical Equipment &amp; Parts" data-boxover-country="USA" data-boxover-value="129.24M"><a href="stock?t=NEOV&ty=c&p=d&b=1" "><span class="color-text is-negative">2.19</span></a></td><td height="10" align="right"><a href="stock?t=NEOV&ty=c&p=d&b=1" ">2,414,616</a></td><td height="10" align="right"><a href="stock?t=NEOV&ty=c&p=d&b=1" ">Sep 23/a</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=FUL&ty=c&p=d&b=1" ">18</a></td><td height="10" align="left"data-boxover-ticker="FUL" data-boxover-company="H.B. Fuller Company" data-boxover-industry="Specialty Chemicals" data-boxover-country="USA" data-boxover-value="2.69B"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=FUL&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #0039A6; --logo-url: url('https://logo.finviz.com/FUL.svg')"><img src="https://logo.finviz.com/FUL.svg" alt="FUL logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>F</span></a><a href="stock?t=FUL&ty=c&p=d&b=1" class="tab-link">FUL</a></span></td><td height="10" align="left"><a href="stock?t=FUL&ty=c&p=d&b=1" ">H.B. Fuller Company</a></td><td height="10" align="right"data-boxover-ticker="FUL" data-boxover-company="H.B. Fuller Company" data-boxover-industry="Specialty Chemicals" data-boxover-country="USA" data-boxover-value="2.69B"><a href="stock?t=FUL&ty=c&p=d&b=1" "><span class="color-text is-positive">50.06</span></a></td><td height="10" align="right"><a href="stock?t=FUL&ty=c&p=d&b=1" ">1,145,761</a></td><td height="10" align="right"><a href="stock?t=FUL&ty=c&p=d&b=1" ">Sep 23/a</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=PAYX&ty=c&p=d&b=1" ">19</a></td><td height="10" align="left"data-boxover-ticker="PAYX" data-boxover-company="Paychex Inc" data-boxover-industry="Software - Application" data-boxover-country="USA" data-boxover-value="36.09B"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=PAYX&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #004B8D; --logo-url: url('https://logo.finviz.com/PAYX.svg')"><img src="https://logo.finviz.com/PAYX.svg" alt="PAYX logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>P</span></a><a href="stock?t=PAYX&ty=c&p=d&b=1" class="tab-link">PAYX</a></span></td><td height="10" align="left"><a href="stock?t=PAYX&ty=c&p=d&b=1" ">Paychex Inc</a></td><td height="10" align="right"data-boxover-ticker="PAYX" data-boxover-company="Paychex Inc" data-boxover-industry="Software - Application" data-boxover-country="USA" data-boxover-value="36.09B"><a href="stock?t=PAYX&ty=c&p=d&b=1" "><span class="color-text is-negative">101.37</span></a></td><td height="10" align="right"><a href="stock?t=PAYX&ty=c&p=d&b=1" ">3,931,636</a></td><td height="10" align="right"><a href="stock?t=PAYX&ty=c&p=d&b=1" ">Sep 23/b</a></td></tr><tr class="styled-row is-bordered is-rounded group is-hoverable is-striped has-color-text" valign="top">
+<td height="10" align="right"><a href="stock?t=MANU&ty=c&p=d&b=1" ">20</a></td><td height="10" align="left"data-boxover-ticker="MANU" data-boxover-company="Manchester United Plc" data-boxover-industry="Entertainment" data-boxover-country="United Kingdom" data-boxover-value="3.52B"><span class="flex items-center gap-1 pl-0.5"><a class="company-ticker" href="stock?t=MANU&amp;ty=c&amp;p=d&amp;b=1" style="--hover-color: #A32A21; --logo-url: url('https://logo.finviz.com/MANU.svg')"><img src="https://logo.finviz.com/MANU.svg" alt="MANU logo" crossorigin="anonymous" onload="this.classList.add('is-loaded');this.parentElement.classList.add('is-logo-loaded')" /><span>M</span></a><a href="stock?t=MANU&ty=c&p=d&b=1" class="tab-link">MANU</a></span></td><td height="10" align="left"><a href="stock?t=MANU&ty=c&p=d&b=1" ">Manchester United Plc</a></td><td height="10" align="right"data-boxover-ticker="MANU" data-boxover-company="Manchester United Plc" data-boxover-industry="Entertainment" data-boxover-country="United Kingdom" data-boxover-value="3.52B"><a href="stock?t=MANU&ty=c&p=d&b=1" "><span class="color-text is-negative">20.40</span></a></td><td height="10" align="right"><a href="stock?t=MANU&ty=c&p=d&b=1" ">585,307</a></td><td height="10" align="right"><a href="stock?t=MANU&ty=c&p=d&b=1" ">Sep 23/b</a></td></tr></table></td></tr></table>
+</td>
+</tr>
+<tr>
+<td>
+<table width="100%" cellpadding="0" cellspacing="0" border="0">
+<tr>
+<td align="left" class="count-text"><b>Filters:</b> earningsdate:prevdays5</td><td align="right" style="color:#1E6DC0"><a href="javascript:window.openEliteFeaturesDialog?.('export', event)" class="tab-link">Export</a></td></tr>
+</table>
+</td>
+</tr>
+<tr><td><img src="gfx/nic2x2.gif" style="display:block;width:2px;height:6px" alt="" border="0"></td></tr>
+<tr>
+<td width="100%" align="center" valign="top" id="screener_pagination" class="body-table screener_pagination">
+<a href="screener?v=152&f=earningsdate_prevdays5&o=-earningsdate&c=0,1,2,65,67,68" class="screener-pages is-selected" onclick="trackPagination('bottom')"><b>1</b></a><a href="screener?v=152&f=earningsdate_prevdays5&o=-earningsdate&r=21&c=0,1,2,65,67,68" class="screener-pages" onclick="trackPagination('bottom')">2</a><a href="screener?v=152&f=earningsdate_prevdays5&o=-earningsdate&r=21&c=0,1,2,65,67,68" class="screener-pages is-next" onclick="trackPagination('bottom')"><svg width="16" height="16">
+    <use href="/assets/dist-icons/icons.aa8a6c8e.svg#arrowForward"/>
+</svg></a>
+</td>
+</tr>
+<tr><td><img src="gfx/nic2x2.gif" style="width:2px;height:10px" alt="" border="0"></td></tr>
+</table>
+<div id="IC_D_3x3_1"class="relative overflow-hidden flex items-center justify-center w-full mx-auto" style="width:970px;height:250px;max-height:250px"></div></div>
+</td></tr><!-- TS
+TBN|35.11|142764
+SCHL|32.35|1208846
+RZLT|3.90|2046748
+NBTX|33.31|124579
+LGCY|9.31|373998
+COST|922.77|4631424
+UXIN|1.31|979611
+TRT|6.22|1572266
+SNX|263.03|1441890
+RAVE|2.29|320904
+QTEX|0.78|2101544
+PSQL|6.99|616422
+DRI|199.75|1913837
+BB|8.21|32315843
+ATCH|0.19|6437832
+SFIX|2.15|5004059
+NEOV|2.19|2414616
+FUL|50.06|1145761
+PAYX|101.37|3931636
+MANU|20.40|585307
+TE -->
+
+            
+        </table></div></div>
+              <div id="root"></div>
+              
+              
+            
+            <div class="footer" style="margin-top: 20px;padding-bottom: 115px">
+                <div class="footer_links">
+                    <a class="tab-link" href="/affiliate">Affiliate</a>
+                    <span class="footer_dot"> • </span>
+                    <a class="tab-link" href="/advertise">Advertise</a>
+                    <span class="footer_dot"> • </span>
+                    <a class="tab-link" href="/api-and-exports">API and Exports</a>
+                    <span class="footer_dot"> • </span>
+                    <a class="tab-link" href="/careers">Careers</a>
+                    <span class="footer_dot"> • </span>
+                    <a class="tab-link" href="/contact">Contact</a>
+                    <span class="footer_dot"> • </span>
+                    <a class="tab-link" href="/blog">Blog</a>
+                    <span class="footer_dot"> • </span>
+                    <a class="tab-link" href="/knowledge-base">Help</a>
+                    <span class="footer_dot"> • </span>
+                    <a class="tab-link" href="/privacy">Privacy</a>
+                    <span class="footer_dot"> • </span>
+                    <a class="tab-link" href="https://x.com/finviz_com" target="_blank">Follow us on X</a>    </div>
+    Stock quotes delayed by 1 minute. Futures and options delayed by 15 minutes.
+    <br>
+    Copyright © 2007-2026 Finviz.com. All Rights Reserved.
+    
+    <a href="/api/v1/screener-export-csv" class="internal-data-link" rel="nofollow">Export All Screener Data (CSV)</a>
+</div>
+        
+    <div id="IC_D_1x1_1"class="relative overflow-hidden flex items-center justify-center w-full mx-auto"></div><div id="modal-elite-ad" class="modal-elite-ad">
+                            <div id="modal-elite-ad_content" class="modal-elite-ad_content">
+			                    <button id="modal-elite-ad-close" type="button" class="modal-elite-ad_close">×</button>
+
+                                <!--<div id="modal-elite-ad-content-0" style="display: none">
+			                        <h2>Ever heard of Finviz Elite?</h2>
+                                    <p>
+                                        Our premium service offers you real-time quotes, advanced visualizations, technical studies, and much more.<br>
+                                        Become Elite and make informed financial decisions.
+                                    </p>
+                                    <a href="/elite?utm_source=finviz&utm_medium=banner&utm_campaign=modal-0" id="modal-elite-ad-btn-0" class="" target="_blank">Find out more</a>
+                                </div>-->
+
+                                <div id="modal-elite-ad-content-1" style="display: block">
+			                        <h2>Upgrade your Finviz experience</h2>
+                                    <p>
+                                        Join thousands of traders who make more informed decisions with&nbsp;our&nbsp;premium features.
+                                        Real-time quotes, advanced&nbsp;visualizations, alerts, and much more.
+                                    </p>
+                                    <a href="/elite?utm_source=finviz&utm_medium=banner&utm_campaign=modal-1" id="modal-elite-ad-btn-1" class="modal-elite_button" target="_blank">Learn more about Finviz Elite</a>
+                                </div>
+                            </div>
+                         </div>
+
+</body>
+</html>

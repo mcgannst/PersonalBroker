@@ -1,0 +1,15 @@
+# FIX-EARNINGS builder attempt 1 (earnings window uses the previous trading session)
+- Sun 2026-09-27 evening MT: started, synced trunk 48d2a7f | next: FinViz evidence
+- Evidence (live FinViz from the Mac, scraper's own headers, 3 s apart, ~12 requests):
+  - Filter options (screener HTML, select data-filter="earningsdate"): today, todaybefore, todayafter, tomorrow*, yesterday, yesterdaybefore, yesterdayafter, nextdays5, prevdays5, thisweek, nextweek, prevweek, thismonth, and "Custom (Elite only)". A custom date range is not available to us.
+  - /screener.ashx 301-redirects to /screener with every query param kept (f, v, c, o, r); pages parse normally with our User-Agent.
+  - Custom view v=152 with c=0,1,2,65,67,68 (and c=0,1,2,68) gives header No., Ticker, Company, [Price, Volume,] Earnings; values "Sep 25/b", "Sep 24/a".
+  - Market-wide earningsdate_thisweek: 38 names Sep 21..25 (2 pages). Friday Sep 25: TBN only, "Sep 25/b". No Friday after-close reporter anywhere. COST "Sep 24/a" (Costco's known Thursday after-close report) cross-checks the data.
+  - Sunday: earningsdate_yesterday = 0, earningsdate_yesterdayafter = 0, earningsdate_todaybefore = 0 market-wide, while Friday had TBN. FinViz's "yesterday" is the previous CALENDAR day (Saturday), so on a Monday it is Sunday: the old default missed Friday's after-close reporters every Monday / day after a holiday.
+  - earningsdate_prevdays5 (Sunday): 25 names, oldest Sep 23 (sorted ascending), none from Sep 22: it is the 5 calendar days up to today (today-4 .. today).
+  - Universe-filtered (price 5-50, avgvol > 1M, ATR > 0.5, USA): prevdays5 = GIS (Sep 23/b) only; nextdays5 = JEF Sep 28/a, CCL Sep 29/b, UEC Sep 29/b, CNXC Sep 29/a, MKC Oct 01/b, NKE Oct 01/a. So Monday 2026-09-28's correct window (Fri /a + Mon /b) is genuinely empty for the universe.
+  - News: U + news_date_today via /screener directly = 12 names (11 earlier in the day); same URL shape as ours, filters applied.
+- Root cause: FinViz "yesterday" = calendar day. Our URLs are otherwise correct (no dropped params, no ignored filters).
+- Design: premarket.earnings_filter default `session_window` (old default mapped to it): two v=152 screens with the Earnings column, earningsdate_prevdays5 and earningsdate_today; rows kept by date + /a|/b against the exchange calendar's previous session. Unreadable values and rows outside the filter's own range are reported in screen_errors; a previous session > 4 days back is reported; an empty catalyst screen is cross-checked market-wide (warning if 0 there too); detail.screens lists label/filter/rows/matched.
+- Live dry run of the new screens through the real scraper for session 2026-09-28: header ok, universe kept [], market-wide kept [] (no Friday /a reporters exist).
+- Tests: parser/scraper/premarket/breaker/integration suites green | next: gate, commit, push

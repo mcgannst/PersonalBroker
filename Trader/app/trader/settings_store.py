@@ -28,8 +28,15 @@ FINVIZ_FILTERS_PATTERN = r"^[a-z0-9_.]+(,[a-z0-9_.]+)*$"
 # results, because FinViz can't OR two values of one filter in a single screen (it silently ignores
 # "earningsdate_yesterdayafter|todaybefore", verified live 2026-09-27).
 FINVIZ_FILTER_SETS_PATTERN = r"^[a-z0-9_.]+(,[a-z0-9_.]+)*(\|[a-z0-9_.]+(,[a-z0-9_.]+)*)*$"
-# Stephen's decision (2026-09-27): earnings reported after yesterday's close OR before today's open.
-DEFAULT_EARNINGS_FILTER = "earningsdate_yesterdayafter|earningsdate_todaybefore"
+# Stephen's decision (2026-09-27): earnings reported after the previous TRADING session's close OR before
+# today's open. The pre-market job computes that window from the exchange calendar when the setting holds
+# the keyword EARNINGS_SESSION_WINDOW (SPEC §4.2). The first default, LEGACY_EARNINGS_FILTER, used FinViz's
+# "yesterday", which is the previous CALENDAR day (verified live on Sunday 2026-09-27: 0 matches while
+# Friday had reporters), so it missed Friday's after-close reporters on a Monday; a stored copy of it is
+# run as the session window too. Any other value is "|"-separated filter lists run as plain screens.
+EARNINGS_SESSION_WINDOW = "session_window"
+LEGACY_EARNINGS_FILTER = "earningsdate_yesterdayafter|earningsdate_todaybefore"
+DEFAULT_EARNINGS_FILTER = EARNINGS_SESSION_WINDOW
 TICKER_PATTERN = r"^[A-Z][A-Z0-9.\-]{0,9}$"
 OVERLAY_SYMBOL = "SPY"  # the market overlay reads SPY bars, so it must always be in the universe
 # A session event key (Phase 3). At most 39 characters, so the job name `event:<key>` fits job_runs.job

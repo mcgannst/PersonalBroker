@@ -2,8 +2,13 @@
 
 Candidates: universe names on the FinViz news or earnings screens, or gapping at least premarket.gap_min_pct
 on Questrade's pre-market quotes. Each screen setting may hold several "|"-separated filter lists, one screen
-each, unioned: the default earnings window is "reported after yesterday's close OR before today's open"
-(Stephen, 2026-09-27), which FinViz can't express in one screen. The biggest movers (by |gap|, up to
+each, unioned. The default earnings setting is the session window (Stephen, 2026-09-27): reported after the
+previous TRADING session's close (or on a weekend/holiday since) OR before today's open, computed from the
+exchange calendar. FinViz's "yesterday" is the previous calendar day, so the window reads FinViz's Earnings
+column ("Sep 25/a" after the close, "/b" before the open) on two screens, earningsdate_prevdays5 and
+earningsdate_today, and keeps rows by date and mark. An unreadable Earnings value, a row outside the filter's
+own date range, and an empty catalyst screen that is empty market-wide too are reported in screen_errors;
+the detail's "screens" lists every screen that ran. The biggest movers (by |gap|, up to
 claude.premarket_max_candidates) get headlines and a Claude classification; the rest are stored as
 "not classified (over cap)".
 
@@ -21,7 +26,7 @@ capped at MAX_ERROR_CHARS: an upstream error body can't add or forge lines.
 import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Protocol, runtime_checkable
 
@@ -34,7 +39,15 @@ from trader.adapters.claude.catalyst import (
     CatalystService,
     StoredCatalyst,
 )
-from trader.adapters.finviz.parser import ScreenerPage, to_questrade_ticker
+from trader.adapters.finviz.parser import (
+    EARNINGS_COLUMN,
+    EARNINGS_COLUMNS,
+    EARNINGS_VIEW,
+    EarningsTime,
+    ScreenerPage,
+    parse_earnings,
+    to_questrade_ticker,
+)
 from trader.adapters.finviz.scraper import FinvizError
 from trader.adapters.questrade.models import QtQuote
 from trader.db.session import session_scope
@@ -42,15 +55,29 @@ from trader.events import log_event
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock
 from trader.market.types import UniverseMember
-from trader.settings_store import OVERLAY_SYMBOL, RuntimeSettings
+from trader.settings_store import (
+    EARNINGS_SESSION_WINDOW,
+    LEGACY_EARNINGS_FILTER,
+    OVERLAY_SYMBOL,
+    RuntimeSettings,
+)
 
 Q4 = Decimal("0.0001")
 SOURCE = "job.premarket"
 MAX_ERROR_CHARS = 200
+MAX_LISTED = 10  # rows named in one screen error line
+# The session window's FinViz filters (live 2026-09-27, see SPEC §4.2). earningsdate_prevdays5 is the 5
+# calendar days up to today (on Sunday Sep 27 it returned Sep 23..25 reporters and nothing from Sep 22), so
+# it reaches a previous session up to PREVDAYS5_REACH days back (Friday from a Tuesday after a holiday).
+PREVDAYS5 = "earningsdate_prevdays5"
+PREVDAYS5_REACH = 4
+TODAY_EARNINGS = "earningsdate_today"
 
 
 class PremarketScreens(Protocol):
-    def screen(self, filters: str, view: int = 111, signal: str | None = None) -> ScreenerPage: ...
+    def screen(
+        self, filters: str, view: int = 111, signal: str | None = None, *, columns: str | None = None
+    ) -> ScreenerPage: ...
 
 
 @runtime_checkable
@@ -148,11 +175,159 @@ def _earnings_date(extra: str, session_date: date, calendar: SessionCalendar) ->
     return session_date
 
 
+@dataclass(frozen=True, slots=True)
+class EarningsWindow:
+    """Stephen's earnings window (2026-09-27): reported after the previous TRADING session's close, on a
+    non-session day between it and today (a weekend or holiday), or before today's open."""
+
+    previous_session: date
+    session: date
+
+    def accepts(self, reported: date, when: EarningsTime) -> bool:
+        if reported == self.previous_session:
+            return when == "a"
+        if reported == self.session:
+            return when == "b"
+        return self.previous_session < reported < self.session
+
+
+def earnings_window(session_date: date, calendar: SessionCalendar) -> EarningsWindow:
+    return EarningsWindow(calendar.previous_session(session_date), session_date)
+
+
+@dataclass(frozen=True, slots=True)
+class _Screen:
+    source: str  # "news" | "earnings"
+    label: str
+    extra: str  # the filter tokens added to the universe filters
+    view: int = 111
+    columns: str | None = None
+    window: EarningsWindow | None = None  # set: rows are kept by their Earnings value (session window)
+    expect: tuple[date, date] | None = None  # the report dates the filter itself should return
+    problem: str | None = None  # a known gap in what this screen can see (reported; it still runs)
+
+
+def _window_screens(session_date: date, calendar: SessionCalendar) -> list[_Screen]:
+    """Two screens with FinViz's Earnings column, each row kept by EarningsWindow.accepts. FinViz's
+    "yesterday" is the previous calendar day, so the previous session comes from `earningsdate_prevdays5`
+    (the 5 calendar days up to today) and today from `earningsdate_today`."""
+    w = earnings_window(session_date, calendar)
+    back = (session_date - w.previous_session).days
+    problem = None
+    if back > PREVDAYS5_REACH:
+        problem = (
+            f"the previous session is {back} days back, beyond {PREVDAYS5!r} ({PREVDAYS5_REACH} days): "
+            "its after-close reporters can't be screened"
+        )
+    return [
+        _Screen(
+            "earnings",
+            f"earnings [after close {w.previous_session.isoformat()}]",
+            PREVDAYS5,
+            EARNINGS_VIEW,
+            EARNINGS_COLUMNS,
+            w,
+            (session_date - timedelta(days=PREVDAYS5_REACH), session_date),
+            problem,
+        ),
+        _Screen(
+            "earnings",
+            f"earnings [before open {session_date.isoformat()}]",
+            TODAY_EARNINGS,
+            EARNINGS_VIEW,
+            EARNINGS_COLUMNS,
+            w,
+            (session_date, session_date),
+        ),
+    ]
+
+
+def _plan(s: RuntimeSettings, session_date: date, calendar: SessionCalendar) -> list[_Screen]:
+    """One screen per "|"-separated filter list of each setting. The earnings session window (the default,
+    and the retired first default LEGACY_EARNINGS_FILTER) is the two computed window screens instead."""
+    plan: list[_Screen] = []
+    for source, setting in (("news", s.premarket_news_filter), ("earnings", s.premarket_earnings_filter)):
+        if source == "earnings" and setting in (EARNINGS_SESSION_WINDOW, LEGACY_EARNINGS_FILTER):
+            plan.extend(_window_screens(session_date, calendar))
+            continue
+        alternatives = setting.split("|")
+        for extra in alternatives:
+            plan.append(_Screen(source, source if len(alternatives) == 1 else f"{source} [{extra}]", extra))
+    return plan
+
+
+def _listed(items: Sequence[str]) -> str:
+    shown = ", ".join(items[:MAX_LISTED])
+    return shown + (", …" if len(items) > MAX_LISTED else "")
+
+
 @dataclass
 class _ScreenResult:
     flagged: dict[str, set[str]] = field(default_factory=dict)  # ticker -> sources
     earnings_dates: dict[str, date] = field(default_factory=dict)  # ticker -> latest report date
     errors: list[str] = field(default_factory=list)
+    screens: list[dict[str, Any]] = field(default_factory=list)  # per screen: label, filter, rows, matched
+
+
+def _fetch(deps: PremarketDeps, sc: _Screen) -> ScreenerPage:
+    filters = f"{deps.settings.universe_finviz_filters},{sc.extra}"
+    if sc.columns is None:
+        return deps.finviz.screen(filters)
+    return deps.finviz.screen(filters, sc.view, columns=sc.columns)
+
+
+def _window_rows(
+    sc: _Screen, window: EarningsWindow, page: ScreenerPage, session_date: date, errors: list[str]
+) -> list[tuple[str, date]] | None:
+    """(FinViz ticker, report date) of the rows inside the window, or None when the page can't be read.
+    Unreadable Earnings values and rows outside the filter's own date range are reported, never dropped
+    silently."""
+    if page.rows and EARNINGS_COLUMN not in page.header:
+        errors.append(f"{sc.label}: FinViz page has no {EARNINGS_COLUMN!r} column (header {page.header})")
+        return None
+    kept: list[tuple[str, date]] = []
+    unreadable: list[str] = []
+    outside: list[str] = []
+    for row in page.rows:
+        ticker, value = row.get("Ticker", ""), row.get(EARNINGS_COLUMN, "")
+        parsed = parse_earnings(value, session_date)
+        if parsed is None:
+            unreadable.append(f"{ticker} {value!r}")
+            continue
+        reported, when = parsed
+        if sc.expect is not None and not sc.expect[0] <= reported <= sc.expect[1]:
+            outside.append(f"{ticker} {value!r}")
+        if window.accepts(reported, when):
+            kept.append((ticker, reported))
+    if unreadable:
+        errors.append(
+            f"{sc.label}: {len(unreadable)} rows with an unreadable {EARNINGS_COLUMN} value "
+            f"({_listed(unreadable)})"
+        )
+    if outside and sc.expect is not None:
+        lo, hi = sc.expect
+        errors.append(
+            f"{sc.label}: {len(outside)} rows dated outside {lo.isoformat()}..{hi.isoformat()} "
+            f"({_listed(outside)}): FinViz's filter may have changed meaning"
+        )
+    return kept
+
+
+async def _cross_check(deps: PremarketDeps, sc: _Screen) -> str | None:
+    """An empty catalyst screen is suspect: count the same filter market-wide (no universe filters). Zero
+    there too means the filter itself may be broken: a warning in screen_errors, not a failure."""
+    if not isinstance(deps.finviz, CountingScreens):
+        return None
+    try:
+        market = await asyncio.to_thread(deps.finviz.count, sc.extra)
+    except FinvizError as exc:
+        return f"{sc.label}: cross-check failed: {one_line(exc, MAX_ERROR_CHARS)}"
+    if market == 0:
+        return (
+            f"{sc.label}: cross-check: FinViz lists no {sc.extra!r} matches market-wide either, "
+            "so the filter may be broken"
+        )
+    return None
 
 
 async def _screens(
@@ -161,36 +336,51 @@ async def _screens(
     by_ticker: Mapping[str, UniverseMember],
     session_date: date,
 ) -> _ScreenResult:
-    """One FinViz screen per "|"-separated filter list of each setting; the matches are unioned."""
-    s = deps.settings
+    """Every planned screen, matches unioned. A failed screen is reported and the others still count."""
     out = _ScreenResult()
     baseline: int | None = None
-    for source, setting in (("news", s.premarket_news_filter), ("earnings", s.premarket_earnings_filter)):
-        alternatives = setting.split("|")
-        for extra in alternatives:
-            label = source if len(alternatives) == 1 else f"{source} [{extra}]"
-            try:
-                page = await asyncio.to_thread(deps.finviz.screen, f"{s.universe_finviz_filters},{extra}")
-            except FinvizError as exc:
-                out.errors.append(f"{label}: {one_line(exc, MAX_ERROR_CHARS)}")
+    for sc in _plan(deps.settings, session_date, deps.calendar):
+        record: dict[str, Any] = {"label": sc.label, "filter": sc.extra, "rows": None, "matched": []}
+        out.screens.append(record)
+        if sc.problem:
+            out.errors.append(f"{sc.label}: {sc.problem}")
+        try:
+            page = await asyncio.to_thread(_fetch, deps, sc)
+        except FinvizError as exc:
+            out.errors.append(f"{sc.label}: {one_line(exc, MAX_ERROR_CHARS)}")
+            continue
+        total = page.total if page.total is not None else len(page.rows)
+        record["rows"] = total
+        if total > 0:
+            if baseline is None:
+                baseline = await _universe_count(deps, len(universe))
+            if total == baseline:
+                out.errors.append(
+                    f"{sc.label}: filter {sc.extra!r} ignored (matched all {total} universe-filter names)"
+                )
                 continue
-            total = page.total if page.total is not None else len(page.rows)
-            if total > 0:
-                if baseline is None:
-                    baseline = await _universe_count(deps, len(universe))
-                if total == baseline:
-                    out.errors.append(
-                        f"{label}: filter {extra!r} ignored (matched all {total} universe-filter names)"
-                    )
-                    continue
-            reported = _earnings_date(extra, session_date, deps.calendar)
-            for row in page.rows:
-                ticker = to_questrade_ticker(row.get("Ticker", ""))
-                if ticker not in by_ticker:
-                    continue
-                out.flagged.setdefault(ticker, set()).add(source)
-                if source == "earnings":
-                    out.earnings_dates[ticker] = max(reported, out.earnings_dates.get(ticker, reported))
+        else:
+            warning = await _cross_check(deps, sc)
+            if warning:
+                out.errors.append(warning)
+        rows: list[tuple[str, date]] | None
+        if sc.window is None:
+            reported = _earnings_date(sc.extra, session_date, deps.calendar)
+            rows = [(row.get("Ticker", ""), reported) for row in page.rows]
+        else:
+            rows = _window_rows(sc, sc.window, page, session_date, out.errors)
+            if rows is None:
+                continue
+        matched: set[str] = set()
+        for raw, reported in rows:
+            ticker = to_questrade_ticker(raw)
+            if ticker not in by_ticker:
+                continue
+            matched.add(ticker)
+            out.flagged.setdefault(ticker, set()).add(sc.source)
+            if sc.source == "earnings":
+                out.earnings_dates[ticker] = max(reported, out.earnings_dates.get(ticker, reported))
+        record["matched"] = sorted(matched)
     return out
 
 
@@ -293,6 +483,7 @@ async def run_premarket(
         "classified": sum(1 for c in catalysts.values() if c.classified),
         "over_cap": [c.ticker for c in over],
         "screen_errors": screen_errors,
+        "screens": screened.screens,
         "quote_error": quote_error,
         "budget_hit": budget_hit,
         "warnings": [one_line(w) for w in warnings],

@@ -9,7 +9,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Current phase | 5 (Phase 4 COMPLETE ~17:05 MT Sep 27, tag phase-4-complete) |
 | Current task | P5 gauntlets (group W; replay core) + builders T2, T9, T11, T14, T15, T16 |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-28T04:02:31Z |
+| Last updated (UTC) | 2026-09-28T04:49:39Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
 | Token last refreshed (UTC) | 2026-09-27T17:21:56Z (re-seeded from Stephen's new token after .env.dev rebuild; token removed from .env.dev) |
@@ -27,7 +27,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Phase 5 started | 15:52 MT Sep 27 (P5-T1 contracts); estimate ~5.5 h: finish ~21:00-21:30 MT |
 | Phase 4 estimate | revised 15:52 MT: T19 deploy + P4-REVIEW, finish ~17:30 MT |
 | OPEN checks | Tonight 18:10 MT: nightly job_run on trader-dev; Mon 06:10 MT premarket; Mon 07:25 MT preopen message + job_runs; Stephen tap on msg 45 |
-| Stephen requests (after P5, 2026-09-27) | (1) Full activity/decision logging while running, for end-of-day analysis and tuning (every candidate, filter result, catalyst grade, ORB levels, proposal, approval, fill, exit, with reasons) plus a daily analysis export. (2) Move usernames/passwords/API keys to GitHub secrets (Stephen chose goal (c) recovery AND security: GitHub environment secrets (dev/prod) + a deploy workflow on a LAN self-hosted runner that writes the env file on the Docker host at deploy time; nothing secret kept on the Mac; the rotating Questrade token stays in the DB). Plan both as Phase 6 additions |
+| Stephen requests (after P5, 2026-09-27) | (1) Full activity/decision logging while running, for end-of-day analysis and tuning (every candidate, filter result, catalyst grade, ORB levels, proposal, approval, fill, exit, with reasons) plus a daily analysis export. (2) Move usernames/passwords/API keys to GitHub secrets (Stephen chose goal (c) recovery AND security: GitHub environment secrets (dev/prod) + a deploy workflow on a LAN self-hosted runner that writes the env file on the Docker host at deploy time; nothing secret kept on the Mac; the rotating Questrade token stays in the DB). Plan both as Phase 6 additions. UPDATE 22:50 MT: Stephen deferred (2) GitHub deploy/secrets until he asks; P6-T13/T14 not built; local .env.prod path restored |
 | Backlog P4 | settings-fallback copied 4x (deps/system/meta/stream) - use QuietSettings; pin proxy subnet (TRADER_FORWARDED_ALLOW_IPS in env / deploy.sh check); prod: one-shot migrate container so docker exec can't read owner URL/admin password; SPEC 15 deploy text outdated; small helper duplication |
 
 ## Task board
@@ -122,15 +122,21 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P5-T17 | Wiring | - | accepted | 1 | T17 gauntlet: V+B+R PASS (14 breakers/23 cases); six builder deviations accepted; nits only | c491a3e |
 | P5-T18 | End to end + LIVE | - | accepted | 1 | 9 e2e tests (golden x3 identical, isolation, static scan, weekly day); LIVE: deployed 9918781 w/ FinViz fix, health/0006/crontab/limits OK, 2 real replays identical, peak 370 MiB; deferred LIVE 5-7; replay universe fallback gap -> review | 9918781 |
 | P5-REVIEW | Phase 5 review | - | accepted | 1 | replay biased-universe fallback fixed (newest snapshot); gate 3180 py + 436 web; redeployed eaafe21; cross-task pass incomplete (agent stopped) -> backlog; tagged phase-5-complete | eaafe21 |
-| P6-T0 | Write the Phase 6 plan | P5 | accepted | 1 | plan verify+fix PASS (6 must-fix fixed in plan) | 76d0e5b |
+| P6-T0 | Write the Phase 6 plan | P5 | accepted | 1 | plan + amendment (T9-T14: decision log, GitHub secrets deploy) verify+fix PASS | b33ae82 |
 | P6-T1 | Live rechecks (S2, S4, S1) | T0 | todo | 1 | - | - |
-| P6-T2 | Soak report + daily line | P5-T17 | todo | 1 | - | - |
+| P6-T2 | Soak report + daily line | P5-T17 | building | 1 | builder running | - |
 | P6-T3 | 10 clean trading days | T2 | todo | 1 | - | - |
 | P6-T4 | Stephen's manual check | T0 | todo | 1 | - | - |
 | P6-T5 | Promote to prod | T1,T3,T4,T6,T7,T8 | todo | 1 | - | - |
-| P6-T6 | Promotion tooling | P5-T17 | todo | 1 | - | - |
+| P6-T6 | Promotion tooling | P5-T17 | building | 1 | builder running (amended T6) | - |
 | P6-T7 | Stephen's prod credentials | T8 | todo | 1 | - | - |
-| P6-T8 | Prod infra prep (LIVE) | T6 | todo | 1 | - | - |
+| P6-T8 | Prod infra prep (LIVE) | T6,T13,T14 | todo | 1 | pre-amendment path (local .env.prod) while GitHub is deferred | - |
+| P6-T9 | Decision log contracts (migration 0007) | amendment | building | 1 | builder running (contracts) | - |
+| P6-T10 | Decision recorder | T9 | todo | 1 | - | - |
+| P6-T11 | Decision log wiring + LIVE | T10,T12,T2 | todo | 1 | - | - |
+| P6-T12 | Decisions API + web Day view | T9 | todo | 1 | - | - |
+| P6-T13 | GitHub deploy workflow + tooling | T6 | deferred | 1 | deferred by Stephen 2026-09-27 (GitHub deploy/secrets: only when asked) | - |
+| P6-T14 | GitHub secrets cut-over (LIVE) | T13 | deferred | 1 | deferred by Stephen 2026-09-27 | - |
 
 ## Escalations
 
@@ -1965,3 +1971,30 @@ None open.
 
 ### 2026-09-27 20:40 MT · P5-REVIEW · Phase reviewer · attempt 1 · started
 - Scope: whole-phase review + fix; must-fix biased-universe fallback (P5-T18 LIVE finding); backlog of open nits
+
+### 2026-09-27 22:03 MT · P6-T0 amendment · Planner · attempt 1 · started
+- Scope: add Stephen's two requirements to the Phase 6 plan as P6-T9 onward (decision log for end-of-day analysis, secrets in GitHub with a self-hosted deploy runner)
+
+### 2026-09-27 22:52 MT · P6-T0 amendment · Planner · attempt 1 · finished
+- Result: done, plan amended (Trader/docs/plans/2026-09-27-phase-6-promotion.md)
+- Commits: b8973db
+- Gate: not run (plan only)
+- Notes: new tasks P6-T9 (decision log contracts, migration 0007), then T10 (recorder) in parallel with T12 (API, CSV, Reports Day view), then T11 (wiring, Telegram line, CLI, LIVE deploy, after T2 accepted). T13 (GitHub workflow, gh_secrets, write_env, runner installer, deploy.sh local mode, after T6 accepted), then T14 (LIVE cut-over, Mac .env.dev retired last). T6, T7, T8, T5 amended: no .env.prod, Stephen adds prod secrets in the GitHub UI and approves the prod deploy. Decision log pre-classified as not a trading change under D2 with checks. Calendar unchanged. Repo is PUBLIC, so the self-hosted runner risk is open question 15. Board needs rows P6-T9 to T14. T5 now also depends on T11 and T14, T8 on T13 and T14 LIVE 2
+
+### 2026-09-27 22:34 MT · P6-T0 amendment · Verifier+Spec reviewer · attempt 1 · started
+- Notes: combined planning verify+fix of the Phase 6 amendment (b8973db: P6-T9..T14, amended T5-T8), checked against trunk code
+
+### 2026-09-27 22:33 MT · P6-T6 · Builder · attempt 1 · started
+- Scope: amended T6 (b8973db): cron_gap.py, deploy.sh stamps and prod guards, prod_env.py (values, create_db, verify_roles), env_check.py
+
+### 2026-09-27 22:33 MT · P6-T2 · Builder · attempt 1 · started
+- Scope: trader soak-report / soak-mark (read-only report, D1 verdicts), soak Telegram line, two crontab lines, SPEC §9 rows, master plan §7.1 row. No LIVE steps from the builder (orchestrator runs LIVE 1-4).
+
+### 2026-09-27 22:44 MT · P6-T0 amendment · Verifier+Spec reviewer · attempt 1 · finished
+- Result: PASS after fixes in place (6 must-fix, 9 should-fix)
+- Commits: b33ae82
+- Gate: not run (plan only)
+- Notes: ReplayDeps is in replay/runner.py (hook now gets ReplayRun, uses the snapshot settings); final/fingerprint checks under the advisory lock (no un-freeze race with post-close); env_setup deletion also owns tests/gauntlet/test_p1_t1_breaker.py; runner token via ACTIONS_RUNNER_INPUT_TOKEN not argv; GitHub-down break-glass (write_env --from-container); trader-dev.sh runs inside trader-dev after .env.dev retirement and T14 updates master plan section 4. Should-fix: no decisions pass 09:34-09:38 ET, all loop DB work in to_thread, hooks in cli.py after brief / only on fired, post-close pass after archive, fingerprint limited to read sources, explain_orb context checks from reject_reason, nice dropped + disk preflight, inputs only via env in run bodies, no container logs in public logs, window not applied to check, Stephen never approves fork-PR runs, T5 dep on T11 soft
+
+### 2026-09-27 22:45 MT · P6-T9 · Builder · attempt 1 · started
+- Scope: decision log contracts: migration 0007 decision_log, DecisionLog ORM, trader/decisions types and stubs, six reports.decisions_* settings, API schemas and TS mirror. Migration not applied to trader_dev by the builder.

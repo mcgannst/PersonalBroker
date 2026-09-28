@@ -1146,6 +1146,7 @@ app.add_typer(decisions_app, name="decisions")
 
 RUN_OPTION = typer.Option(None, "--run", help="A run id (default: the live run)")
 DAY_OPTION = typer.Option(..., "--date", help="The session YYYY-MM-DD")
+EXPORT_SPOOL_BYTES = 8 * 1024 * 1024  # `decisions export` buffers in memory up to this, then on disk
 
 
 def _decisions_day(core: "Core", name: str, date_: str) -> date | None:
@@ -1279,7 +1280,10 @@ def decisions_export(
 ) -> None:
     """The day's decisions as CSV (the same file as the web's Download CSV)."""
     _setup_logging()
+    import os
+    import shutil
     import sys
+    import tempfile
     from pathlib import Path
 
     from trader.decisions import read
@@ -1301,20 +1305,33 @@ def decisions_export(
     if picked is None or not has:
         typer.echo(f"{name} {day}: no decisions recorded", err=True)
         return
-    lines = decisions_csv(core.factory, picked[0], day)
+    # The whole CSV is read into a spooled buffer first: nothing is emitted (stdout) or put in place (--out,
+    # written to a side file and renamed) unless the read completed, so a database error mid-export never
+    # leaves a truncated CSV that looks whole (gauntlet fix). Exit 1 on any failure.
+    target = None if out is None else Path(out)
+    part = None if target is None else target.with_name(f".{target.name}.part")
     try:
-        if out is None:
-            for line in lines:
-                sys.stdout.write(line)
-            sys.stdout.flush()
-        else:
-            with Path(out).open("w", encoding="utf-8", newline="") as f:
+        with tempfile.SpooledTemporaryFile(
+            max_size=EXPORT_SPOOL_BYTES, mode="w+", encoding="utf-8", newline=""
+        ) as buf:
+            lines = decisions_csv(core.factory, picked[0], day)
+            try:
                 for line in lines:
-                    f.write(line)
+                    buf.write(line)
+            finally:
+                lines.close()
+            buf.seek(0)
+            if target is None or part is None:
+                shutil.copyfileobj(buf, sys.stdout)
+                sys.stdout.flush()
+            else:
+                with part.open("w", encoding="utf-8", newline="") as f:
+                    shutil.copyfileobj(buf, f)
+                os.replace(part, target)
     except Exception as exc:
+        if part is not None:
+            part.unlink(missing_ok=True)
         _fail(f"{name} {day}: failed: {_one_line(exc)}")
-    finally:
-        lines.close()
     if out is not None:
         typer.echo(f"{name} {day} run {picked[0]}: written to {out}")
 

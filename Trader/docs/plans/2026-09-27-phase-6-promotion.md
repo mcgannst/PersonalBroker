@@ -931,14 +931,14 @@ Replay-only additions (P5's `on_candles` hooks), job retries, logging, reports, 
 - Docs (pull right before editing; one editor at a time): SPEC §10 (the `decision_log` table), §11 (the three routes), §12 (Reports page "Day" view), §13 (the six `reports.decisions_*` keys); master plan §7.1: a new "Decision log" row (the table, stages and outcomes, the recorder semantics, the logging-only guarantee), Notifier (`DailySummaryView.decisions`), Web links (`/reports?day=<YYYY-MM-DD>`).
 
 **Acceptance tests:**
-- [ ] 1. The loop (fake clock and fake recorder) runs only on session days in its window, at the configured cadence, skips while an `event:` row is `running` and starts no pass from 09:34:00 to 09:38:00 ET (EDT and EST), writes one warning per failure streak and one info on recovery, and never stops the worker's step loop; a recorder that blocks for 3 s (a sleeping fake in the thread) does not delay the step loop's next step (the loop's work runs off the event loop).
-- [ ] 2. `record_decisions_quietly` is called after a succeeded `premarket` (after the brief was handed off) and after `trader event` only when a result is `fired` (not for `skipped`); a raising recorder changes neither the job's `job_runs` status nor the CLI exit code.
-- [ ] 3. Post-close: the final pass runs before the summary is built; a raising recorder leaves the archive and the summary unchanged and the detail says `error`; `prune` runs.
-- [ ] 4. **(integration) Decisions unchanged through the real wiring:** the worker-day scenario (`tests/integration/test_worker_day.py` composition) with the loop on and off gives identical trading rows (as T10 test 14).
-- [ ] 5. The summary line: escaped HTML, the link built from `PUBLIC_BASE_URL`, times MT, silent/sound flags unchanged, absent when disabled or when no day row exists; existing daily-summary tests pass unchanged (the field is additive).
-- [ ] 6. CLI: `record`, `show`, `export`, `prune` on a seeded database; an unknown run → exit 1; a non-session → message, exit 0; `export` output equals `decisions_csv`.
-- [ ] 7. The worker composition in `run_worker` passes a `DecisionsLoop` (a runtime test like the existing `run_worker` wiring tests).
-- [ ] 8. Docs updated (SPEC and master plan rows as listed).
+- [x] 1. The loop (fake clock and fake recorder) runs only on session days in its window, at the configured cadence, skips while an `event:` row is `running` and starts no pass from 09:34:00 to 09:38:00 ET (EDT and EST), writes one warning per failure streak and one info on recovery, and never stops the worker's step loop; a recorder that blocks for 3 s (a sleeping fake in the thread) does not delay the step loop's next step (the loop's work runs off the event loop).
+- [x] 2. `record_decisions_quietly` is called after a succeeded `premarket` (after the brief was handed off) and after `trader event` only when a result is `fired` (not for `skipped`); a raising recorder changes neither the job's `job_runs` status nor the CLI exit code.
+- [x] 3. Post-close: the final pass runs before the summary is built; a raising recorder leaves the archive and the summary unchanged and the detail says `error`; `prune` runs.
+- [x] 4. **(integration) Decisions unchanged through the real wiring:** the worker-day scenario (`tests/integration/test_worker_day.py` composition) with the loop on and off gives identical trading rows (as T10 test 14).
+- [x] 5. The summary line: escaped HTML, the link built from `PUBLIC_BASE_URL`, times MT, silent/sound flags unchanged, absent when disabled or when no day row exists; existing daily-summary tests pass unchanged (the field is additive).
+- [x] 6. CLI: `record`, `show`, `export`, `prune` on a seeded database; an unknown run → exit 1; a non-session → message, exit 0; `export` output equals `decisions_csv`.
+- [x] 7. The worker composition in `run_worker` passes a `DecisionsLoop` (a runtime test like the existing `run_worker` wiring tests).
+- [x] 8. Docs updated (SPEC and master plan rows as listed).
 - [x] 9. Gate and commit `P6-T11: decision log wiring (worker loop, post-close, Telegram line, CLI)`.
 
 **LIVE steps** (dev; outside 09:15–16:30 ET on a session day):
@@ -959,6 +959,13 @@ Replay-only additions (P5's `on_candles` hooks), job retries, logging, reports, 
 - **Test 4:** "loop off" is `reports.decisions_enabled = false` (so the post-close's final pass records nothing either); "loop on" drives the worker's own `DecisionsLoop` (from the real `run_worker` composition) once after every worker step. Trading rows (T10 test 14's comparison) and the chat (minus the one added line) are identical; the on-database's journal is final, has no `decisions` warning, and no pass started 09:34–09:38.
 - **D2 (for T11 LIVE 1):** no decision-path file changed (`git diff db4682a -- Trader/app/trader/{strategies,engine,broker,market} Trader/app/trader/jobs/nightly.py Trader/app/trader/jobs/premarket.py Trader/app/trader/adapters/claude/catalyst.py Trader/app/trader/settings_store.py` is empty), `tests/replay/golden/` unchanged, no existing assertion in the rule-3 test folders changed.
 - **LIVE steps 1–6: pending, for the orchestrator** (not run by the builder): one deploy of T9–T12 together after Monday's close (outside 09:15–16:30 ET), the entrypoint migrating to 0007, then the D3 cron catch-up and LIVE 3–6.
+
+**Fix round 1 (P6-T11 builder attempt 2, on trunk a7c6bba; gauntlet a1 findings):**
+- **Quiet minutes (breaker failure):** `DecisionsLoop.run_once` reads the clock again after the gate's thread reads and returns `scan_quiet` if that time is in 09:34:00–09:38:00 ET, so no pass starts in the window however slow the gate (the breaker's 14 tests, 33 cases, all pass).
+- **Post-close bound (should-fix):** `_decisions` wraps the final pass in `asyncio.wait_for(..., DECISIONS_TIMEOUT_SECONDS)`, a module constant of 120 s in `trader/jobs/postclose.py` (a new setting would have touched `settings_store.py`, a D2 decision-path file). A timeout is handled like any failure: detail `{"error": "TimeoutError"}`, one masked warning (log line and a `decisions` warning event, never relayed), the summary goes out without the line.
+- **Nits:** `decisions.recorded seconds=` now times only the pass (from the clock read right before `record`); the post-close builds no line when the final pass skipped as `disabled`/`not_session` (a day row left from earlier is not final; an already-`final` day on a forced re-run still gets its line); `trader decisions export` reads the whole CSV into a spooled buffer (memory to 8 MiB, then disk) and only then writes stdout, or writes `--out` to a side file `.<name>.part` renamed over the target, so a failed read emits nothing, leaves any old file as it was, and exits 1.
+- Not changed (reviewer nits left as noted): a warning lost during a database outage still leaves a lone "recovered" info; a leftover `running` event row still pauses the loop until that event's next run.
+- Boxes 1–8 ticked after checking each against its tests and the docs. D2 unchanged: no decision-path file touched, golden files unchanged, `test_d2_the_t9_to_t12_deploy_modifies_no_decision_path_file` passes.
 
 ---
 

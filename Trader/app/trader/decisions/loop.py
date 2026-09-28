@@ -167,13 +167,19 @@ class DecisionsLoop:
         self._interval = gate.interval
         if gate.skipped is not None or gate.run_id is None or gate.day is None:
             return LoopStep(now, gate.skipped or "no_run", None, gate.interval)
+        # the gate's reads take time (a busy database, lock contention): judge the quiet minutes again on the
+        # clock right before the pass, so no pass STARTS in [09:34:00, 09:38:00) ET (gauntlet fix)
+        started = self.deps.clock.now()
+        if in_quiet_window(started):
+            return LoopStep(now, "scan_quiet", None, gate.interval)
         try:
             result = await self._record(self.deps, gate.run_id, gate.day, final=False)
         except Exception as exc:
             await self._failed(exc, gate.run_id, gate.day)
             return LoopStep(now, "error", None, gate.interval)
-        # the pass's duration on the process clock (the only clock the app reads: see trader.market.clock)
-        seconds = round((self.deps.clock.now() - now).total_seconds(), 3)
+        # the pass's own duration (not the gate's reads) on the process clock (the only clock the app reads:
+        # see trader.market.clock)
+        seconds = round((self.deps.clock.now() - started).total_seconds(), 3)
         if result.skipped is None:
             log.info(
                 "decisions.recorded",

@@ -179,6 +179,49 @@ async def test_no_pass_starts_from_0934_to_0938_et(
 
 
 @pytest.mark.usefixtures("no_running")
+@pytest.mark.parametrize("day", [TUE, EST_DAY])  # EDT and EST
+async def test_a_slow_gate_that_ends_in_the_quiet_minutes_starts_no_pass(day: date) -> None:
+    """Fix round 1 (gauntlet): the quiet minutes are judged again on the clock right before the pass, so a
+    gate whose reads start at 09:33:50 and return at 09:34:10 starts nothing."""
+    clock = FixedClock(et(day, 9, 33, 50))
+
+    def slow_settings() -> RuntimeSettings:
+        clock.advance(timedelta(seconds=20))
+        return RuntimeSettings()
+
+    loop, rec, events = make_loop(clock, settings=slow_settings)
+    step = await loop.run_once()
+    assert rec.calls == [] and step.skipped == "scan_quiet" and events.rows == []
+
+
+@pytest.mark.usefixtures("no_running")
+async def test_the_recorded_log_line_times_only_the_pass_not_the_gate() -> None:
+    """Fix round 1 (nit): `decisions.recorded seconds=` is the pass's duration (LIVE step 4 reads it), not
+    the gate's settings/run/`running` reads before it."""
+    from structlog.testing import capture_logs
+
+    clock = FixedClock(et(TUE, 10, 0))
+
+    def slow_settings() -> RuntimeSettings:
+        clock.advance(timedelta(seconds=20))  # a slow gate
+        return RuntimeSettings()
+
+    async def two_second_pass(
+        deps: RecorderDeps, run_id: int, session_date: date, *, final: bool = False, rebuild: bool = False
+    ) -> RecordResult:
+        clock.advance(timedelta(seconds=2))
+        return RecordResult(run_id, session_date, None, {"scan": 3, "day": 1}, final)
+
+    base, _, _ = make_loop(clock, settings=slow_settings)
+    loop = DecisionsLoop(base.deps, lambda: RUN, record=two_second_pass, event=Events())
+    with capture_logs() as logs:
+        step = await loop.run_once()
+    assert step.skipped is None
+    (line,) = [x for x in logs if x["event"] == "decisions.recorded"]
+    assert line["seconds"] == 2.0 and line["rows"] == 4
+
+
+@pytest.mark.usefixtures("no_running")
 async def test_disabled_or_no_live_run_records_nothing() -> None:
     clock = FixedClock(et(TUE, 11, 0))
     loop, rec, _ = make_loop(clock, settings=RuntimeSettings(reports_decisions_enabled=False))
@@ -568,6 +611,66 @@ async def test_no_decisions_line_when_off_or_without_a_day_row(
     (view,) = w.summaries()
     assert view.decision_log is None
     assert ("decisions" in out) is (case != "no_hook")
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(("skipped", "line"), [("disabled", False), ("not_session", False), ("final", True)])
+async def test_a_stale_day_row_gives_no_line_when_the_final_pass_skipped(
+    db_factory: sessionmaker[Session], skipped: str, line: bool
+) -> None:
+    """Fix round 1 (nit): with the log disabled the final pass froze nothing, so a (non-final) day row left
+    from earlier in the day is not reported; an already-final day (a forced re-run) still is."""
+    import dataclasses as dc
+
+    from trader.jobs.postclose import run_postclose
+
+    w = _postclose_world(db_factory)
+
+    async def decisions(d: date) -> FinalPass:
+        result = RecordResult(w.run_id, d, skipped, {}, skipped == "final")  # type: ignore[arg-type]
+        return FinalPass(result, _day_summary(w.run_id), 5, PruneResult(0, 0))
+
+    out = await run_postclose(dc.replace(w.deps(et(TUE, 16, 15)), decisions=decisions), TUE)
+    (view,) = w.summaries()
+    assert (view.decision_log is not None) is line
+    assert out["decisions"]["skipped"] == skipped and out["summary_sent"] is True
+
+
+@pytest.mark.db
+async def test_a_hanging_final_pass_times_out_and_the_summary_goes_out_without_the_line(
+    db_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fix round 1 (gauntlet should-fix): the final pass is bounded by `DECISIONS_TIMEOUT_SECONDS`; past it
+    the detail says `TimeoutError`, one warning (source `decisions`) is written and the summary is sent
+    without the "Decisions" line."""
+    import dataclasses as dc
+
+    import trader.jobs.postclose as pc
+
+    monkeypatch.setattr(pc, "DECISIONS_TIMEOUT_SECONDS", 0.2)
+    w = _postclose_world(db_factory)
+
+    async def hangs(d: date) -> FinalPass:
+        await asyncio.sleep(3600)
+        raise AssertionError("unreachable")
+
+    started = time.perf_counter()
+    out = await asyncio.wait_for(
+        pc.run_postclose(dc.replace(w.deps(et(TUE, 16, 15)), decisions=hangs), TUE), timeout=30
+    )
+    assert time.perf_counter() - started < 20
+    assert out["decisions"] == {"error": "TimeoutError"} and out["summary_sent"] is True
+    (view,) = w.summaries()
+    assert view.decision_log is None
+    with db_factory() as s:
+        events = s.execute(select(m.EventLog).where(m.EventLog.source == "decisions")).scalars().all()
+    assert [e.level for e in events] == ["warning"] and "TimeoutError" in events[0].message
+
+
+def test_the_final_pass_timeout_is_a_bounded_module_constant() -> None:
+    from trader.jobs import postclose
+
+    assert 0 < postclose.DECISIONS_TIMEOUT_SECONDS <= 300
 
 
 @pytest.mark.db

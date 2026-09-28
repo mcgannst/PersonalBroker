@@ -285,6 +285,37 @@ def test_export_equals_decisions_csv_on_stdout_and_in_a_file(core: Core, tmp_pat
 
 
 @pytest.mark.db
+def test_an_export_that_fails_mid_read_emits_no_partial_csv(
+    core: Core, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fix round 1 (nit): the CSV is buffered and emitted only once the read completed, so a database error
+    after some lines leaves nothing on stdout and no (or the old) file at --out, with exit 1."""
+    import trader.decisions.export as export_mod
+
+    with core.factory.begin() as s:
+        run_id = add_run(s)
+        seed_day(s, run_id, D3)
+
+    def breaks_midway(factory: Any, run: int, day: Any) -> Any:
+        full = decisions_csv(factory, run, day)
+        yield next(full)
+        yield next(full)
+        full.close()
+        raise RuntimeError("server closed the connection: password=hunter2")
+
+    monkeypatch.setattr(export_mod, "decisions_csv", breaks_midway)
+    out = _invoke("export", "--date", D3.isoformat())
+    assert out.exit_code == 1 and out.stdout_bytes == b""
+    assert "failed: RuntimeError" in out.output and "hunter2" not in out.output
+    path = tmp_path / "d.csv"
+    path.write_text("old export\n")
+    to_file = _invoke("export", "--date", D3.isoformat(), "--out", str(path))
+    assert to_file.exit_code == 1 and "written to" not in to_file.output
+    assert path.read_text() == "old export\n"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["d.csv"]  # no leftover side file
+
+
+@pytest.mark.db
 def test_prune_deletes_rows_past_the_retention(core: Core) -> None:
     with core.factory.begin() as s:
         run_id = add_run(s)

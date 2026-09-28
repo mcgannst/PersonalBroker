@@ -52,6 +52,11 @@ log = structlog.get_logger("jobs.postclose")
 
 SOURCE = "job.postclose"
 DECISIONS_SOURCE = "decisions"  # trader.decisions.types.SOURCE: the decision log's events, never relayed
+# The decision log's final pass never holds the summary longer than this (an advisory-lock wait or a hung
+# query): past it the summary goes out without the line and the detail says TimeoutError (gauntlet fix).
+DECISIONS_TIMEOUT_SECONDS = 120.0
+# A final pass that skipped for these reasons froze nothing: a day row left from earlier is not final.
+STALE_SKIPS = frozenset({"disabled", "not_session"})
 OPENING_BAR_CODE: Literal["5m"] = "5m"  # INTERVAL_CODES["FiveMinutes"]
 MINUTE_CODE: Literal["1m"] = "1m"  # INTERVAL_CODES["OneMinute"]
 MAX_MISSING_OPEN_FRACTION = Decimal("0.05")  # more opening bars missing than this is an error event
@@ -190,15 +195,22 @@ async def _decisions(
     """The decision log's final pass (P6-T11), after the archive and before the summary: the job detail's
     `decisions` entry and the summary's line. Never raises: a failure is one masked warning (log line and a
     `warning` event, never relayed), the detail says `{"error": <type>}` and the summary goes out without
-    the line. The line is left out when `reports.decisions_in_summary` is off or the day has no day row."""
+    the line. The pass is bounded by `DECISIONS_TIMEOUT_SECONDS` (a timeout is such a failure, TimeoutError).
+    The line is left out when `reports.decisions_in_summary` is off, the day has no day row, or the pass
+    skipped as `disabled`/`not_session` (then a day row left from earlier is stale, not final)."""
     if deps.decisions is None:
         return None, None
     try:
-        final = await deps.decisions(session_date)
-    except Exception as exc:
+        final = await asyncio.wait_for(deps.decisions(session_date), timeout=DECISIONS_TIMEOUT_SECONDS)
+    except Exception as exc:  # TimeoutError included: the summary never waits unbounded
         error = type(exc).__name__
-        log.warning("postclose.decisions_failed", error=_reason(exc))
-        await asyncio.to_thread(_log_warning, deps, session_date, _reason(exc), error)
+        reason = (
+            f"TimeoutError: no result after {DECISIONS_TIMEOUT_SECONDS:g} s"
+            if isinstance(exc, TimeoutError)
+            else _reason(exc)
+        )
+        log.warning("postclose.decisions_failed", error=reason)
+        await asyncio.to_thread(_log_warning, deps, session_date, reason, error)
         return {"error": error}, None
     detail: dict[str, Any] = {
         "final": final.result.final,
@@ -212,7 +224,7 @@ async def _decisions(
     if final.result.skipped is not None:
         detail["skipped"] = final.result.skipped
     line: DecisionsLineView | None = None
-    if final.summary is not None:
+    if final.summary is not None and final.result.skipped not in STALE_SKIPS:
         try:
             in_summary = (await asyncio.to_thread(deps.settings)).reports_decisions_in_summary
         except Exception as exc:  # the settings can't be read: no line, the summary still goes out

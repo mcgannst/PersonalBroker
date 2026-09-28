@@ -34,3 +34,12 @@ X-RateLimit-Reset (root cause of the 2026-09-28 9:35 ET opening-bar slowdown, se
 - 16:44 MT targeted: tests/adapters tests/gauntlet tests/market 1020 passed (FIX-OPENBARS and P1 breakers
   green). Gate attempt 1 stopped at ruff E501 (2 long lines), fixed, ruff/format/mypy clean locally.
 - 16:58 MT gate.sh exit 0: ruff/format/mypy clean, 3629 passed, web 464 passed. Committing and pushing.
+- 16:59 MT commit 459e172 pushed to trunk (rebased over dc4cd1e, a docs-only commit).
+- 16:59 MT deploy dev from this clean worktree at 459e172: down 22:59:43Z, up 23:00:35Z (health 200
+  after 12 s). /api/meta version phase-5-complete-24-g459e172. Worker heartbeat started 23:00:32Z,
+  beat 1.8 s old at check, phase idle.
+- 17:00 MT cron_gap 22:59:43Z..23:00:35Z: "nothing skipped". It lists the 18:05 EDT (16:05 MDT)
+  soak-report --notify as "may have been interrupted" (started in the 120 min before the down stamp);
+  soak-report is read-only and writes no job_runs row, it ran 54 min before the downtime, so it was not
+  re-run (a re-run would only resend the Telegram report). The 20:00 ET nightly is outside the window.
+- 17:01 MT `trader decisions record --date 2026-09-28 --final`: run 1, 588 rows, final.

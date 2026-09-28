@@ -63,6 +63,7 @@ MAY_CHANGE = frozenset(
         "event_log",
         "strategy_configs",
         "audit_log",
+        "decision_log",
     }
 )
 MUST_NOT_CHANGE = (

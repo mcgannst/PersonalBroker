@@ -679,4 +679,5 @@ def test_replay_deps_fields() -> None:
         "market_factory",
         "catalysts_factory",
         "engine_factory",
+        "decisions",  # P6-T10 (additive, defaults to None)
     ]

@@ -14,10 +14,9 @@ from pydantic import ValidationError
 
 from trader.api import schemas
 from trader.api.forms import OTHER_GROUP, group_of, model_fields_out
-from trader.decisions import export, orb_explain, prune, read, recorder, summary
+from trader.decisions import export, prune, read, recorder
 from trader.decisions import types as t
 from trader.settings_store import RuntimeSettings
-from trader.strategies.orb_sip import OrbSipParams
 
 D = date(2026, 9, 28)
 T0 = datetime(2026, 9, 28, 13, 35, 5, tzinfo=UTC)
@@ -235,62 +234,9 @@ def test_a_snapshot_without_the_keys_gets_the_defaults() -> None:
     assert s.reports_decisions_enabled is True and s.reports_decisions_scan_detail == "all"
 
 
-# --- 4: stubs -----------------------------------------------------------------------------------------------
-class _Anything:
-    def __getattr__(self, name: str) -> Any:
-        return None
-
-
-async def test_every_stub_raises_not_implemented() -> None:
-    any_ = _Anything()
-    with pytest.raises(NotImplementedError):
-        await recorder.record_day(any_, 1, D)  # type: ignore[arg-type]
-    live = recorder.LiveScanData(any_)  # type: ignore[arg-type]
-    with pytest.raises(NotImplementedError):
-        await live.universe(D)
-    with pytest.raises(NotImplementedError):
-        await live.open_bar_stats(D)
-    with pytest.raises(NotImplementedError):
-        await live.stored_opening_bars(D, [1])
-    with pytest.raises(NotImplementedError):
-        orb_explain.explain_orb({}, None, OrbSipParams(), catalyst=None, reject_reason=None)
-    with pytest.raises(NotImplementedError):
-        orb_explain.first_failure(())
-    with pytest.raises(NotImplementedError):
-        summary.summarize((), run_id=1, session_date=D, final=False)
-    s = t.DaySummary(
-        run_id=1,
-        session_date=D,
-        final=False,
-        universe_size=None,
-        universe_source=None,
-        premarket_listed=0,
-        premarket_classified=0,
-        scanned=0,
-        rvol_passed=0,
-        ranked=0,
-        passed=0,
-        rejects_by_rule=(),
-        signals=0,
-        risk_rejections=(),
-        proposals=0,
-        approvals={},
-        median_decision_seconds=None,
-        fills=0,
-        avg_fill_diff_per_share=None,
-        trades=0,
-        wins=0,
-        losses=0,
-        pnl=Decimal(0),
-        pnl_r=None,
-        exits_by_reason=(),
-        notes=(),
-    )
-    with pytest.raises(NotImplementedError):
-        summary.summary_text(s, link=None)
-    with pytest.raises(NotImplementedError):
-        prune.prune(any_, any_, RuntimeSettings())  # type: ignore[arg-type]
-    # read.py and export.py are implemented by P6-T12 (tests/decisions/test_read.py, test_export.py)
+# --- 4: stubs ---------------------------------------------------------------------------------------------
+# Every stub is implemented now: recorder, orb_explain, summary and prune by P6-T10 (test_recorder.py and
+# friends), read and export by P6-T12 (test_read.py, test_export.py). Their signatures stay pinned here.
 
 
 def test_stub_signatures() -> None:

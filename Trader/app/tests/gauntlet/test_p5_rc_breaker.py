@@ -281,6 +281,11 @@ def snapshot(factory: sessionmaker[Session], run_id: int) -> dict[str, Any]:
             order = list(t.primary_key.columns) or list(t.c)
             rows = s.execute(select(t).where(t.c.run_id == run_id).order_by(*order)).mappings().all()
             out[t.name] = [_norm({k: v for k, v in r.items() if k != "run_id"}) for r in rows]
+            if t.name == "decision_log":  # P6-T10: when it was recorded (wall clock) and an id-based digest
+                for r in out[t.name]:
+                    r.pop("recorded_at", None)
+                    if isinstance(r.get("data"), dict):
+                        r["data"].pop("fingerprint", None)
         run = s.get(m.Run, run_id)
         assert run is not None
         out["progress"] = _norm(run.progress)

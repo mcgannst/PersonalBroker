@@ -24,7 +24,7 @@ injected `wall` clock.
 
 import asyncio
 import hashlib
-from collections.abc import AsyncIterator, Callable, Collection, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -43,6 +43,9 @@ from trader.bootstrap import Core
 from trader.broker.types import FillEvent, OrderSpec
 from trader.db import models as m
 from trader.db.session import session_scope
+from trader.decisions.recorder import record_day
+from trader.decisions.types import SOURCE as DECISIONS_SOURCE
+from trader.decisions.types import RecorderDeps, ScanData
 from trader.engine.runs import ensure_sim_account
 from trader.engine.scheduler import DayPlan, day_plan
 from trader.events import log_event
@@ -50,7 +53,7 @@ from trader.logging_setup import redact_text
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import ET, Clock, RealClock, et_date
 from trader.market.data_service import QuoteClient
-from trader.market.types import Candle
+from trader.market.types import Candle, OpenBarStats, UniverseMember
 from trader.replay.catalysts import ReplayCatalysts
 from trader.replay.clock import ReplayClock
 from trader.replay.data import ReplayData
@@ -418,6 +421,56 @@ class ReplayDeps:
     market_factory: Callable[[ReplayRun, ReplayClock], ReplayMarket]
     catalysts_factory: Callable[[ReplayRun], CatalystSource]
     engine_factory: Callable[[ReplayRun, ReplayClock, ReplayMarket, CatalystSource], ReplayEngine]
+    # P6-T10: records each replayed session's decision journal (final) under the replay's run id, after every
+    # session, when the run's settings snapshot has `reports.decisions_enabled`. A failure is one warning
+    # event and the replay carries on. None (the default): no journal.
+    decisions: Callable[[ReplayRun, date, ScanData], Awaitable[None]] | None = None
+
+
+class _ReplayScanData:
+    """The recorder's `ScanData` over the replay market: the day's universe, stats and the opening bars
+    `prepare_day` already loaded (every universe member's), so it never fetches anything."""
+
+    def __init__(self, market: ReplayMarket) -> None:
+        self._market = market
+
+    async def universe(self, session_date: date) -> list[UniverseMember]:
+        return await self._market.universe(session_date)
+
+    async def open_bar_stats(self, session_date: date) -> dict[int, OpenBarStats]:
+        return await self._market.open_bar_stats(session_date)
+
+    async def stored_opening_bars(self, session_date: date, symbol_ids: list[int]) -> dict[int, Candle]:
+        loaded = {u.symbol_id for u in await self._market.universe(session_date)}
+        ids = sorted(set(symbol_ids) & loaded)
+        return dict((await self._market.opening_bars(session_date, ids)).bars) if ids else {}
+
+
+async def _record_decisions(
+    deps: ReplayDeps, run: ReplayRun, day: date, market: ReplayMarket, clock: Clock
+) -> None:
+    """Run the decisions hook for one replayed session. Never raises (a cancellation still propagates): a
+    failure writes one `warning` event with the replay's run id (source `decisions`)."""
+    if deps.decisions is None or not run.settings.reports_decisions_enabled:
+        return
+    try:
+        await deps.decisions(run, day, _ReplayScanData(market))
+    except Exception as exc:
+        error = _describe(exc)
+        log.warning("replay.decisions_failed", run_id=run.id, day=day.isoformat(), error=error)
+        try:
+            with session_scope(deps.factory) as s:
+                log_event(
+                    s,
+                    clock,
+                    "warning",
+                    DECISIONS_SOURCE,
+                    f"replay {run.id}: decision log for {day} not recorded: {error}",
+                    {"run_id": run.id, "session_date": day.isoformat(), "error": error},
+                    run_id=run.id,
+                )
+        except Exception as db_exc:
+            log.error("replay.decisions_failure_unrecorded", run_id=run.id, error=_describe(db_exc))
 
 
 def _plan_strategies(run: ReplayRun, plugins: Mapping[str, type[Any]]) -> list[Strategy]:
@@ -744,6 +797,7 @@ async def _run_locked(deps: ReplayDeps, run: ReplayRun) -> None:
             await market.prepare_day(day)
             plan = day_plan(strategies, cal, day, run.settings)
             forced += await _Day(engine, market, clock, plan).run()
+            await _record_decisions(deps, run, day, market, clock)
             progress = _progress(progress, market, done, day, _trades(factory, run.id), forced)
             _write_progress(factory, wall, run.id, progress)
         label = run.label or ""
@@ -881,4 +935,11 @@ async def open_replay_deps(core: Core, *, data_mode: DataMode) -> AsyncIterator[
             registry = PinnedRegistry(core.factory, clock, pinned_views(core.factory, run), run.id)
             return build_replay_engine(core.factory, clock, core.calendar, run, market, catalysts, registry)
 
-        yield ReplayDeps(core.factory, wall, core.calendar, market_factory, catalysts_factory, engine_factory)
+        async def decisions(run: ReplayRun, day: date, scan: ScanData) -> None:
+            # the replay's settings snapshot (enabled flag, scan detail), never the live settings
+            recorder = RecorderDeps(core.factory, wall, core.calendar, lambda: run.settings, scan)
+            await record_day(recorder, run.id, day, final=True)
+
+        yield ReplayDeps(
+            core.factory, wall, core.calendar, market_factory, catalysts_factory, engine_factory, decisions
+        )

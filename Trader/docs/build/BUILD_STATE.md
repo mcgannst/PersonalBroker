@@ -9,7 +9,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Current phase | 5 (Phase 4 COMPLETE ~17:05 MT Sep 27, tag phase-4-complete) |
 | Current task | P5 gauntlets (group W; replay core) + builders T2, T9, T11, T14, T15, T16 |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-28T04:49:39Z |
+| Last updated (UTC) | 2026-09-28T08:57:48Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
 | Token last refreshed (UTC) | 2026-09-27T17:21:56Z (re-seeded from Stephen's new token after .env.dev rebuild; token removed from .env.dev) |
@@ -124,17 +124,17 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P5-REVIEW | Phase 5 review | - | accepted | 1 | replay biased-universe fallback fixed (newest snapshot); gate 3180 py + 436 web; redeployed eaafe21; cross-task pass incomplete (agent stopped) -> backlog; tagged phase-5-complete | eaafe21 |
 | P6-T0 | Write the Phase 6 plan | P5 | accepted | 1 | plan + amendment (T9-T14: decision log, GitHub secrets deploy) verify+fix PASS | b33ae82 |
 | P6-T1 | Live rechecks (S2, S4, S1) | T0 | todo | 1 | - | - |
-| P6-T2 | Soak report + daily line | P5-T17 | building | 1 | builder running | - |
+| P6-T2 | Soak report + daily line | P5-T17 | accepted | 2 | fix a2: T2 breaker 14/14 (unchanged), T6 breaker green; token verdict capped at 18:00 ET; scan off only when disabled; provisional failure rule (Sat 10:30 final line, weekly deadline 12:00); send outcome reported | bfcba5c |
 | P6-T3 | 10 clean trading days | T2 | todo | 1 | - | - |
 | P6-T4 | Stephen's manual check | T0 | todo | 1 | - | - |
 | P6-T5 | Promote to prod | T1,T3,T4,T6,T7,T8 | todo | 1 | - | - |
-| P6-T6 | Promotion tooling | P5-T17 | building | 1 | builder running (amended T6) | - |
+| P6-T6 | Promotion tooling | P5-T17 | accepted | 2 | fix a2: T6 breaker 46/46; prod version = release tag; cron_gap --lookback (interrupted jobs on stderr); /proc/1/environ note; REVOKE CREATE on public. PENDING: local .env.prod tools await Stephen's OK | 5c4da77 |
 | P6-T7 | Stephen's prod credentials | T8 | todo | 1 | - | - |
 | P6-T8 | Prod infra prep (LIVE) | T6,T13,T14 | todo | 1 | pre-amendment path (local .env.prod) while GitHub is deferred | - |
-| P6-T9 | Decision log contracts (migration 0007) | amendment | building | 1 | builder running (contracts) | - |
-| P6-T10 | Decision recorder | T9 | todo | 1 | - | - |
-| P6-T11 | Decision log wiring + LIVE | T10,T12,T2 | todo | 1 | - | - |
-| P6-T12 | Decisions API + web Day view | T9 | todo | 1 | - | - |
+| P6-T9 | Decision log contracts (migration 0007) | amendment | accepted | 1 | contracts: migration 0007 decision_log (not yet applied; T11 LIVE), ORM, types, 6 settings, stubs, schemas + TS; gate 3229 py + 436 web | 468280d |
+| P6-T10 | Decision recorder | T9 | accepted | 2 | fix a2: GD breaker 16/16; settings read off loop; overlay symbol out of scan rows; rebuild keeps final; fingerprint covers settings used; D2 four checks hold | db4682a |
+| P6-T11 | Decision log wiring + LIVE | T10,T12,T2 | accepted | 2 | fix a2: T11 breaker 14/14; quiet window re-checked before each pass; postclose final pass 120 s timeout; export all-or-nothing; D2 holds (not a trading change); gate 3590 py + 464 web. LIVE after Mon close | e744771 |
+| P6-T12 | Decisions API + web Day view | T9 | accepted | 2 | fix a2: offset capped (422); list_days reads day rows only (index confirmed); recent days deduped | db4682a |
 | P6-T13 | GitHub deploy workflow + tooling | T6 | deferred | 1 | deferred by Stephen 2026-09-27 (GitHub deploy/secrets: only when asked) | - |
 | P6-T14 | GitHub secrets cut-over (LIVE) | T13 | deferred | 1 | deferred by Stephen 2026-09-27 | - |
 
@@ -1998,3 +1998,126 @@ None open.
 
 ### 2026-09-27 22:45 MT · P6-T9 · Builder · attempt 1 · started
 - Scope: decision log contracts: migration 0007 decision_log, DecisionLog ORM, trader/decisions types and stubs, six reports.decisions_* settings, API schemas and TS mirror. Migration not applied to trader_dev by the builder.
+
+### 2026-09-27 23:25 MT · P6-T2 · Builder · attempt 1 · finished
+- Result: done, all 17 acceptance boxes ticked, build notes added to the T2 section
+- Commits: 1603651 (trader/jobs/soak.py, soak-report and soak-mark CLI, soak_line renderer, crontab lines, SPEC 9 rows, master plan 7.1 Soak report row, 57 new tests)
+- Gate: gate.sh passed (3238 pytest, 436 vitest)
+- Deviations: replay/data.py QUIET_TIMES gained the 2 soak lines (its crontab sync test requires it). soak-report runs without the log mirror (strictly read-only). Additive contract fields: SoakDay.orb_open "off", SoakReport.changed, record_mark run_id may be None
+- OPEN: LIVE 1-4 for the orchestrator (not run by the builder), including D1's check that every expected job (e.g. session_end) really writes rows in trader_dev
+
+### 2026-09-27 23:04 MT · P6-T2 · Gauntlet (Verifier+Breaker+Reviewer) · attempt 1 · started
+- Scope: verify 1603651 (status, gate, boxes), 10-14 breaker tests in tests/gauntlet/test_p6_t2_breaker.py, spec+code review
+
+### 2026-09-27 23:30 MT · P6-T6 · Builder · attempt 1 · finished
+- Result: amended T6 scope built (cron_gap.py, env_check.py, prod_env.py create_db/verify_roles/generate_prod_values, deploy.sh stamps and prod guards)
+- Commits: 3ccd3ff
+- Gate: gate.sh passed (3191 pytest, ruff, mypy, web)
+- Notes: the restored .env.prod tooling (init/secret/unset/check/copy-admin-password/backup) was NOT built. The session permission classifier refused it as a relayed scope change. It needs Stephen's direct confirmation.
+
+### 2026-09-27 23:10 MT · P6-T6 · Gauntlet (Verifier+Breaker+Reviewer) · attempt 1 · started
+- Scope: verify 3ccd3ff (status, gate, boxes), 10-14 breaker tests in tests/gauntlet/test_p6_t6_breaker.py (secrets, cron_gap calendar, deploy.sh prod guards, env_check), spec+code review
+
+### 2026-09-27 23:25 MT · P6-T9 · Builder · attempt 1 · finished
+- Result: done, all 6 acceptance checkboxes ticked
+- Commits: 468280d
+- Gate: PASS via gate.sh (3229 pytest, 436 vitest) before the rebase. After rebasing onto P6-T2 1603651 and P6-T6 3ccd3ff, the overlapping suites were re-run green (199)
+- Notes: migration 0007_decision_log (head was 0006). NOT applied to trader_dev. Pending LIVE: the entrypoint applies it with the T9-T12 deploy (T11 LIVE 2), outside market hours. Head pins in tests/db/test_migration_0006.py and tests/api/test_system.py moved (outside the file map). Summary money fields are Decimal (JSON string). CheckOp added as a TS union. Details in the plan T9 builder notes
+
+### 2026-09-27 23:12 MT · P6-T12 · Builder · attempt 1 · started
+- Scope: decision log API (GET /api/decisions/days, /api/decisions, /api/export/decisions.csv), trader/decisions/read.py and export.py, reports/export.py csv_line/csv_cell aliases, web Reports Day view (DayDecisions.tsx), http.ts client methods. No LIVE steps.
+
+### 2026-09-27 23:12 MT · P6-T10 · Builder · attempt 1 · started
+- Scope: decision recorder (recorder, orb_explain, summary, prune), replay hook in replay/runner.py, decisions-unchanged proofs (replay golden, live simulated day), static and read-only tests
+
+### 2026-09-27 23:18 MT · P6-T2 · Gauntlet (Verifier+Breaker+Reviewer) · attempt 1 · finished
+- Result: Verify PASS (status clean, gate green 3238 pytest + 436 vitest, boxes 1-17 ticked); Breaker FAIL 3/14; review 0 must-fix, 3 should-fix, 5 nits
+- Commits: d43853a (tests/gauntlet/test_p6_t2_breaker.py, agent log)
+- Notes: failing: a token recovery row started after D 18:00 ET flips a final not-clean day to clean (soak.py:300 needs started_at <= deadline); the line says "9:35 scan off" while orb is enabled and still pending (messages.py:719-720); the Saturday 10:30 --final line still shows a Friday whose weekly failed for good as pending/silent (weekly deadline Sat 12:00 is after the 10:30 cron: plan inconsistency)
+
+### 2026-09-27 23:18 MT · P6-T2 · Builder · attempt 2 · started
+- Scope: fix round 1 (token verdict deadline, 9:35 scan off/pending line, Saturday final cron 5 12 * * 6, notify nits, MT doc in SPEC §9)
+
+### 2026-09-27 23:34 MT · P6-T6 · Gauntlet (Verifier+Breaker+Reviewer) · attempt 1 · finished
+- Result: Verify PASS (clean tree at 3ccd3ff, boxes 1-4 and 7-15 ticked, gate green: ruff, mypy, 3249 pytest, 436 vitest). Breaker FAIL (45 of 46 cases pass, 1 fails). Review: 1 must-fix, 2 should-fix, 6 nits
+- Commits: 45d323d (tests/gauntlet/test_p6_t6_breaker.py, 14 tests, and the agent log)
+- Failing: two-tags case. With a newer annotated phase tag on the release commit, deploy.sh prod builds trader:v1.0.0 with APP_VERSION=phase-6-complete, so /api/meta would not read v1.0.0 (T5 LIVE 6 and 9). Fix: in prod, use the verified tag as app_version (deploy.sh:96)
+- Should-fix: cron_gap does not list a job that was still running at the down stamp (the recreate kills it, and only fires from 60 s before the stamp count), so D3 needs a lookback or a job_runs running/failed check. Add a note that /proc/1/environ is readable by every process in the container (uid 10001), so the entrypoint unset is not a security boundary
+
+### 2026-09-27 23:26 MT · P6-T6 · Builder · attempt 2 · started
+- Scope: fix round 1 (deploy.sh prod app_version = release tag, cron_gap interrupted-job lookback + D3 step, /proc/1/environ note, nits: _role_setting, ADMIN_DATABASES "", probe cleanup, env_check URL/quotes, REVOKE CREATE ON SCHEMA public)
+
+### 2026-09-27 23:38 MT · P6-T12 · Builder · attempt 1 · finished
+- Result: done, acceptance boxes 1-7 ticked (8 = this commit), builder notes added to the T12 section
+- Commits: 6b51a45 (routers/decisions.py, decisions/read.py and export.py, csv_line/csv_cell aliases, Reports Day view DayDecisions.tsx, client/http/fake/fixtures/queryKeys, tests)
+- Gate: gate.sh ran. Ruff, format and mypy clean. Pytest 3397 passed, 4 failed, all in other tasks' committed breaker files (tests/gauntlet/test_p6_t2_breaker.py x3, test_p6_t6_breaker.py x1, awaiting T2/T6 fix rounds). Web check run separately (the gate stops at pytest): tsc clean, 459 vitest passed
+- Deviations: files outside the map (client.ts, queryKeys.ts, fakeApi.ts, fixtures.ts, router-count pins in test_phase4/5_contracts.py, T9's stub test in test_contracts.py). Client methods take query objects (decisionDays(q), decisionDay(q), decisionsCsvUrl(q)) for the web client contract test
+- For T10: the day-row summary shape and the CSV data keys T12 reads are listed in the plan's T12 builder notes
+
+### 2026-09-27 23:58 MT · P6-T6 · Builder · attempt 2 · finished
+- Result: done, all must-fix, should-fix and nit items fixed
+- Commits: 5c4da77
+- Gate: ruff, format and mypy green. pytest had 3356 passed and 3 failed. The 3 failures are all P6-T2 breaker cases, owned by the P6-T2 fix round. All 46 P6-T6 breaker cases pass. The web check was not reached after the pytest failure. This commit changes no web files
+- Notes: cron_gap --lookback, default 120 min, prints the jobs that may have been interrupted on stderr, so stdout stays the exact to-run list. D3 now covers checking job_runs for running or failed rows. SPEC 13 has the /proc/1/environ note. create_db now revokes CREATE on schema public. trader_dev is not changed
+
+### 2026-09-28 00:50 MT · P6-T10 · Builder · attempt 1 · finished
+- Result: done, all 19 acceptance boxes ticked, builder notes in the T10 section
+- Commits: 712112c (recorder, orb_explain, summary, prune, replay hook in replay/runner.py, tests)
+- Gate: gate.sh 3451 passed, 3 failed, all 3 in tests/gauntlet/test_p6_t2_breaker.py (committed failing by the P6-T2 Breaker, waiting for T2's fix round, not related to T10)
+- Notes: the catalyst prefixes and AUTO_FLATTEN_ACTOR are copied, not imported (importing them would load httpx or engine.proposals, which break T9 test 4). A pass uses 3 thread steps; the final and fingerprint checks run again under the lock. The fingerprint also covers rows updated in place. T12's reader and CSV are checked against real recorder output. Pins moved: test_phase5_contracts (the ReplayDeps fields), test_p5_rc_breaker (its snapshot ignores recorded_at and fingerprint), test_contracts (the stub test removed). The golden replay is unchanged with the hook on.
+
+### 2026-09-28 00:05 MT · P6-GD · Gauntlet (Verifier+Breaker+Reviewer) · attempt 1 · started
+- Scope: group D (decision log): P6-T10 at 712112c, P6-T12 at 6b51a45. Log: Trader/docs/build/agents/P6-GD-gauntlet-a1.md
+
+### 2026-09-28 00:38 MT · P6-GD · Gauntlet (Verifier+Breaker+Reviewer) · attempt 1 · finished
+- Result: Verify PASS (clean tree at 712112c, T10 boxes 1-19 and T12 boxes 1-7 ticked, T12 box 8 left unticked. Gate: ruff, format, mypy clean. pytest 3463 passed, 6 failed = 3 new P6-GD breaker cases + the 3 known P6-T2 breaker cases. Web: tsc clean, 462 vitest). Breaker FAIL (13 of 16 pass). Review: 0 must-fix, 3 should-fix, nits
+- Commits: 92376bb (tests/gauntlet/test_p6_gd_breaker.py, web/src/gauntlet/p6_web_breaker.test.tsx, agent log)
+- Failing: record_day calls deps.settings() on the event loop (recorder.py:473, a DB read under quiet_settings). A ranked SPY candidate gets a scan row but is left out of counts.scanned (recorder.py:952 vs 1166). offset=10**19 on /api/decisions gives 500 bigint out of range (routers/decisions.py:166)
+- D2 checks (a)-(c) hold on trunk vs phase-5-complete, (d) green in the gate
+
+### 2026-09-28 00:30 MT · P6-T2 · Builder · attempt 2 · failed (blocked)
+- Result: all fixes built (token deadline, scan off/pending, Sat final 5 12 * * 6, notify outcome, JSON last, to_thread, window>=target, SPEC §9 MT note); commit 3e306f8 in worktree agent-a618327bf51a4a109, NOT pushed
+- Gate: 3 failed, 3457 passed. Failing tests are breaker files still pinning the old Sat 10:30 line: test_p6_t2_breaker::test_the_two_cron_lines..., test_p6_t6_breaker::test_a_weekend_window_before_columbus_day, ::test_holidays_and_early_closes_are_marked_and_pinned
+- Notes: the permission classifier refused editing the P6-T2 breaker crontab pins (orchestrator approval is not user consent). Needs Stephen's approval to move those pins to 12:05, then push 3e306f8
+
+### 2026-09-28 00:37 MT · P6-GD · Builder · attempt 2 · started
+- Result: fix round for decision-log gauntlet findings (3 must-fix, 1 should-fix, nits)
+
+### 2026-09-28 01:40 MT · P6-T2 · Builder · attempt 2 · finished
+- Result: fix round done under the third ruling (cron stays 30 10 * * 6, weekly deadline Sat 12:00, D1 provisional failure when retries are exhausted before the deadline); token deadline, scan off/pending, notify outcome, JSON last, to_thread, window>=target, SPEC §9 MT note. Supersedes the 00:30 'failed (blocked)' entry (3e306f8 was folded in, never pushed)
+- Commits: bfcba5c
+- Gate: 3473 passed, 3 failed, all in tests/gauntlet/test_p6_gd_breaker.py (decision-log gauntlet 92376bb, not T2 code). All 14 P6-T2 breaker tests and all P6-T6 breaker tests pass; breaker file byte-identical to d43853a
+
+### 2026-09-28 01:10 MT · P6-GD · Builder · attempt 2 · finished
+- Result: done. 3 must-fix (settings read off the event loop, SPY candidate out of the scan stage and counts, offset cap 422), the should-fix (list_days reads only day rows via ix_decision_log_run_day_stage) and all nits fixed, with regression tests
+- Commits: db4682a
+- Gate: ruff/format/mypy clean, pytest 3476 passed, 3 failed (only the P6-T2 breaker, fixed by bfcba5c which landed during the gate, 126 targeted pass after the rebase), web 464 passed
+- Notes: D2 holds: no decision-path file touched, tests/replay/golden unchanged, the golden, replay-isolation and T10 tests 13-15 pass. No new migration
+
+### 2026-09-28 01:11 MT · P6-T11 · Builder · attempt 1 · started
+- Result: decision log wiring (worker loop, pre-market and event hooks, post-close final pass and prune, Telegram line, CLI, docs). No LIVE steps (deploy is the orchestrator's). Log: Trader/docs/build/agents/P6-T11-builder-a1.md
+
+### 2026-09-28 02:25 MT · P6-T11 · Builder · attempt 1 · finished
+- Result: done (code). Decisions loop in the worker (07:50 ET to close + 30 min, none 09:34-09:38 ET or while an event job runs, all DB work in threads, one warning per streak), CLI hooks (after a succeeded premarket's brief, after a fired trader event), post-close final pass (after the archive, before the summary) + prune + Telegram Decisions line, trader decisions record/show/export/prune, SPEC 10-13 and master plan 7.1 docs
+- Commits: d9cb318
+- Gate: gate.sh 3548 passed, 0 failed; web 464 passed. New tests: test_wiring 40, test_decisions_cli 21, integration test 4 (worker day with the loop on vs off: trading rows identical)
+- Notes: plan bug: DailySummaryView.decisions already exists (int), so the new field is decision_log. PostcloseDeps.decisions returns FinalPass (rows, prune counts), not DaySummary. The loop's warning events go through an injected writer (T10 static test forbids log_event in trader/decisions). D2: no decision-path file touched, golden unchanged. LIVE steps 1-6 PENDING for the orchestrator (deploy T9-T12 after Monday's close, migration 0007 by the entrypoint, cron catch-up)
+
+### 2026-09-28 02:22 MT · P6-T11 · Gauntlet (Verifier+Breaker+Reviewer) · attempt 1 · started
+- Scope: P6-T11 decision log wiring at d9cb318. Log: Trader/docs/build/agents/P6-T11-gauntlet-a1.md
+
+### 2026-09-28 02:35 MT · P6-T11 · Gauntlet (Verifier+Breaker+Reviewer) · attempt 1 · finished
+- Result: Verify PASS on tree and gate (clean at d9cb318, gate.sh exit 0, 3548 py + 464 web), but T11 boxes 1-8 are not ticked in the plan. Breaker FAIL (13 of 14 pass, 32 of 33 cases). Review: 0 must-fix, 3 should-fix, nits
+- Commits: a7c6bba (tests/gauntlet/test_p6_t11_breaker.py, agent log)
+- Failing: test_no_pass_starts_in_the_quiet_minutes_even_when_the_gate_reads_are_slow. loop.py takes `now` before the gate's thread reads, so a gate starting 09:33:50 that returns 09:34:10 starts a pass inside 09:34-09:38
+- Should-fix: re-check the quiet window just before the pass; bound the post-close's final pass (no timeout: an advisory-lock wait or a hung query holds the summary and the job); tick boxes 1-8
+- D2: (a)-(c) hold from phase-5-complete to d9cb318: only the 6 added reports.decisions_* fields, only MAY_CHANGE +decision_log, golden unchanged. (d) green in the gate. Not a trading change
+
+### 2026-09-28 02:35 MT · P6-T11 · Builder · attempt 2 · started
+- Result: fix round (combined verify+fix): quiet-window re-check before the pass, post-close final-pass timeout, nits, tick boxes 1-8. Log: Trader/docs/build/agents/P6-T11-builder-a2.md
+
+### 2026-09-28 03:05 MT · P6-T11 · Builder · attempt 2 · finished
+- Result: done. Loop re-checks the 09:34-09:38 ET quiet minutes right before the pass (breaker 14/14, 33 cases pass). Post-close final pass bounded at 120 s (module constant DECISIONS_TIMEOUT_SECONDS, TimeoutError detail, one masked warning, summary without the line). Nits fixed (seconds time only the pass, no line from a stale row when skipped disabled/not_session, export buffered and emitted only on a complete read, exit 1). Boxes 1-8 ticked, Fix round 1 notes
+- Commits: e744771
+- Gate: gate.sh exit 0, 3590 passed, web 464 passed. New regression tests: 8 cases (test_wiring 7, test_decisions_cli 1)
+- Notes: D2 holds: no decision-path file touched, golden unchanged, test_d2_the_t9_to_t12_deploy_modifies_no_decision_path_file passes. Left as noted: lone "recovered" info after a lost warning, leftover running event row pauses the loop

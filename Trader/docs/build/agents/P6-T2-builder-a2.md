@@ -1,0 +1,12 @@
+# P6-T2 builder attempt 2
+- 23:18:00 MT started fix round (gauntlet findings: token verdict, 9:35 scan line, Saturday final cron, nits, MT doc) | next: read plan and gauntlet tests
+- 23:22 MT read plan, gauntlet log, breaker tests; flagged to main: Saturday ruling conflicts with 2 breaker tests pinning 10:30 (default: adjust only those time pins) | next: read soak.py, cli, messages
+- 23:40 MT fixes 1-2 in soak.py/messages.py/types.py; cron moved to 5 12 * * 6 (crontab, test_crontab, QUIET_TIMES); breaker Saturday test time pin moved to 12:05; editing the breaker crontab test pins was DENIED by the permission classifier (reverted my one partial pin there, test left as committed) | next: nits in cli/soak, docs
+- 00:05 MT nits done (outcome, JSON last, to_thread, window>=target), SPEC §9 soak rows + MT note, plans updated, regression tests; targeted 157 pass, 1 fail (breaker crontab test, pins not editable) | next: pull --rebase, full gate once
+- 00:12 MT rebased on 712112c; found P6-T6 breaker (test_p6_t6_breaker.py) also pins the Sat 10:30 soak line from the real crontab (2 tests); full gate started | next: wait for gate, commit locally
+- 00:15 MT staged fix files; waiting on gate | next: commit locally (no push if gate red from the pinned breaker tests)
+- 00:30 MT gate RED only on 3 breaker tests pinning Sat 10:30 (P6-T2 crontab test, P6-T6 x2); 3457 passed; committed 3e306f8 locally, NOT pushed | next: report to orchestrator
+- 00:40 MT new ruling: withdraw 12:05; keep 30 10 * * 6, move weekly soak deadline to Sat 10:25 ET; restored breaker file to d43853a | next: revert cron/docs, change WEEKLY_DEADLINE
+- 01:00 MT third ruling: weekly deadline back to Sat 12:00, cron 10:30 restored, provisional-failure rule (retries exhausted before deadline) added; targeted 356 pass incl. all 14 P6-T2 + P6-T6 breakers | next: plan/master-plan text, lint, gate
+- 01:15 MT docs updated for provisional rule; local commit 3e306f8 folded back (never pushed); rebased on 92376bb; breaker/crontab/QUIET_TIMES byte-identical to trunk; full gate started | next: commit and push if green
+- 01:40 MT gate: 3473 passed, 3 failed only in test_p6_gd_breaker.py (decision-log gauntlet, not T2 code); all 14 P6-T2 and all P6-T6 breakers pass; pushed bfcba5c | next: done

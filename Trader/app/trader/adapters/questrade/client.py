@@ -181,6 +181,7 @@ class QuestradeClient:
         self.rate_limit_remaining: dict[Category, int] = {}
         self.stats: dict[Category, CallStats] = {"market": CallStats(), "account": CallStats()}
         self._token: AccessToken | None = None
+        self._replaced_token: AccessToken | None = None
         self._token_lock = asyncio.Lock()
 
     async def __aenter__(self) -> Self:
@@ -203,13 +204,27 @@ class QuestradeClient:
         text: str = str(exc).replace(token.token, "<token>").replace(token.api_base, "<api>")
         return f"{type(exc).__name__}: {text}"[:300]
 
+    def _masked_message(self, exc: BaseException) -> str:
+        """`TypeName: message`, at most 300 chars, with the cached token (and the one it replaced,
+        which an in-flight request may still have used) and their api bases masked."""
+        text: str = str(exc)
+        for token in (self._token, self._replaced_token):
+            if token is not None:
+                text = text.replace(token.token, "<token>").replace(token.api_base, "<api>")
+        return f"{type(exc).__name__}: {text}"[:300]
+
+    def _cache_token(self, token: AccessToken) -> None:
+        if self._token is not None and self._token is not token:
+            self._replaced_token = self._token
+        self._token = token
+
     async def _access(self) -> AccessToken:
         """The cached access token, fetched from the TokenSource only when missing or near expiry."""
         async with self._token_lock:
             token = self._token
             if token is None or token.expires_at - TOKEN_REUSE_MARGIN <= self._clock.now():
                 token = await asyncio.to_thread(self._tokens.access)
-                self._token = token
+                self._cache_token(token)
             return token
 
     async def _refresh_after_401(self, rejected: AccessToken) -> None:
@@ -217,7 +232,7 @@ class QuestradeClient:
         rejected one (then that newer token is used instead)."""
         async with self._token_lock:
             if self._token is None or self._token is rejected:
-                self._token = await asyncio.to_thread(self._tokens.force_refresh)
+                self._cache_token(await asyncio.to_thread(self._tokens.force_refresh))
 
     async def _get(self, path: str, params: dict[str, str], category: Category) -> Any:
         refreshed = False
@@ -387,6 +402,10 @@ class QuestradeClient:
             except (ValueError, KeyError, TypeError, InvalidOperation) as exc:
                 # json.JSONDecodeError is a ValueError.
                 return QuestradeApiError(0, f"{type(exc).__name__}: {exc}"[:300])
+            except Exception as exc:  # noqa: BLE001 - one request's failure must not end the batch
+                # e.g. httpx.DecodingError, httpx.TooManyRedirects, a QuestradeAuthError from a forced
+                # refresh. CancelledError is a BaseException and still propagates.
+                return QuestradeApiError(0, self._masked_message(exc))
 
         unique: list[CandleRequest] = list(dict.fromkeys(reqs))
         tasks: dict[CandleRequest, asyncio.Task[list[Candle] | QuestradeApiError]] = {

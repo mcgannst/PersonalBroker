@@ -8,7 +8,7 @@ import httpx
 import pytest
 import respx
 
-from trader.adapters.questrade.auth import AccessToken
+from trader.adapters.questrade.auth import AccessToken, QuestradeAuthError
 from trader.adapters.questrade.client import (
     MAX_ATTEMPTS,
     TOKEN_REUSE_MARGIN,
@@ -385,6 +385,54 @@ async def test_candles_many_turns_parse_errors_into_per_request_errors() -> None
         v = got[r]
         assert isinstance(v, QuestradeApiError), (r.symbol_id, v)
         assert v.status == 0
+
+
+@respx.mock
+async def test_candles_many_turns_any_other_exception_into_a_per_request_error_without_the_token() -> None:
+    """A QuestradeAuthError from a forced refresh, or any other non-API exception in one request,
+    must not end the batch: the others keep their bars, and the error never echoes the token."""
+
+    class RefreshFails(FakeTokens):
+        def force_refresh(self) -> AccessToken:
+            raise QuestradeAuthError(f"refresh rejected for tok-1 at {BASE}")
+
+    def blow_up(request: httpx.Request) -> httpx.Response:
+        raise RuntimeError(f"boom {request.headers['Authorization']} {request.url}")
+
+    respx.get(BASE + "markets/candles/1").mock(return_value=httpx.Response(200, json={"candles": [BAR]}))
+    respx.get(BASE + "markets/candles/2").mock(return_value=httpx.Response(401, json={"code": 1017}))
+    respx.get(BASE + "markets/candles/3").mock(side_effect=blow_up)
+    respx.get(BASE + "markets/candles/4").mock(return_value=httpx.Response(200, json={"candles": [BAR]}))
+    reqs = [CandleRequest(i, START, START + timedelta(minutes=5), "FiveMinutes") for i in range(1, 5)]
+    async with client(RefreshFails()) as c:
+        got = await c.candles_many(reqs)
+    assert len(got[reqs[0]]) == 1  # type: ignore[arg-type]
+    assert len(got[reqs[3]]) == 1  # type: ignore[arg-type]
+    auth, other = got[reqs[1]], got[reqs[2]]
+    assert isinstance(auth, QuestradeApiError) and auth.status == 0
+    assert isinstance(other, QuestradeApiError) and other.status == 0
+    assert "QuestradeAuthError" in str(auth)
+    assert "RuntimeError" in str(other)
+    for err in (auth, other):
+        assert "tok-1" not in str(err)
+        assert BASE not in str(err)
+        assert len(str(err)) <= len("HTTP 0: ") + 300
+
+
+async def test_candles_many_lets_cancellation_through() -> None:
+    """CancelledError is not an Exception: cancelling the caller still cancels the batch."""
+    async with client() as c:
+
+        async def hang(*_: object) -> list[object]:
+            await asyncio.sleep(30)
+            return []
+
+        c.candles = hang  # type: ignore[method-assign,assignment]
+        task = asyncio.create_task(c.candles_many([CandleRequest(1, START, START, "FiveMinutes")]))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
 
 @respx.mock

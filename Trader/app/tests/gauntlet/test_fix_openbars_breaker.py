@@ -306,11 +306,6 @@ async def test_candles_many_duplicates_are_fetched_once_and_keyed_right() -> Non
 
 
 # 7
-@pytest.mark.xfail(
-    strict=True,
-    reason="FIX-OPENBARS gauntlet should-fix: candles_many re-raises a non-API exception from one "
-    "request via t.result() and drops every completed result (client.py:404). Remove this mark with the fix.",
-)
 async def test_candles_many_one_non_api_exception_does_not_lose_the_completed_bars() -> None:
     """A request that raises something that is not a QuestradeApiError (httpx.DecodingError, a
     QuestradeAuthError from a failed forced refresh, a bug) must not throw away every bar that

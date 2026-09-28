@@ -13,7 +13,7 @@ failure is logged loudly and the loop carries on. Every saved signal ends in exa
 import dataclasses
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -240,7 +240,19 @@ class Engine:
         follow-up (submitted at `now` = `b.end`). That stop is then tried against `b` itself, reopened at the
         entry's fill price, so a bar that touched both the entry and the stop is counted as entered and then
         stopped out, never the favourable order."""
-        fills = self.broker.on_candles(candles, now)
+        return await self._candle_pass(candles, now, None)
+
+    async def on_candles_for(
+        self, candles: Mapping[int, Candle], now: datetime, orders: Collection[int]
+    ) -> list[FillEvent]:
+        """Replay (fix round 1): `on_candles` for the given orders only, without the "submitted before the bar
+        ended" rule (`SimBroker.on_candles(orders=...)`): the replay's forced exits submitted at the close."""
+        return await self._candle_pass(candles, now, orders)
+
+    async def _candle_pass(
+        self, candles: Mapping[int, Candle], now: datetime, orders: Collection[int] | None
+    ) -> list[FillEvent]:
+        fills = self.broker.on_candles(candles, now, orders=orders)
         await self._follow_up(fills)
         out = list(fills)
         entries = [f for f in fills if f.purpose == "entry" and f.symbol_id in candles]
@@ -252,7 +264,12 @@ class Engine:
             stop_id = stops.get(fill.position_id)
             if stop_id is None or stop_id not in working:
                 continue
-            reopened = dataclasses.replace(candles[fill.symbol_id], open=fill.price)
+            bar = candles[fill.symbol_id]
+            # reopened at the entry's price, the range widened to include it (the fill price can lie
+            # outside the bar after slippage and half spread; the fill model rejects an open outside it)
+            reopened = dataclasses.replace(
+                bar, open=fill.price, high=max(bar.high, fill.price), low=min(bar.low, fill.price)
+            )
             same_bar = self.broker.on_candles({fill.symbol_id: reopened}, now, orders=[stop_id])
             await self._follow_up(same_bar)
             out += same_bar

@@ -231,3 +231,38 @@ async def test_on_candles_writes_no_audit_rows_with_audit_auto_off(db_factory: s
         )
         proposals = list(s.execute(select(m.Proposal.decided_via).order_by(m.Proposal.id)).scalars())
     assert actions == [] and proposals == ["auto", "auto"]  # the entry and its protective stop
+
+
+# --- fix round 1 -----------------------------------------------------------------------------------------
+
+
+async def test_same_bar_pass_widens_the_reopened_bar_to_the_entry_price(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """The entry fills above the bar's high (21.51 + slip + hs = 21.5316 > 21.52): the reopened bar's range is
+    widened to include it, so the real model (which rejects an open outside the range) still stops it out."""
+    model = CandleFillModel(FillParams(), Decimal("5"))
+    w = build(db_factory, model)
+    await place_entry(w)
+    bar = candle(et(9, 35), "21.45", "21.52", "21.30", "21.40")
+    entry_fill, stop_fill = await candles_at(w, {w.ids["AAA"]: bar}, et(9, 36))
+    assert entry_fill.price == Decimal("21.5316") > bar.high
+    assert stop_fill.purpose == "stop"
+    assert stop_fill.price == STOP - model.slip(STOP) - model.half_spread(STOP)
+
+
+async def test_on_candles_for_fills_an_order_submitted_at_the_bar_end(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """`on_candles_for` names the orders and skips the submitted-before-the-bar-ended rule (the replay's
+    forced exit submitted at the close); `on_candles` with the same bar leaves that order working."""
+    w = build(db_factory, FakeCandleModel())
+    await place_entry(w)
+    aaa = w.ids["AAA"]
+    await candles_at(w, {aaa: candle(et(9, 35), "21.45", "21.60", "21.45", "21.55")}, et(9, 36))
+    (stop,) = w.broker.working_orders()
+    bar = candle(et(9, 35), "21.50", "21.52", "21.35", "21.38")  # ends at 09:36, when the stop was submitted
+    assert await w.engine.on_candles({aaa: bar}, et(9, 36)) == []
+    (fill,) = await w.engine.on_candles_for({aaa: bar}, et(9, 36), [stop.id])
+    assert (fill.order_id, fill.purpose, fill.ts) == (stop.id, "stop", et(9, 36))
+    assert w.broker.open_positions() == []

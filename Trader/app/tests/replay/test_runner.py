@@ -5,11 +5,13 @@ Acceptance tests (plan P5-T6): 1 create, 2 override rows, 3 validation, 4 loop o
 6 progress and cancel, 7 failure, 9 busy and abandoned, 10 data mode, 11 forced close. (8 is in test_setup.)
 """
 
+import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from dataclasses import dataclass, field, replace
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import Engine, func, select, text
@@ -20,6 +22,7 @@ from tests.fakes_replay import (
     FakeReplayEngine,
     FakeReplayMarket,
     ReplayWorld,
+    candle,
     minute_series,
     seed_replay_world,
 )
@@ -40,8 +43,9 @@ from trader.replay.types import (
     load_replay_run,
 )
 from trader.settings_store import SettingsStore
-from trader.strategies.base import CatalystInfo
-from trader.strategies.registry import StrategyConfigView, StrategyRegistry
+from trader.strategies.base import CatalystInfo, ScheduledEvent, SessionOffset
+from trader.strategies.orb_sip import OrbSip
+from trader.strategies.registry import StrategyConfigView, StrategyRegistry, load_all
 
 CAL = SessionCalendar()
 SAT = datetime(2026, 11, 28, 12, 0, tzinfo=ET)  # a Saturday: `full` data mode
@@ -681,3 +685,258 @@ async def test_forced_close_at_the_last_close(world: World) -> None:
     assert forced_visit == [("tick", et(MON_23, 15, 59))]
     assert positions_at_open == [0, 0]
     assert final.progress.forced_closes == 1
+
+
+# --- fix round 1 --------------------------------------------------------------------------------------------
+def _exit_fills_on_volume(world: World) -> Hook:
+    """The forced exit fills on a bar only when the bar has volume (as the candle fill model does)."""
+
+    def hook(engine: FakeReplayEngine, call: EngineCall) -> None:
+        broker = engine.broker
+        if call.method == "run_event" and call.args[0] == "orb_open" and call.args[1] == MON_23:
+            pid = broker.add_position(world.aaa, qty=10, avg_price="10.00")
+            broker.add_order(world.aaa, purpose="stop", stop="9.50", position_id=pid, submitted_at=call.at)
+        if call.method == "on_candles":
+            bar: Candle | None = call.args[0].get(world.aaa)
+            if bar is not None and bar.volume > 0:
+                for o in [o for o in broker.orders.values() if o.purpose == "exit"]:
+                    broker.remove_order(o.id)
+                    broker.positions.pop(o.position_id or 0, None)
+
+    return hook
+
+
+async def test_forced_exit_not_filled_by_a_zero_volume_close_bar_gets_the_synthetic_bar(world: World) -> None:
+    """Breaker test 11's case with fakes: every bar from 15:40 has zero volume, so the real 16:00 bar can't
+    fill the forced exit; the close-out then applies the synthetic bar at the last close."""
+    run_id = world.create(ReplayRequest(MON_23, MON_23))
+    h = Harness(world, hook=_exit_fills_on_volume(world))
+
+    def market(run: ReplayRun, clock: Any) -> FakeReplayMarket:
+        mk = FakeReplayMarket(clock)
+        mk.add_symbol("AAA", world.aaa)
+        bars = minute_series(CAL.session_open(MON_23), ["10.00"] * 390)
+        zero_from = et(MON_23, 15, 40)
+        mk.set_minute_bars(
+            world.aaa, MON_23, [replace(b, volume=0) if b.start >= zero_from else b for b in bars]
+        )
+        h.markets.append(mk)
+        return mk
+
+    deps = replace(h.deps(), market_factory=market)
+    final = await runner.run_replay(deps, run_id)
+    assert final.status == "completed" and final.progress.forced_closes == 1
+    engine = h.engines[0]
+    at_close = [c for c in engine.calls if c.method == "on_candles" and c.at == et(MON_23, 16, 0)]
+    assert [c.args[0][world.aaa].volume for c in at_close] == [0, 1]  # the real bar, then the synthetic one
+    assert at_close[1].args[0][world.aaa].close == Decimal("10.00")
+    assert engine.broker.open_positions() == []
+
+
+class _TargetingEngine(FakeReplayEngine):
+    """A fake engine with `Engine.on_candles_for`: it fills the named orders (exits) at the bar's open."""
+
+    def __init__(self, *args: Any, **kw: Any) -> None:
+        super().__init__(*args, **kw)
+        self.targeted: list[tuple[datetime, dict[int, Candle], list[int]]] = []
+
+    async def on_candles_for(
+        self, candles: Mapping[int, Candle], now: datetime, orders: Sequence[int]
+    ) -> list[Any]:
+        self.targeted.append((self.clock.now(), dict(candles), list(orders)))
+        for order_id in orders:
+            order = self.broker.orders.pop(order_id)
+            self.broker.positions.pop(order.position_id or 0, None)
+        return []
+
+
+async def test_a_position_opened_by_the_close_bar_is_force_closed_at_the_close(world: World) -> None:
+    """`no_entry_before_close_minutes = 0`: nothing is open at 15:59, then the 15:59-16:00 bar fills an entry.
+    The re-check at the close force-closes it at once through `on_candles_for` (its exit is submitted at the
+    close, so no bar ends after it), and nothing is carried into the next session."""
+    run_id = world.create(ReplayRequest(MON_23, TUE_24))
+
+    def hook(engine: FakeReplayEngine, call: EngineCall) -> None:
+        broker = engine.broker
+        if call.method == "run_event" and call.args[0] == "orb_open" and call.args[1] == MON_23:
+            broker.add_order(world.aaa, submitted_at=call.at)  # an entry working all day
+        if call.method == "on_candles" and call.at == et(MON_23, 16, 0) and broker.orders:
+            for order_id in list(broker.orders):
+                broker.remove_order(order_id)
+            broker.add_position(world.aaa, qty=10, avg_price="10.05")
+
+    h = Harness(world, hook=hook)
+    engines: list[_TargetingEngine] = []
+
+    def engine_factory(run: ReplayRun, clock: Any, market: Any, catalysts: Any) -> _TargetingEngine:
+        engine = _TargetingEngine(clock, hook=hook)
+        engines.append(engine)
+        return engine
+
+    final = await runner.run_replay(replace(h.deps(), engine_factory=engine_factory), run_id)
+    assert final.status == "completed" and final.progress.forced_closes == 1
+    engine = engines[0]
+    [(exit_id, spec)] = engine.broker.submitted
+    assert (spec.reason, spec.order_type, spec.qty) == ("replay_forced_close", "market", 10)
+    [(at, bars, orders)] = engine.targeted
+    last_close = h.markets[0].minute[(world.aaa, MON_23)][-1].close
+    assert (at, orders, bars[world.aaa].close, bars[world.aaa].end) == (
+        et(MON_23, 16, 0),
+        [exit_id],
+        last_close,
+        et(MON_23, 16, 0),
+    )
+    assert engine.broker.open_positions() == []
+    ends = [c for c in engine.calls if c.method == "end_of_session"]
+    assert [c.at for c in ends] == [et(MON_23, 16, 0), et(TUE_24, 16, 0)]
+
+
+async def test_a_pre_open_event_of_day_1_runs_at_its_own_time(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fix round 1: the replay clock starts at day 1's first event when it is before open - 1 minute."""
+
+    class EarlyOrb(OrbSip):
+        def schedule(self, cal: SessionCalendar) -> list[ScheduledEvent]:
+            return [ScheduledEvent("early_probe", SessionOffset.parse("open-30m")), *super().schedule(cal)]
+
+    plugins = {**load_all(), "orb_sip": EarlyOrb}
+    monkeypatch.setattr(runner, "load_all", lambda: plugins)
+    run_id = world.create(ReplayRequest(MON_23, TUE_24))
+    h = Harness(world)
+    assert (await runner.run_replay(h.deps(), run_id)).status == "completed"
+    early = [c.at for c in h.engines[0].calls if c.method == "run_event" and c.args[0] == "early_probe"]
+    assert early == [et(MON_23, 9, 0), et(TUE_24, 9, 0)]
+    with world.factory() as s:
+        acct = s.execute(select(m.SimAccount).where(m.SimAccount.run_id == run_id)).scalar_one()
+    assert acct.created_at == et(MON_23, 9, 0)
+
+
+def test_reconcile_and_create_never_take_the_lock(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fix round 1: they read pg_locks instead, so a runner starting at that moment never sees ReplayBusy."""
+
+    def refuse(_factory: Any) -> None:
+        raise AssertionError("took the replay lock")
+
+    monkeypatch.setattr(runner, "_acquire", refuse)
+    _insert_run(world, "running", SAT - timedelta(minutes=10))
+    assert len(runner.reconcile_abandoned(world.factory, world.wall)) == 1
+    run_id = world.create(ReplayRequest(MON_23, MON_23))
+    assert load_replay_run(world.factory, run_id).status == "queued"
+
+
+def test_lock_held_reads_pg_locks(world: World, held_lock: Callable[[], None]) -> None:
+    with world.factory() as s:
+        assert runner._lock_held(s) is True
+    held_lock()
+    with world.factory() as s:
+        assert runner._lock_held(s) is False
+    conn = runner._acquire(world.factory)
+    assert conn is not None
+    try:
+        with world.factory() as s:
+            assert runner._lock_held(s) is True
+    finally:
+        runner._release(conn)
+
+
+def test_a_runner_starting_while_reconcile_runs_is_never_busy(world: World) -> None:
+    """The race of the review: the list route's `reconcile_abandoned` and a runner's lock acquisition at the
+    same moment. Hammered from another thread, the runner always gets the lock (the old reconcile took it
+    for a moment, so the runner could fail with ReplayBusy)."""
+    stop = threading.Event()
+    errors: list[BaseException] = []
+
+    def reconcile_loop() -> None:
+        try:
+            while not stop.is_set():
+                runner.reconcile_abandoned(world.factory, world.wall)
+        except BaseException as exc:  # surfaced below
+            errors.append(exc)
+
+    worker = threading.Thread(target=reconcile_loop)
+    worker.start()
+    try:
+        for _ in range(150):
+            conn = runner._acquire(world.factory)
+            assert conn is not None, "a reconcile held the replay lock"
+            runner._release(conn)
+    finally:
+        stop.set()
+        worker.join()
+    assert errors == []
+
+
+# --- fix round 1: a biased day through the real composition -------------------------------------------------
+async def test_real_orb_sip_trades_a_biased_day(db_factory: sessionmaker[Session]) -> None:
+    """MON has no universe snapshot (the only one is WED's, a later date): the members' price, average volume
+    and ATR come from the daily bars before MON, so the real orb_sip, through the real ReplayData, still
+    screens the names and emits an entry intent."""
+    lookback = CAL.sessions_before(MON_23, 14)
+    open_bars = [
+        candle(CAL.session_open(d), "10.00", "10.30", "9.90", "10.10", 10_000, minutes=5) for d in lookback
+    ]
+    open_bars.append(candle(CAL.session_open(MON_23), "10.00", "10.50", "9.95", "10.40", 50_000, minutes=5))
+    days = [d for d in (MON_23 - timedelta(days=n) for n in range(45, 0, -1)) if CAL.is_session(d)]
+    daily = [(d, _day_bar(d, "10.00")) for d in days]
+    w = seed_replay_world(
+        db_factory,
+        tickers=("SPY", "AAA"),
+        universe_days=[WED_25],
+        universe_tickers=["AAA"],
+        archive={("AAA", "5m"): open_bars},
+        daily={"AAA": daily},
+    )
+    wall = FixedClock(SAT)
+    run_id = runner.create_replay(
+        db_factory,
+        wall,
+        CAL,
+        SettingsStore(db_factory, now=wall.now),
+        StrategyRegistry(db_factory, wall),
+        ReplayRequest(
+            MON_23,
+            MON_23,
+            strategies={"orb_sip": StrategyOverride(params={"require_catalyst": False})},
+            offline=True,
+        ),
+        "test",
+    )
+    core = SimpleNamespace(
+        factory=db_factory,
+        clock=wall,
+        calendar=CAL,
+        settings=SettingsStore(db_factory, now=wall.now),
+        crypto=None,
+    )
+    async with runner.open_replay_deps(cast(Any, core), data_mode="offline") as deps:
+        final = await runner.run_replay(deps, run_id)
+    assert final.status == "completed", final.error
+    assert final.progress.biased_days == (MON_23,)
+    with db_factory() as s:
+        signals = list(
+            s.execute(
+                select(m.Signal).where(m.Signal.run_id == run_id, m.Signal.symbol_id == w.symbols["AAA"])
+            ).scalars()
+        )
+        entries = list(
+            s.execute(
+                select(m.Order).where(
+                    m.Order.run_id == run_id,
+                    m.Order.symbol_id == w.symbols["AAA"],
+                    m.Order.purpose == "entry",
+                )
+            ).scalars()
+        )
+    orb = [sg for sg in signals if sg.event_key == "orb_open"]
+    assert [sg.session_date for sg in orb] == [MON_23]  # (the entry is later cancelled by entry_cancel)
+    assert "rejection" not in orb[0].evidence, orb[0].evidence
+    assert len(entries) == 1 and entries[0].stop_price == Decimal("10.51")
+
+
+def _day_bar(d: date, close: str) -> Candle:
+    start = datetime.combine(d, time(0), tzinfo=ET)
+    c = Decimal(close)
+    return Candle(
+        start, start + timedelta(days=1), c, c + Decimal("0.75"), c - Decimal("0.75"), c, 2_000_000, None
+    )

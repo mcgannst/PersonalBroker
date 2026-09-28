@@ -12,8 +12,9 @@ hs(p) = half_spread_bps x p, each 4 dp half-up:
 - limit: a buy triggers when low + hs <= limit, a sell when high - hs >= limit (hs of the limit price), and
   both fill at exactly the limit with no slippage, never at a better open (as the quote model, SPEC §7.2).
 `FillDecision.slippage` is `slip` only (comparable with live fills, measured against the real ask or bid);
-`hs` is recorded in the snapshot. The open is deliberately not checked against the bar's range: the
-same-bar worst-case pass (P5-T4) re-applies a bar with its open replaced by the entry's fill price.
+`hs` is recorded in the snapshot. A bar whose open lies outside its own low..high range is corrupt
+(`bad_bar`): the same-bar worst-case pass (P5-T4) re-applies a bar reopened at the entry's fill price and
+widens its range to include that price (fix round 1), so it never trips this check.
 """
 
 from datetime import datetime
@@ -74,10 +75,13 @@ class CandleFillModel:
             )
         bar = market
         prices = (bar.open, bar.high, bar.low, bar.close)
+        detail = f"O {bar.open} H {bar.high} L {bar.low} C {bar.close} V {bar.volume}"
         if any(p <= 0 for p in prices) or bar.low > bar.high or bar.volume < 0:
-            return NoFill("bad_bar", f"O {bar.open} H {bar.high} L {bar.low} C {bar.close} V {bar.volume}")
+            return NoFill("bad_bar", detail)
         if bar.volume == 0:
             return NoFill("no_volume")
+        if not bar.low <= bar.open <= bar.high:  # a corrupt open (fix round 1)
+            return NoFill("bad_bar", detail)
         priced = self._buy(order, bar) if order.side == "buy" else self._sell(order, bar)
         if isinstance(priced, NoFill):
             return priced

@@ -10,8 +10,11 @@ while any order is working, every minute boundary; at a visited time `t` the run
 clock to `t`, then hands the engine the 1-minute bar that ended at `t` for each working symbol (bars before
 events: a bar ending at `t` is complete at `t`), then runs the events due at `t`, then `tick(t)`. At
 `close - 1 minute` any position still open is force-closed (its working orders cancelled, a market exit
-submitted with reason `replay_forced_close`), which the bar ending at the close fills (a synthetic bar at
-the last known close when there is none). Then `end_of_session` at the close.
+submitted with reason `replay_forced_close`), which the bar ending at the close fills. At the close the open
+positions are checked again (fix round 1): one opened after the check (for example by the last bar, with
+`no_entry_before_close_minutes = 0`) gets its forced exit then, and every forced exit still working (no bar,
+or a zero-volume or bad bar) is filled by a synthetic bar at the last known close, so a replay never carries
+a position into the next session. Then `end_of_session` at the close.
 
 Determinism (Review Focus 1): simulated time only from the replay clock (set here, never read from the wall);
 every collection iterated is sorted (symbols and orders by id, strategies by key, events by time then key);
@@ -19,23 +22,25 @@ no randomness; wall time (`started_at`, `updated_at`, `finished_at`, the data-mo
 injected `wall` clock.
 """
 
+import asyncio
 import hashlib
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
-from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
+from collections.abc import AsyncIterator, Callable, Collection, Mapping
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, Protocol, cast
 
 import structlog
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import Connection, Engine, func, select, text, update
+from sqlalchemy import Connection, func, select, text, update
+from sqlalchemy import Engine as DbEngine
 from sqlalchemy.orm import Session, sessionmaker
 
 from trader.adapters.questrade.auth import QuestradeAuth
 from trader.adapters.questrade.client import QuestradeClient
 from trader.bootstrap import Core
-from trader.broker.types import OrderSpec
+from trader.broker.types import FillEvent, OrderSpec
 from trader.db import models as m
 from trader.db.session import session_scope
 from trader.engine.runs import ensure_sim_account
@@ -103,9 +108,9 @@ def _describe(exc: BaseException) -> str:
 
 
 # --- the advisory lock --------------------------------------------------------------------------------------
-def _db_engine(factory: sessionmaker[Session]) -> Engine:
+def _db_engine(factory: sessionmaker[Session]) -> DbEngine:
     bind = factory.kw.get("bind")
-    if not isinstance(bind, Engine):
+    if not isinstance(bind, DbEngine):
         raise TypeError("the replay runner needs a sessionmaker bound to an Engine")
     return bind
 
@@ -140,14 +145,20 @@ def _release(conn: Connection) -> None:
         conn.close()
 
 
-@contextmanager
-def _lock(factory: sessionmaker[Session]) -> Iterator[bool]:
-    conn = _acquire(factory)
-    try:
-        yield conn is not None
-    finally:
-        if conn is not None:
-            _release(conn)
+# A bigint advisory lock as pg_locks shows it: classid = the key's high 32 bits, objid = its low 32 bits
+# (both as unsigned oids), objsubid = 1.
+_LOCK_HELD_SQL = text(
+    "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted"
+    " AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
+    " AND classid = CAST(:hi AS oid) AND objid = CAST(:lo AS oid) AND objsubid = 1)"
+)
+
+
+def _lock_held(s: Session) -> bool:
+    """Whether any session holds `REPLAY_LOCK`, read from pg_locks WITHOUT taking it (fix round 1: a check
+    that took the lock for a moment made a runner starting at that moment fail with ReplayBusy)."""
+    key = REPLAY_LOCK_KEY & 0xFFFFFFFFFFFFFFFF
+    return bool(s.execute(_LOCK_HELD_SQL, {"hi": key >> 32, "lo": key & 0xFFFFFFFF}).scalar_one())
 
 
 # --- validation and creation --------------------------------------------------------------------------------
@@ -272,8 +283,8 @@ def _data_mode(request: ReplayRequest, wall: Clock, calendar: SessionCalendar) -
 
 
 def _lock_is_free(factory: sessionmaker[Session]) -> bool:
-    with _lock(factory) as acquired:
-        return acquired
+    with factory() as s:
+        return not _lock_held(s)
 
 
 def _active_replay(s: Session) -> int | None:
@@ -437,6 +448,23 @@ def _synthetic_bar(close: datetime, price: Decimal) -> Candle:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _Forced:
+    order_id: int
+    symbol_id: int
+    fallback: Decimal  # the synthetic bar's price when the day has no bar (the position's average price)
+    submitted_at: datetime
+
+
+class _TargetedEngine(Protocol):
+    """`Engine.on_candles_for` (fix round 1): a candle pass limited to the given orders that skips the
+    "submitted before the bar ended" rule, for forced exits submitted at the close itself."""
+
+    async def on_candles_for(
+        self, candles: Mapping[int, Candle], now: datetime, orders: Collection[int]
+    ) -> list[FillEvent]: ...
+
+
 class _Day:
     """One session of the loop (see the module docstring)."""
 
@@ -453,7 +481,7 @@ class _Day:
         self.events = [e for e in plan.events if e.at <= self.close]
         self.next_event = 0
         self.loaded: set[int] = set()
-        self.forced: dict[int, Decimal] = {}  # symbol -> fallback price of its forced exit
+        self.forced: dict[int, _Forced] = {}  # position id -> its forced exit
         self.forced_done = False
         self.forced_closes = 0
         self.last: datetime | None = None
@@ -475,6 +503,7 @@ class _Day:
                 break
             await self._visit(min(candidates))
         self._set(self.close)
+        await self._close_out()
         await self.engine.end_of_session(self.day)
         return self.forced_closes
 
@@ -508,25 +537,28 @@ class _Day:
         bars: dict[int, Candle] = {}
         for sid in ids:
             bar = self.market.bar_ending_at(sid, t)
-            if bar is None and t == self.close and sid in self.forced:
-                last = self.market.last_close(sid, t)
-                bar = _synthetic_bar(t, last if last is not None else self.forced[sid])
             if bar is not None:
                 bars[sid] = bar
         if bars:
             await self.engine.on_candles(bars, t)
 
-    def _force_close(self, t: datetime) -> None:
+    def _force_close(self, t: datetime, *, only_unforced: bool = False) -> None:
+        """Cancel each open position's working orders and submit its market exit (`replay_forced_close`).
+        `only_unforced`: skip positions whose forced exit is still working (the re-check at the close)."""
         broker = self.engine.broker
         positions = sorted(broker.open_positions(), key=lambda p: p.id)
+        working = sorted(broker.working_orders(), key=lambda o: o.id)
+        working_ids = {o.id for o in working}
+        if only_unforced:
+            covered = {pid for pid, f in self.forced.items() if f.order_id in working_ids}
+            positions = [p for p in positions if p.id not in covered]
         if not positions:
             return
-        working = sorted(broker.working_orders(), key=lambda o: o.id)
         for pos in positions:
             for order in working:
                 if order.position_id == pos.id:
                     broker.cancel(order.id, FORCED_CLOSE)
-            broker.submit(
+            order_id = broker.submit(
                 OrderSpec(
                     symbol_id=pos.symbol_id,
                     side="sell",
@@ -538,9 +570,45 @@ class _Day:
                     reason=FORCED_CLOSE,
                 )
             )
-            self.forced.setdefault(pos.symbol_id, pos.avg_price)
-            self.forced_closes += 1
+            if pos.id not in self.forced:
+                self.forced_closes += 1
+            self.forced[pos.id] = _Forced(order_id, pos.symbol_id, pos.avg_price, t)
         log.info("replay.forced_close", at=t.isoformat(), positions=[p.id for p in positions])
+
+    async def _close_out(self) -> None:
+        """At the close (fix round 1): force-close any position the check at `close - 1 minute` did not
+        cover, then fill every forced exit still working with a synthetic bar at the last known close (the
+        position's average price when there is none), so no position outlives the session."""
+        close = self.close
+        broker = self.engine.broker
+        if not broker.open_positions():
+            return
+        self._force_close(close, only_unforced=True)
+        working = {o.id for o in broker.working_orders()}
+        pending = [f for _, f in sorted(self.forced.items()) if f.order_id in working]
+        if not pending:
+            return
+
+        def bars_for(forced: list[_Forced]) -> dict[int, Candle]:
+            out: dict[int, Candle] = {}
+            for f in forced:
+                last = self.market.last_close(f.symbol_id, close)
+                out.setdefault(f.symbol_id, _synthetic_bar(close, last if last is not None else f.fallback))
+            return out
+
+        # exits submitted before the close: the synthetic bar ends after them, the normal rule applies
+        early = [f for f in pending if f.submitted_at < close]
+        if early:
+            await self.engine.on_candles(bars_for(early), close)
+        # exits submitted AT the close (the re-check): no bar ends after them, so the pass names them
+        late = [f for f in pending if f.submitted_at >= close]
+        if late:
+            await cast(_TargetedEngine, self.engine).on_candles_for(
+                bars_for(late), close, [f.order_id for f in late]
+            )
+        left = sorted(p.id for p in broker.open_positions())
+        if left:
+            log.error("replay.position_left_open", at=close.isoformat(), positions=left)
 
 
 def _set_status(
@@ -606,6 +674,22 @@ def _progress(
     )
 
 
+def _start_time(
+    strategies: list[Strategy],
+    cal: SessionCalendar,
+    sessions: list[date],
+    settings: RuntimeSettings,
+    wall: Clock,
+) -> datetime:
+    """The replay clock's start: the first session's open - 1 minute, or its first planned event when that
+    is earlier (fix round 1: a pre-open event of day 1 then runs at its own time, not after it)."""
+    if not sessions:
+        return wall.now()
+    start = cal.session_open(sessions[0]) - ONE_MINUTE
+    events = day_plan(strategies, cal, sessions[0], settings).events
+    return min([start, *(e.at for e in events)])
+
+
 async def run_replay(deps: ReplayDeps, run_id: int) -> ReplayRun:
     """Run a `queued` replay to its end under `REPLAY_LOCK`; returns the final state (`completed`,
     `cancelled` or `failed`). `ReplayBusy` when another replay holds the lock. A run that is no longer
@@ -639,14 +723,13 @@ async def _run_locked(deps: ReplayDeps, run: ReplayRun) -> None:
         return
     clock: ReplayClock | None = None
     try:
-        first_open = cal.session_open(sessions[0]) if sessions else wall.now()
-        clock = ReplayClock(first_open - ONE_MINUTE)
+        strategies = _plan_strategies(run, load_all())
+        clock = ReplayClock(_start_time(strategies, cal, sessions, run.settings, wall))
         market = deps.market_factory(run, clock)
         catalysts = deps.catalysts_factory(run)
         engine = deps.engine_factory(run, clock, market, catalysts)
         with session_scope(factory) as s:
             ensure_sim_account(s, run.id, run.settings, clock.now())
-        strategies = _plan_strategies(run, load_all())
         forced = 0
         final: ReplayStatus = "completed"
         for done, day in enumerate(sessions, start=1):
@@ -718,31 +801,34 @@ def request_cancel(factory: sessionmaker[Session], wall: Clock, run_id: int, act
 
 def reconcile_abandoned(factory: sessionmaker[Session], wall: Clock) -> list[int]:
     """When `REPLAY_LOCK` is free, settle every `running` replay and every `queued` one older than 2 minutes
-    as `failed` ("abandoned"); returns their ids."""
-    with _lock(factory) as acquired:
-        if not acquired:
-            return []
-        now = wall.now()
-        with session_scope(factory) as s:
-            rows = (
-                s.execute(
-                    select(m.Run)
-                    .where(m.Run.mode == "replay", m.Run.status.in_(ACTIVE_STATUSES))
-                    .order_by(m.Run.id)
-                    .with_for_update()
-                )
-                .scalars()
-                .all()
+    as `failed` ("abandoned"); returns their ids.
+
+    It never takes the lock itself (fix round 1): it locks the active rows, then reads pg_locks. A runner
+    takes the lock before it claims its row, and the claim waits for these row locks, so a lock seen free
+    here means no live runner owns any of them."""
+    now = wall.now()
+    settled: list[int] = []
+    with session_scope(factory) as s:
+        rows = (
+            s.execute(
+                select(m.Run)
+                .where(m.Run.mode == "replay", m.Run.status.in_(ACTIVE_STATUSES))
+                .order_by(m.Run.id)
+                .with_for_update()
             )
-            settled: list[int] = []
-            for row in rows:
-                if row.status == "queued" and row.started_at > now - ABANDON_QUEUED_AFTER:
-                    continue
-                row.status, row.error, row.finished_at, row.updated_at = "failed", ABANDONED, now, now
-                settled.append(row.id)
-        if settled:
-            log.warning("replay.abandoned", run_ids=settled)
-        return settled
+            .scalars()
+            .all()
+        )
+        if not rows or _lock_held(s):
+            return []
+        for row in rows:
+            if row.status == "queued" and row.started_at > now - ABANDON_QUEUED_AFTER:
+                continue
+            row.status, row.error, row.finished_at, row.updated_at = "failed", ABANDONED, now, now
+            settled.append(row.id)
+    if settled:
+        log.warning("replay.abandoned", run_ids=settled)
+    return settled
 
 
 # --- the real composition -----------------------------------------------------------------------------------
@@ -751,18 +837,20 @@ async def open_replay_deps(core: Core, *, data_mode: DataMode) -> AsyncIterator[
     """The real composition: `ReplayData` (a rate-limited `QuestradeClient` in `full` mode, none offline),
     `ReplayCatalysts`, and `build_replay_engine` over a `PinnedRegistry`.
 
-    The Questrade client gets a `RealClock` (never the replay clock). The auth is built as
-    `trader.runtime.questrade_auth` builds it; `trader.runtime` itself is not imported, because it imports
-    the Telegram adapters (replay isolation)."""
+    The Questrade client gets a `RealClock` (never the replay clock) and the run snapshot's
+    `replay.questrade_rps` (fix round 1: not the live setting); it is built with the run's data source and
+    closed when this context exits. The auth is built as `trader.runtime.questrade_auth` builds it;
+    `trader.runtime` itself is not imported, because it imports the Telegram adapters (replay isolation)."""
     wall = core.clock
     async with AsyncExitStack() as stack:
-        client: QuoteClient | None = None
-        if data_mode == "full":
-            rps = core.settings.load().replay_questrade_rps
-            auth = QuestradeAuth(core.factory, core.crypto, core.clock)
-            client = await stack.enter_async_context(QuestradeClient(auth, RealClock(), market_rps=rps))
 
         def market_factory(run: ReplayRun, clock: ReplayClock) -> ReplayMarket:
+            client: QuoteClient | None = None
+            if data_mode == "full" and run.data_mode == "full":
+                auth = QuestradeAuth(core.factory, core.crypto, core.clock)
+                qt = QuestradeClient(auth, RealClock(), market_rps=run.settings.replay_questrade_rps)
+                stack.push_async_exit(qt)  # its __aenter__ does nothing: closing is all that is needed
+                client = qt
             return ReplayData(
                 core.factory,
                 clock,
@@ -775,6 +863,8 @@ async def open_replay_deps(core: Core, *, data_mode: DataMode) -> AsyncIterator[
                 half_spread_bps=run.half_spread_bps,
                 questrade_window_days=run.settings.replay_questrade_window_days,
                 lookback_sessions=run.settings.open_bar_lookback_sessions,
+                created_at=run.created_at,
+                quiet_sleep=asyncio.sleep if client is not None else None,
             )
 
         def catalysts_factory(run: ReplayRun) -> CatalystSource:

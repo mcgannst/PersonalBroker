@@ -316,6 +316,10 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
   A stop-limit keeps the trigger `stop_limit` also on a gap. The sell stop-limit mirrors the buy one
   (`NoFill("below_limit")` when `ref − slip − hs` is under the limit).
 
+**Fix round 1 (P5-RC builder attempt 2, 2026-09-27):** an open outside the bar's own low..high range is now
+`bad_bar` (checked after zero volume, so a zero-volume bar still reads `no_volume`); T4's same-bar pass widens
+the reopened bar to include the entry price, so it never trips this.
+
 ---
 
 ### Task P5-T4: Replay hooks in the engine: `SimBroker.on_candles`, `Engine.on_candles` (same-bar worst case), audit-free auto approvals, replay-scoped strategy configs
@@ -363,6 +367,12 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
   T3 lands (`tests/engine/test_engine_candles.py`).
 - For T7: `api/feed.py`'s `strategies` watermark is `max(strategy_configs.id)`, so a new `replay` row moves it
   until T7 filters it (T7 test 9).
+
+**Fix round 1 (P5-RC builder attempt 2, 2026-09-27):** the same-bar pass reopens the bar as
+`replace(open=p, high=max(high, p), low=min(low, p))`. New `Engine.on_candles_for(candles, now, orders)`: the
+candle pass limited to the named orders without the "submitted before the bar ended" rule (the broker's
+`orders=`), used by the runner for a forced exit submitted at the close itself; `Engine.on_candles` keeps its
+T1 signature.
 
 ---
 
@@ -418,6 +428,23 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
   clock; `candles()` never fetches (current-day 1-minute bars, archive, cache, kept opening bars).
 - `ReplayCatalysts` uses `CatalystStore.get` with a clock that refuses to be read; `unknown_catalyst(sid)` is
   exported for T6/T18.
+
+**Fix round 1 (P5-RC builder attempt 2, 2026-09-27):**
+- Biased days: members keep only the later snapshot's names; `price` (the last daily close), `avg_volume`
+  (`int(average_volume(daily[-14:]))`) and `atr14` (`atr(daily, 14)`) are recomputed from the daily bars before
+  the session (`_daily_before`, the nightly job's window), so orb_sip can trade a biased day (test in
+  `test_runner.py` through the real composition).
+- Memory: opening bars load per symbol in chunks (the needed session's look-back plus `CHUNK_SESSIONS` = 20
+  sessions), daily bars in chunks of `CHUNK_DAYS` = 28 calendar days; still windowed by
+  `MAX_CANDLES_PER_REQUEST`. Scale test: 130 sessions x 800 symbols keeps at most look-back + one chunk of
+  opening bars per symbol. A symbol is now fetched once per chunk (about 7 `FiveMinutes` requests over 130
+  sessions) instead of once per range.
+- New keywords `created_at` (the Questrade window is measured from the run's creation, `run.created_at`) and
+  `quiet_sleep`: with it (the runner passes `asyncio.sleep` in `full` mode) a fetch never starts within
+  `QUIET_MARGIN` (10 min) of a `QUIET_TIMES` line (the crontab plus the Saturday 09:00 weekly line; a test
+  checks every `docker/crontab` line is listed) and waits instead.
+- The nightly constants are local copies (`MIN_OPENING_BARS`, `DAILY_LOOKBACK`, test-pinned) so
+  `trader.jobs.nightly` (FinViz) is not imported; the half spread is `CandleFillModel.half_spread`.
 
 ---
 
@@ -479,6 +506,21 @@ The five Phase 5 failure modes most likely to hurt Stephen, most likely first. E
 - Tests use a stand-in monotonic clock only while P5-T3's `ReplayClock` is still a stub (autouse fixture), and
   check `registry.current` after an override only once P5-T4's `create_replay_config` is on trunk (the live row
   is also checked by query, so the test is meaningful before T4).
+
+**Fix round 1 (P5-RC builder attempt 2, 2026-09-27):**
+- Forced close: at the close the runner re-checks the open positions. One not yet forced (opened after the
+  `close - 1 minute` check, e.g. by the last bar with `no_entry_before_close_minutes = 0`) gets its forced exit
+  then (filled through `Engine.on_candles_for`, since no bar ends after it); every forced exit still working
+  (no bar, a zero-volume or bad bar) is filled by the synthetic bar at the last close. No replay position is
+  carried overnight (Breaker test 11).
+- Lock: `reconcile_abandoned` and `create_replay` never take `REPLAY_LOCK`; they read `pg_locks`
+  (`_lock_held`), reconcile after locking the active rows `FOR UPDATE`, so a runner starting at that moment is
+  never refused. No retry loop in `run_replay` (the only remaining holder is a real runner).
+- The replay clock starts at day 1's first planned event when that is before `open - 1 minute`.
+- `open_replay_deps` builds the Questrade client per run with the run snapshot's `replay.questrade_rps` (only
+  when both the deps and the run are `full`), passes `created_at` and `quiet_sleep` to `ReplayData`.
+- The offline window stays 09:15–16:30 ET: widening it to 08:30 (review should-fix) contradicts Breaker test 17
+  (09:14:59 → `full`), which must pass unchanged. The cron quiet windows cover the 08:00 and 09:20 jobs instead.
 
 ---
 

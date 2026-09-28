@@ -1,33 +1,42 @@
 """The replay data source (SPEC §8; P5-T5): everything a strategy reads during a replay, from the candle
-archive and caches first and Questrade second (only within `replay.questrade_window_days` of the wall-clock
-date, never offline), with no lookahead (no bar ending after the replay clock) and no writes to any table.
+archive and caches first and Questrade second (only within `replay.questrade_window_days` of the run's
+creation date, never offline), with no lookahead (no bar ending after the replay clock) and no writes to any
+table.
 
 Implements `trader.replay.types.ReplayMarket`. Fetched Questrade data is held in memory for the run only:
-each session's opening 5-minute bar, and the current session's 1-minute bars.
+each session's opening 5-minute bar, daily bars, and the current session's 1-minute bars.
 
 Sources, in order:
 - opening 5-minute bars: `candle_archive` (5m) -> `intraday_candles` (5m) -> Questrade `FiveMinutes`, per
-  symbol once for the whole range plus the look-back, split into windows of at most
-  `MAX_CANDLES_PER_REQUEST` intervals; only each session's opening bar is kept from a response.
+  symbol and chunk of about `CHUNK_SESSIONS` sessions (fix round 1: never the whole range at once), split
+  into windows of at most `MAX_CANDLES_PER_REQUEST` intervals; only each session's opening bar is kept.
 - 1-minute bars (fills, synthetic quotes): `candle_archive` (1m) -> `intraday_candles` (1m) -> one Questrade
   `OneMinute` request per symbol and session; held for the current session only.
-- daily bars (prior close, ATR): `daily_candles` -> Questrade `OneDay` (one request per symbol).
-- universe: that session's `universe_snapshots`; with none, the newest stored universe on or before the
-  wall-clock date, every member `source = "biased"` (and the day in `biased_days`).
+- daily bars (prior close, ATR): `daily_candles` -> Questrade `OneDay`, per symbol and chunk of about
+  `CHUNK_DAYS` calendar days.
+- universe: that session's `universe_snapshots`; with none, the names of the newest stored universe on or
+  before the run's creation date, every member `source = "biased"` (and the day in `biased_days`), with
+  `price`, `avg_volume` and `atr14` recomputed from the daily bars before that session with the nightly
+  job's formulas (fix round 1; the snapshot's own numbers are from a later date).
 - opening-bar stats: that session's `open_bar_stats`; a member without a row gets them computed in memory
   with the nightly job's formulas.
 
-Memory: opening and daily bars older than the current day's look-back are dropped in `prepare_day`, and the
-previous day's 1-minute bars are released, so a 130-session replay stays small. A Questrade error is a
-counted "missing" and one `warning` event per day and kind with the replay's `run_id`, never an exception to
-the strategy. There is no wall-clock fetch deadline: a replay waits for every response, so its result never
-depends on timing. Fetches are assembled by symbol id (sorted), never in completion order.
+Memory: bars are loaded a chunk at a time, opening and daily bars older than the current day's look-back
+are dropped in `prepare_day`, and the previous day's 1-minute bars are released, so a 130-session replay of
+the whole universe stays small (`held_counts`). A Questrade error is a counted "missing" and one `warning`
+event per day and kind with the replay's `run_id`, never an exception to the strategy. There is no wall-clock
+fetch deadline: a replay waits for every response, so its result never depends on timing. Fetches are
+assembled by symbol id (sorted), never in completion order.
+
+Cron quiet windows (fix round 1): given `quiet_sleep` (the runner passes it in `full` mode), a fetch never
+starts within `QUIET_MARGIN` of a `QUIET_TIMES` line (the container's crontab, kept in sync by a test); it
+waits for the window to pass instead, so a replay never competes with a scheduled job for Questrade.
 """
 
 from bisect import bisect_right
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import date, datetime, time, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -35,10 +44,10 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from trader.adapters.questrade.client import MAX_CANDLES_PER_REQUEST, QuestradeApiError
 from trader.adapters.questrade.models import CandleRequest, QtQuote
+from trader.broker.fill_model import FillParams
 from trader.db import models as m
 from trader.db.session import session_scope
 from trader.events import log_event
-from trader.jobs.nightly import DAILY_LOOKBACK, MIN_OPENING_BARS
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import ET, Clock, et_date
 from trader.market.data_service import STEP, MarketDataService, QuoteClient
@@ -52,21 +61,70 @@ from trader.market.types import (
     UniverseMember,
     UniverseStatus,
 )
+from trader.replay.candle_fill_model import CandleFillModel
 from trader.settings_store import OVERLAY_SYMBOL
 
 BIASED_SOURCE = "biased"
 EVENT_SOURCE = "replay.data"
-Q4 = Decimal("0.0001")
-BPS = Decimal("0.0001")
 ONE_MINUTE = timedelta(minutes=1)
 FIVE_MINUTES = timedelta(minutes=5)
 ONE_DAY = timedelta(days=1)
-# Daily bars kept before `date_from` (and before the current day): the nightly ATR window (30 calendar days
-# before the previous session) plus a long holiday weekend.
+# The nightly job's formulas (`trader.jobs.nightly`, which is not imported: it pulls in the FinViz adapter).
+# A test keeps them equal to the nightly job's.
+DAILY_LOOKBACK = timedelta(days=30)
+MIN_OPENING_BARS = 10
+ATR_PERIOD = 14
+AVG_VOLUME_DAYS = 14
+# Daily bars kept before the current day: the nightly ATR window (30 calendar days before the previous
+# session) plus a long holiday weekend.
 DAILY_MARGIN = DAILY_LOOKBACK + timedelta(days=10)
+# Loading granularity (fix round 1): opening bars ~20 sessions at a time, daily bars ~20 sessions' worth of
+# calendar days, per symbol.
+CHUNK_SESSIONS = 20
+CHUNK_DAYS = timedelta(days=28)
 MINUTE_CODE = INTERVAL_CODES["OneMinute"]
 FIVE_CODE = INTERVAL_CODES["FiveMinutes"]
 NO_ARCHIVED_BAR = "no_archived_bar"
+
+# The container's cron lines (`Trader/docker/crontab`, America/New_York), as (ET time, Python weekdays with
+# Monday = 0). `tests/replay/test_data.py` checks every crontab line is listed here. The Saturday 09:00 line
+# is the weekly report (P5-T17).
+_WEEKDAYS = frozenset({0, 1, 2, 3, 4})
+QUIET_TIMES: tuple[tuple[time, frozenset[int]], ...] = (
+    (time(2, 0), frozenset(range(7))),  # token-refresh
+    (time(20, 0), frozenset({6, 0, 1, 2, 3})),  # nightly, Sunday to Thursday
+    (time(8, 0), _WEEKDAYS),  # premarket
+    (time(9, 20), _WEEKDAYS),  # preopen
+    (time(9, 36), _WEEKDAYS),  # event orb_open
+    (time(11, 30), _WEEKDAYS),  # checkin
+    (time(12, 32), _WEEKDAYS),  # event --due
+    (time(12, 55), _WEEKDAYS),  # event flatten
+    (time(12, 58), _WEEKDAYS),  # event flatten
+    (time(13, 30), _WEEKDAYS),  # checkin
+    (time(15, 32), _WEEKDAYS),  # event --due
+    (time(15, 55), _WEEKDAYS),  # event flatten
+    (time(15, 58), _WEEKDAYS),  # event flatten
+    (time(16, 15), _WEEKDAYS),  # postclose
+    (time(9, 0), frozenset({5})),  # weekly report, Saturday
+)
+QUIET_MARGIN = timedelta(minutes=10)
+
+
+def quiet_until(at: datetime) -> datetime | None:
+    """The end of the cron quiet window `at` falls in (`QUIET_MARGIN` either side of a `QUIET_TIMES` line,
+    start included, end excluded), or None outside every window."""
+    local = at.astimezone(ET)
+    end: datetime | None = None
+    for offset in (-1, 0, 1):
+        day = local.date() + timedelta(days=offset)
+        for t, weekdays in QUIET_TIMES:
+            if day.weekday() not in weekdays:
+                continue
+            line = datetime.combine(day, t, tzinfo=ET)
+            if line - QUIET_MARGIN <= local < line + QUIET_MARGIN:
+                stop = line + QUIET_MARGIN
+                end = stop if end is None else max(end, stop)
+    return end
 
 
 class _NoQuestrade:
@@ -109,6 +167,14 @@ def _error_reason(result: list[Candle] | QuestradeApiError) -> str | None:
     return f"questrade_error: HTTP {result.status}" if isinstance(result, QuestradeApiError) else None
 
 
+def _group(ranges: Mapping[int, tuple[Any, Any]]) -> dict[tuple[Any, Any], list[int]]:
+    """Symbols by the range they need, so each distinct range is one set of database reads."""
+    out: dict[tuple[Any, Any], list[int]] = {}
+    for sid in sorted(ranges):
+        out.setdefault(ranges[sid], []).append(sid)
+    return out
+
+
 class ReplayData:
     def __init__(
         self,
@@ -124,23 +190,29 @@ class ReplayData:
         half_spread_bps: Decimal,
         questrade_window_days: int,
         lookback_sessions: int,
+        created_at: datetime | None = None,
+        quiet_sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self._factory = factory
         self._clock = clock
         self._wall = wall
         self._calendar = calendar
         self._client = client
+        self._quiet_sleep = quiet_sleep
         self.run_id = run_id
         self.date_from = date_from
         self.date_to = date_to
         self.half_spread_bps = half_spread_bps
         self.questrade_window_days = questrade_window_days
         self.lookback_sessions = lookback_sessions
+        # The one definition of the half spread (the candle fill model's); FillParams are not used by it.
+        self._spread = CandleFillModel(FillParams(), half_spread_bps)
         # Cache-only reads shared with the live service (universe, its status, stored stats, symbol ids).
         self._db = MarketDataService(factory, clock, calendar, _NoQuestrade())
 
-        # Decided once, so a run that crosses midnight still reads the same data.
-        self._wall_date = et_date(wall.now())
+        # Measured from the run's creation (fix round 1), else the wall clock now; decided once, so a run
+        # that crosses midnight, or starts long after it was queued, still reads the same data.
+        self._wall_date = et_date(created_at if created_at is not None else wall.now())
         self._questrade_from = self._wall_date - timedelta(days=questrade_window_days)
         # Every session whose opening bar the run can need: the look-back of the first day, then the range.
         span = calendar.sessions_before(date_from, lookback_sessions) if lookback_sessions > 0 else []
@@ -149,6 +221,7 @@ class ReplayData:
             span.append(d)
             d = calendar.next_session(d)
         self._span: list[date] = span
+        self._span_index: dict[date, int] = {s: i for i, s in enumerate(span)}
         self._opens: dict[datetime, date] = {calendar.session_open(s): s for s in span}
         self._daily_from = date_from - DAILY_MARGIN
 
@@ -158,7 +231,7 @@ class ReplayData:
             "questrade_requests": 0,
         }
         self._biased: set[date] = set()
-        self._biased_source: tuple[date | None, list[UniverseMember]] | None = None
+        self._biased_names: list[UniverseMember] | None = None
         self._warned: set[tuple[date, str]] = set()
         self._tickers: dict[int, str] = {}
 
@@ -166,11 +239,16 @@ class ReplayData:
         self._day: date | None = None
         self._day_universe: list[UniverseMember] = []
         self._day_stats: dict[int, OpenBarStats] | None = None
-        # symbol -> session -> opening bar; reasons for the missing ones that are not "no_archived_bar".
+        # symbol -> session -> opening bar; reasons for the missing ones that are not "no_archived_bar";
+        # symbol -> the last span index loaded.
         self._opening: dict[int, dict[date, Candle]] = {}
         self._opening_reason: dict[int, dict[date, str]] = {}
-        # symbol -> date -> daily bar
+        self._opening_to: dict[int, int] = {}
+        # symbol -> date -> daily bar; symbol -> the last date loaded.
         self._daily: dict[int, dict[date, Candle]] = {}
+        self._daily_to: dict[int, date] = {}
+        # (symbol, session) -> ATR of the daily bars before that session, for the prepared day only.
+        self._atr: dict[tuple[int, date], Decimal | None] = {}
         # 1-minute bars of one session only.
         self._minute_day: date | None = None
         self._minute: dict[int, list[Candle]] = {}
@@ -201,11 +279,19 @@ class ReplayData:
             self._tickers.update({sid: ticker for sid, ticker in rows})
         return {sid: self._tickers[sid] for sid in symbol_ids if sid in self._tickers}
 
+    async def _wait_out_cron(self) -> None:
+        """With `quiet_sleep`, wait until the wall clock is outside every cron quiet window."""
+        if self._quiet_sleep is None:
+            return
+        while (until := quiet_until(self._wall.now())) is not None:
+            await self._quiet_sleep(max((until - self._wall.now()).total_seconds(), 1.0))
+
     async def _fetch(
         self, reqs: Sequence[CandleRequest]
     ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
         """One batch through the client; any failure becomes that request's error, never an exception."""
         assert self._client is not None
+        await self._wait_out_cron()
         self._counts["questrade_requests"] += len(reqs)
         try:
             return await self._client.candles_many(list(reqs))
@@ -236,14 +322,30 @@ class ReplayData:
             )
 
     # --- opening bars ---------------------------------------------------------------------------------------
-    async def _ensure_opening(self, symbol_ids: Sequence[int]) -> None:
-        ids = sorted(set(symbol_ids) - self._opening.keys())
-        if not ids or not self._span:
-            for sid in ids:
-                self._opening.setdefault(sid, {})
+    async def _ensure_opening(self, symbol_ids: Sequence[int], session_date: date) -> None:
+        """Load the opening bars `session_date` needs (its look-back and itself) and those of the next
+        CHUNK_SESSIONS - 1 sessions, per symbol, so a symbol is fetched about once per chunk."""
+        idx = self._span_index.get(session_date)
+        if idx is None:  # not a session of the span: nothing to load (reported as no_archived_bar)
             return
-        # A load always covers the whole span (pruning happens in prepare_day).
-        opens = list(self._opens)
+        low = max(0, idx - self.lookback_sessions)
+        last = len(self._span) - 1
+        ranges: dict[int, tuple[int, int]] = {}
+        for sid in sorted(set(symbol_ids)):
+            loaded = self._opening_to.get(sid)
+            if loaded is not None and loaded >= idx:
+                continue
+            lo = low if loaded is None else max(low, loaded + 1)
+            ranges[sid] = (lo, min(last, idx + CHUNK_SESSIONS - 1))
+        errors: dict[int, str] = {}
+        for (lo, hi), ids in _group(ranges).items():
+            await self._load_opening(ids, self._span[lo : hi + 1], errors)
+            for sid in ids:
+                self._opening_to[sid] = hi
+        self._warn(self._current_day(), "opening_bars", errors)
+
+    async def _load_opening(self, ids: list[int], sessions: list[date], errors: dict[int, str]) -> None:
+        opens = [self._calendar.session_open(d) for d in sessions]
         found: dict[int, dict[date, Candle]] = {sid: {} for sid in ids}
         with self._factory() as s:
             for arch in s.execute(
@@ -265,9 +367,8 @@ class ReplayData:
             ).scalars():
                 found[row.symbol_id].setdefault(self._opens[row.ts], _row_candle(row.ts, row, FIVE_MINUTES))
         reasons: dict[int, dict[date, str]] = {}
-        errors: dict[int, str] = {}
         wanted = {
-            sid: [d for d in self._span if d not in found[sid] and self._questrade_allowed(d)] for sid in ids
+            sid: [d for d in sessions if d not in found[sid] and self._questrade_allowed(d)] for sid in ids
         }
         qids = self._questrade_ids([sid for sid in ids if wanted[sid]])
         for sid in ids:
@@ -300,28 +401,43 @@ class ReplayData:
             for d in need:
                 if d not in found[sid]:
                     reasons.setdefault(sid, {}).setdefault(d, "no_bar_at_open")
-        self._opening.update(found)
-        self._opening_reason.update(reasons)
-        self._warn(self._current_day(), "opening_bars", errors)
+        for sid in ids:
+            self._opening.setdefault(sid, {}).update(found[sid])
+            if sid in reasons:
+                self._opening_reason.setdefault(sid, {}).update(reasons[sid])
 
     # --- daily bars -----------------------------------------------------------------------------------------
-    async def _ensure_daily(self, symbol_ids: Sequence[int]) -> None:
-        ids = sorted(set(symbol_ids) - self._daily.keys())
-        if not ids:
-            return
+    async def _ensure_daily(self, symbol_ids: Sequence[int], session_date: date) -> None:
+        """Load the daily bars `session_date` needs (DAILY_MARGIN before it, and its own day) and the next
+        CHUNK_DAYS, per symbol, never after `date_to`."""
+        through = min(session_date, self.date_to)
+        low = max(self._daily_from, session_date - DAILY_MARGIN)
+        ranges: dict[int, tuple[date, date]] = {}
+        for sid in sorted(set(symbol_ids)):
+            loaded = self._daily_to.get(sid)
+            if loaded is not None and loaded >= through:
+                continue
+            lo = low if loaded is None else max(low, loaded + ONE_DAY)
+            ranges[sid] = (lo, min(self.date_to, through + CHUNK_DAYS))
+        errors: dict[int, str] = {}
+        for (lo, hi), ids in _group(ranges).items():
+            await self._load_daily(ids, lo, hi, errors)
+            for sid in ids:
+                self._daily_to[sid] = hi
+        self._warn(self._current_day(), "daily_bars", errors)
+
+    async def _load_daily(self, ids: list[int], lo: date, hi: date, errors: dict[int, str]) -> None:
         found: dict[int, dict[date, Candle]] = {sid: {} for sid in ids}
         with self._factory() as s:
             for row in s.execute(
                 select(m.DailyCandle).where(
-                    m.DailyCandle.symbol_id.in_(ids),
-                    m.DailyCandle.date >= self._daily_from,
-                    m.DailyCandle.date <= self.date_to,
+                    m.DailyCandle.symbol_id.in_(ids), m.DailyCandle.date >= lo, m.DailyCandle.date <= hi
                 )
             ).scalars():
                 found[row.symbol_id][row.date] = _row_candle(_day_start(row.date), row, ONE_DAY)
         sessions: list[date] = []
-        d = self._daily_from
-        while d <= self.date_to:
+        d = lo
+        while d <= hi:
             if self._calendar.is_session(d) and self._questrade_allowed(d):
                 sessions.append(d)
             d += ONE_DAY
@@ -334,7 +450,6 @@ class ReplayData:
             for sid in ids
             if wanted[sid] and sid in qids
         }
-        errors: dict[int, str] = {}
         if reqs:
             results = await self._fetch([reqs[sid] for sid in sorted(reqs)])
             for sid in sorted(reqs):
@@ -349,8 +464,8 @@ class ReplayData:
                     day = et_date(bar.start)
                     if day in need:
                         found[sid].setdefault(day, bar)
-        self._daily.update(found)
-        self._warn(self._current_day(), "daily_bars", errors)
+        for sid in ids:
+            self._daily.setdefault(sid, {}).update(found[sid])
 
     def _daily_before(self, sid: int, session_date: date) -> list[Candle]:
         """The nightly job's ATR input: daily bars from 30 days before the previous session's end."""
@@ -359,6 +474,12 @@ class ReplayData:
         start = end - DAILY_LOOKBACK
         bars = self._daily.get(sid, {})
         return [bars[d] for d in sorted(bars) if start <= bars[d].start < end]
+
+    def _atr_before(self, sid: int, session_date: date) -> Decimal | None:
+        key = (sid, session_date)
+        if key not in self._atr:
+            self._atr[key] = atr(self._daily_before(sid, session_date), ATR_PERIOD)
+        return self._atr[key]
 
     # --- 1-minute bars --------------------------------------------------------------------------------------
     def _switch_minute_day(self, session_date: date) -> None:
@@ -378,7 +499,7 @@ class ReplayData:
         stored = await self._db.universe(session_date)
         if stored:
             return stored
-        if self._biased_source is None:
+        if self._biased_names is None:
             with self._factory() as s:
                 newest = s.execute(
                     select(m.UniverseSnapshot.session_date)
@@ -386,17 +507,31 @@ class ReplayData:
                     .order_by(m.UniverseSnapshot.session_date.desc())
                     .limit(1)
                 ).scalar_one_or_none()
-            members = await self._db.universe(newest) if newest is not None else []
-            # The snapshot's numbers are from a later date: only the names are used (no lookahead).
-            biased = [
-                UniverseMember(u.symbol_id, u.ticker, u.name, None, None, None, BIASED_SOURCE)
-                for u in members
-            ]
-            self._biased_source = (newest, biased)
-        members = list(self._biased_source[1])
-        if members and self.date_from <= session_date <= self.date_to:
+            self._biased_names = await self._db.universe(newest) if newest is not None else []
+        names = self._biased_names
+        if not names:
+            return []
+        if self.date_from <= session_date <= self.date_to:
             self._biased.add(session_date)
-        return members
+        # Only the names come from the later snapshot; the numbers are recomputed from the daily bars
+        # before this session with the nightly formulas (no lookahead).
+        await self._ensure_daily([u.symbol_id for u in names], session_date)
+        out: list[UniverseMember] = []
+        for u in names:
+            daily = self._daily_before(u.symbol_id, session_date)
+            avg = average_volume(daily[-AVG_VOLUME_DAYS:])
+            out.append(
+                UniverseMember(
+                    u.symbol_id,
+                    u.ticker,
+                    u.name,
+                    daily[-1].close if daily else None,
+                    int(avg) if avg is not None else None,
+                    self._atr_before(u.symbol_id, session_date),
+                    BIASED_SOURCE,
+                )
+            )
+        return out
 
     async def universe(self, session_date: date) -> list[UniverseMember]:
         if session_date == self._day:
@@ -415,15 +550,15 @@ class ReplayData:
         stats = dict(await self._db.open_bar_stats(session_date))
         need = sorted({u.symbol_id for u in members} - stats.keys())
         if need:
-            await self._ensure_opening(need)
-            await self._ensure_daily(need)
+            await self._ensure_opening(need, session_date)
+            await self._ensure_daily(need, session_date)
             lookback = self._calendar.sessions_before(session_date, self.lookback_sessions)
             min_bars = min(MIN_OPENING_BARS, len(lookback))
             for sid in need:
                 bars = self._opening.get(sid, {})
                 opening = [bars[d] for d in lookback if d in bars]
                 avg_open = average_volume(opening) if len(opening) >= min_bars else None
-                stats[sid] = OpenBarStats(sid, avg_open, atr(self._daily_before(sid, session_date), 14))
+                stats[sid] = OpenBarStats(sid, avg_open, self._atr_before(sid, session_date))
         return dict(sorted(stats.items()))
 
     async def open_bar_stats(self, session_date: date) -> dict[int, OpenBarStats]:
@@ -435,7 +570,7 @@ class ReplayData:
         if symbol_ids is None:
             symbol_ids = [u.symbol_id for u in await self.universe(session_date)]
         ids = sorted(set(symbol_ids))
-        await self._ensure_opening(ids)
+        await self._ensure_opening(ids, session_date)
         now = self._clock.now()
         bars: dict[int, Candle] = {}
         missing: dict[int, str] = {}
@@ -467,7 +602,7 @@ class ReplayData:
             if not done:
                 continue
             bar = done[-1]
-            hs = (bar.close * self.half_spread_bps * BPS).quantize(Q4, ROUND_HALF_UP)
+            hs = self._spread.half_spread(bar.close)
             out[sid] = QtQuote(
                 symbol_id=sid,
                 symbol=names.get(sid, ""),
@@ -488,14 +623,14 @@ class ReplayData:
     ) -> list[Candle]:
         """Bars with start in [start, end) that ended by the replay clock. 1-minute bars of the current day
         come from the loaded day; other bars from the archive and the cache (daily: `daily_candles` and
-        fetched daily bars), never fetched here."""
+        fetched daily bars, as far back as the current day's look-back), never fetched here."""
         if start.tzinfo is None or end.tzinfo is None:
             raise ValueError("candles() needs timezone-aware start and end")
         now = self._clock.now()
         step = STEP[interval]
         found: dict[datetime, Candle] = {}
         if interval == "OneDay":
-            await self._ensure_daily([symbol_id])
+            await self._ensure_daily([symbol_id], self._current_day())
             for bar in self._daily.get(symbol_id, {}).values():
                 found[bar.start] = bar
         else:
@@ -538,7 +673,7 @@ class ReplayData:
         if self._calendar.session_close(prev) > self._clock.now():
             return {}  # that session had not closed yet at the replay clock
         ids = sorted(set(symbol_ids))
-        await self._ensure_daily(ids)
+        await self._ensure_daily(ids, session_date)
         out: dict[int, Decimal] = {}
         for sid in ids:
             bar = self._daily.get(sid, {}).get(prev)
@@ -561,6 +696,7 @@ class ReplayData:
         daily_oldest = session_date - DAILY_MARGIN
         for sid, by_date in self._daily.items():
             self._daily[sid] = {d: v for d, v in by_date.items() if d >= daily_oldest}
+        self._atr = {}
 
     async def prepare_day(self, session_date: date) -> None:
         """Load the day's universe, opening bars, stats and SPY's 1-minute bars. Drop the previous day's."""
@@ -570,7 +706,7 @@ class ReplayData:
         self._day_stats = None
         self._day_universe = await self._universe_for(session_date)
         ids = sorted({u.symbol_id for u in self._day_universe})
-        await self._ensure_opening(ids)
+        await self._ensure_opening(ids, session_date)
         self._counts["missing_opening_bars"] += sum(
             1 for sid in ids if session_date not in self._opening.get(sid, {})
         )

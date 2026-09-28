@@ -171,19 +171,32 @@ def test_sell_stop_gap_through_fills_at_the_open_not_the_stop() -> None:
 
 
 def test_same_bar_worst_case_bar_reopened_at_the_entry_fill_stops_out_at_the_stop() -> None:
-    """T4's same-bar pass re-applies the entry bar with its open replaced by the entry fill price; that open
-    can lie above the bar's high (the entry paid slippage and half spread), and must still be evaluated."""
+    """T4's same-bar pass re-applies the entry bar reopened at the entry fill price, its range widened to
+    include that price (fix round 1: the fill can lie above the bar's high after slippage and half spread)."""
+
+    def reopen(b: Candle, p: Decimal) -> Candle:
+        return replace(b, open=p, high=max(b.high, p), low=min(b.low, p))
+
     entry_bar = bar("10.00", "10.35", "9.70", "9.75")
     entry = filled(buy("stop", stop="10.20"), entry_bar)
-    reopened = replace(entry_bar, open=entry.price)
-    stop = filled(sell("stop", stop="9.80"), reopened)
+    stop = filled(sell("stop", stop="9.80"), reopen(entry_bar, entry.price))
     assert stop.price == Decimal("9.7851")  # min(stop, reopened open) = stop
     assert stop.trigger == "stop"
     gap_bar = bar("10.40", "10.41", "9.70", "9.75")
     gap_entry = filled(buy("stop", stop="10.20"), gap_bar)
     assert gap_entry.price == Decimal("10.4152") > gap_bar.high
-    assert filled(sell("stop", stop="9.80"), replace(gap_bar, open=gap_entry.price)).price == Decimal(
-        "9.7851"
+    assert filled(sell("stop", stop="9.80"), reopen(gap_bar, gap_entry.price)).price == Decimal("9.7851")
+
+
+def test_an_open_outside_the_bars_range_is_a_bad_bar() -> None:
+    """Fix round 1: a corrupt open (above the high or below the low) never fills; zero volume still reads
+    `no_volume` first."""
+    for o in ("10.50", "9.60"):
+        corrupt = bar(o, "10.35", "9.70", "9.75")
+        for order in (buy("stop", stop="10.20"), sell("stop", stop="9.80"), buy("market"), sell("market")):
+            assert refused(order, corrupt).reason == "bad_bar"
+    assert refused(buy("market"), replace(bar("10.50", "10.35", "9.70", "9.75"), volume=0)).reason == (
+        "no_volume"
     )
 
 

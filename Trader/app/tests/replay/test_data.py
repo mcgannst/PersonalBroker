@@ -5,6 +5,7 @@ from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -23,7 +24,14 @@ from trader.market.calendar import SessionCalendar
 from trader.market.clock import ET, Clock, FixedClock
 from trader.market.indicators import atr, average_volume
 from trader.market.types import Candle, Interval, OpenBarStats
-from trader.replay.data import BIASED_SOURCE, ReplayData
+from trader.replay.data import (
+    BIASED_SOURCE,
+    CHUNK_SESSIONS,
+    QUIET_TIMES,
+    ReplayData,
+    _windows,
+    quiet_until,
+)
 from trader.replay.types import ReplayMarket
 from trader.settings_store import RuntimeSettings
 from trader.strategies.spy_overlay import SpyOverlay
@@ -337,6 +345,30 @@ async def test_biased_day_stats_equal_the_nightly_formulas(db_factory: sessionma
     assert D2 in rd.biased_days
     assert await rd.open_bar_stats(D2) == expected
 
+    # fix round 1: the biased members' numbers are the nightly job's, from the daily bars before D2 (the
+    # later snapshot's own price 20 / avg volume 2,000,000 / ATR 1.0 are never used)
+    def nightly_member(f: Any) -> tuple[Decimal | None, int | None, Decimal | None]:
+        avg = average_volume(f.daily[-14:])
+        return (f.daily[-1].close, int(avg) if avg is not None else None, atr(f.daily, 14))
+
+    members = {u.symbol_id: (u.price, u.avg_volume, u.atr14) for u in await rd.universe(D2)}
+    assert members == {sid: nightly_member(f) for sid, f in zip((aaa, bbb), fetched, strict=True)}
+    assert members[aaa][0] == daily_aaa[[i for i, d in enumerate(days) if d < D2][-1]].close
+    assert all(v is not None for row in members.values() for v in row)
+
+
+def test_nightly_constants_are_the_nightly_jobs() -> None:
+    """replay/data.py keeps its own copy (importing trader.jobs.nightly pulls in the FinViz adapter)."""
+    from trader.jobs import nightly
+    from trader.replay import data
+
+    assert data.MIN_OPENING_BARS == nightly.MIN_OPENING_BARS
+    assert data.DAILY_LOOKBACK == nightly.DAILY_LOOKBACK
+    imports = [
+        line for line in Path(data.__file__).read_text().splitlines() if line.startswith(("from ", "import "))
+    ]
+    assert not [line for line in imports if "trader.jobs" in line or "finviz" in line]
+
 
 # 5 ----------------------------------------------------------------------------------------------------------
 def _world_questrade() -> RecordingQuestrade:
@@ -493,21 +525,20 @@ async def test_request_windows_and_bounded_memory(db_factory: sessionmaker[Sessi
     rd = make_data(db_factory, clock, fq, date_from=first, date_to=D2, window_days=400)
     await rd.prepare_day(day1)
 
+    # fix round 1: the first chunk only (the look-back plus CHUNK_SESSIONS sessions), one request each
     five = fq.of("FiveMinutes")
-    for qid in (1000, 1001):
-        windows = sorted((r for r in five if r.symbol_id == qid), key=lambda r: r.start)
-        assert len(windows) >= 3  # ~210 calendar days of 5-minute bars, <= 20,000 intervals each
-        assert windows[0].start == CAL.session_open(span[0])
-        assert windows[-1].end == CAL.session_close(D2)
-        assert all(a.end == b.start for a, b in zip(windows, windows[1:], strict=False))
+    first_chunk = span[: 14 + CHUNK_SESSIONS]
+    assert {r.symbol_id: (r.start, r.end) for r in five} == {
+        qid: (CAL.session_open(first_chunk[0]), CAL.session_close(first_chunk[-1])) for qid in (1000, 1001)
+    }
     held = rd.held_counts()
-    assert held["opening_bars"] == 2 * len(span)  # one kept bar per session per symbol, of 78 fetched
+    assert held["opening_bars"] == 2 * len(first_chunk)  # one kept bar per session per symbol, of 78 fetched
 
     await rd.load_minute_bars([aaa], day1)
     assert rd.held_counts()["minute_bars"] == 30
     clock.set(et(day2, 9, 0))
     await rd.prepare_day(day2)
-    assert len(fq.of("FiveMinutes")) == len(five)  # each symbol's range was fetched once
+    assert len(fq.of("FiveMinutes")) == len(five)  # day 2 is inside the loaded chunk: no new request
     assert rd.held_counts()["minute_bars"] == 0  # day 1's 1-minute bars were released
 
     clock.set(et(day2, 10, 0, 30))
@@ -517,3 +548,229 @@ async def test_request_windows_and_bounded_memory(db_factory: sessionmaker[Sessi
     await rd.quotes([aaa])
     assert len(fq.of("OneMinute")) == minute_requests + 1  # loaded once
     assert rd.progress_counts()["questrade_requests"] == len(fq.requests)
+
+    # the rest of the range, day by day: each symbol's FiveMinutes requests are consecutive chunks that
+    # never overlap and cover the whole span once; the bars held stay within the look-back plus one chunk
+    for d in sessions[2:]:
+        clock.set(et(d, 9, 0))
+        await rd.prepare_day(d)
+        assert rd.held_counts()["opening_bars"] <= 2 * (14 + CHUNK_SESSIONS + 1), d
+    for qid in (1000, 1001):
+        chunks = sorted((r for r in fq.of("FiveMinutes") if r.symbol_id == qid), key=lambda r: r.start)
+        assert len(chunks) == -(-(len(span) - 14) // CHUNK_SESSIONS)
+        covered = [[d for d in span if r.start <= CAL.session_open(d) < r.end] for r in chunks]
+        assert [d for part in covered for d in part] == span  # consecutive, no overlap, no gap
+        assert all(len(part) <= 14 + CHUNK_SESSIONS for part in covered)
+    assert rd.held_counts()["opening_bars"] == 2 * 15  # the last day and its look-back
+
+
+def test_windows_split_a_long_range_under_the_request_limit() -> None:
+    """A range longer than MAX_CANDLES_PER_REQUEST intervals is split into consecutive windows."""
+    start = CAL.session_open(CAL.sessions_before(D2, 143)[0])
+    end = CAL.session_close(D2)
+    windows = _windows(start, end, timedelta(minutes=5))
+    assert len(windows) >= 3  # ~210 calendar days of 5-minute bars
+    assert windows[0][0] == start and windows[-1][1] == end
+    assert all(a[1] == b[0] for a, b in zip(windows, windows[1:], strict=False))
+    assert all((b - a) / timedelta(minutes=5) <= MAX_CANDLES_PER_REQUEST for a, b in windows)
+
+
+# --- fix round 1: the Questrade window, cron quiet windows, memory at scale --------------------------------
+async def test_questrade_window_is_measured_from_the_runs_creation(db_factory: sessionmaker[Session]) -> None:
+    """A run queued on WALL but started months later still fetches what its creation date allowed."""
+    seed_replay_world(db_factory, universe_days=[D1], strategies=False)
+    fq = RecordingQuestrade()
+    fq.add_bars(1000, "FiveMinutes", [c5(D1)])
+    late_wall = FixedClock(datetime(2027, 6, 1, 23, 0, tzinfo=UTC))
+    rd = ReplayData(
+        db_factory,
+        FixedClock(et(D1, 9, 0)),
+        late_wall,
+        CAL,
+        fq,
+        run_id=RUN,
+        date_from=D1,
+        date_to=D1,
+        half_spread_bps=Decimal("5"),
+        questrade_window_days=85,
+        lookback_sessions=2,
+        created_at=WALL.now(),
+    )
+    await rd.prepare_day(D1)
+    assert fq.of("FiveMinutes")  # without created_at the 2027 wall clock would put D1 outside the window
+
+
+@pytest.mark.parametrize(
+    ("at", "until"),
+    [
+        (datetime(2026, 11, 30, 9, 10, tzinfo=ET), datetime(2026, 11, 30, 9, 30, tzinfo=ET)),  # preopen
+        (datetime(2026, 11, 30, 9, 9, 59, tzinfo=ET), None),
+        (datetime(2026, 11, 30, 16, 24, 59, tzinfo=ET), datetime(2026, 11, 30, 16, 25, tzinfo=ET)),
+        (datetime(2026, 11, 30, 16, 25, tzinfo=ET), None),  # the end is excluded
+        (datetime(2026, 11, 26, 20, 5, tzinfo=ET), datetime(2026, 11, 26, 20, 10, tzinfo=ET)),  # Thu nightly
+        (datetime(2026, 11, 27, 20, 5, tzinfo=ET), None),  # Friday: no nightly
+        (datetime(2026, 11, 28, 8, 55, tzinfo=ET), datetime(2026, 11, 28, 9, 10, tzinfo=ET)),  # Sat weekly
+        (datetime(2026, 11, 29, 1, 55, tzinfo=UTC), None),  # Saturday 20:55 ET
+        (datetime(2026, 11, 29, 7, 1, tzinfo=UTC), datetime(2026, 11, 29, 2, 10, tzinfo=ET)),  # token refresh
+    ],
+)
+def test_quiet_until(at: datetime, until: datetime | None) -> None:
+    assert quiet_until(at) == until
+
+
+def test_quiet_times_cover_every_crontab_line() -> None:
+    crontab = Path(__file__).resolve().parents[3] / "docker" / "crontab"
+    lines = 0
+    for raw in crontab.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" in line.split()[0]:
+            continue
+        minute, hour, _dom, _mon, dow = line.split()[:5]
+        cron_days: set[int] = set()
+        for part in dow.split(","):
+            if part == "*":
+                cron_days |= set(range(7))
+            elif "-" in part:
+                a, b = part.split("-")
+                cron_days |= set(range(int(a), int(b) + 1))
+            else:
+                cron_days.add(int(part))
+        weekdays = {(c + 6) % 7 for c in cron_days}  # cron: 0 = Sunday. Python: Monday = 0
+        at = time(int(hour), int(minute))
+        assert any(t == at and weekdays <= days for t, days in QUIET_TIMES), line
+        lines += 1
+    assert lines >= 14
+
+
+async def test_full_mode_fetches_wait_out_the_cron_windows(db_factory: sessionmaker[Session]) -> None:
+    """At 09:10 ET on a Monday the preopen (09:20) and orb_open (09:36) windows overlap: the fetch waits until
+    09:46, sleeping through the injected sleep, and only then asks Questrade."""
+    w = seed_replay_world(db_factory, universe_days=[D1], strategies=False)
+    wall = FixedClock(datetime(2026, 11, 30, 9, 10, tzinfo=ET))
+    slept: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        wall.set(wall.now() + timedelta(seconds=seconds))
+
+    class Timed(RecordingQuestrade):
+        def __init__(self) -> None:
+            super().__init__()
+            self.at: list[datetime] = []
+
+        async def candles_many(
+            self, reqs: Sequence[CandleRequest]
+        ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
+            self.at.append(wall.now())
+            return await super().candles_many(reqs)
+
+    fq = Timed()
+    fq.add_bars(1000, "FiveMinutes", [c5(D1)])
+    rd = ReplayData(
+        db_factory,
+        FixedClock(et(D1, 9, 0)),
+        wall,
+        CAL,
+        fq,
+        run_id=RUN,
+        date_from=D1,
+        date_to=D1,
+        half_spread_bps=Decimal("5"),
+        questrade_window_days=85,
+        lookback_sessions=2,
+        created_at=WALL.now(),
+        quiet_sleep=sleep,
+    )
+    await rd.prepare_day(D1)
+    assert slept == [1200.0, 960.0]
+    assert fq.at
+    assert min(fq.at) == datetime(2026, 11, 30, 9, 46, tzinfo=ET)
+    # outside every window: no wait at all
+    slept.clear()
+    wall.set(datetime(2026, 11, 30, 10, 30, tzinfo=ET))
+    await rd.load_minute_bars([w.symbols["AAA"]], D1)
+    assert slept == []
+    assert fq.at[-1] == datetime(2026, 11, 30, 10, 30, tzinfo=ET)
+
+
+class GeneratedQuestrade:
+    """Answers each candle request from a formula (nothing stored up front): a FiveMinutes response has two
+    bars per session (the opening bar and the next), OneDay one bar per session, OneMinute 30 bars."""
+
+    def __init__(self) -> None:
+        self.requests = 0
+
+    async def candles_many(
+        self, reqs: Sequence[CandleRequest]
+    ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
+        out: dict[CandleRequest, list[Candle] | QuestradeApiError] = {}
+        for r in reqs:
+            self.requests += 1
+            out[r] = self._bars(r)
+        return out
+
+    def _bars(self, r: CandleRequest) -> list[Candle]:
+        bars: list[Candle] = []
+        d = r.start.astimezone(ET).date()
+        while datetime.combine(d, time(0), tzinfo=ET) < r.end:
+            if CAL.is_session(d):
+                o = CAL.session_open(d)
+                if r.interval == "OneDay":
+                    bars.append(day_bar(d, "20", rng="0.75", volume=2_000_000))
+                elif r.interval == "FiveMinutes":
+                    bars += [
+                        candle(o + k * timedelta(minutes=5), 20, 21, 19, 20, 9000, minutes=5) for k in (0, 1)
+                    ]
+                else:
+                    bars += minute_series(o, ["20"] * 30)
+            d += timedelta(days=1)
+        return [b for b in bars if r.start <= b.start < r.end]
+
+
+async def test_scale_130_sessions_800_symbols_holds_a_bounded_number_of_bars(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """Fix round 1: a 130-session full-mode replay of an 800-name universe (biased every day: the only
+    snapshot is after the range) never holds more than the look-back plus one chunk of opening bars and
+    about 70 calendar days of daily bars per symbol, and today's 1-minute bars only."""
+    tickers = [f"T{i:03d}" for i in range(800)]
+    sessions: list[date] = []
+    d = date(2026, 5, 1)
+    while len(sessions) < 130:
+        if CAL.is_session(d):
+            sessions.append(d)
+        d += timedelta(days=1)
+    snap = CAL.next_session(sessions[-1])
+    seed_replay_world(
+        db_factory,
+        tickers=("SPY", *tickers),
+        universe_days=[snap],
+        universe_tickers=tickers,
+        strategies=False,
+    )
+    wall = FixedClock(datetime.combine(snap + timedelta(days=3), time(18), tzinfo=ET))
+    clock = FixedClock(CAL.session_open(sessions[0]) - timedelta(minutes=1))
+    qt = GeneratedQuestrade()
+    rd = make_data(
+        db_factory,
+        clock,
+        cast(Any, qt),
+        wall=wall,
+        date_from=sessions[0],
+        date_to=sessions[-1],
+        window_days=400,
+    )
+    peak = {"opening_bars": 0, "daily_bars": 0, "minute_bars": 0}
+    for day in sessions:
+        clock.set(CAL.session_open(day))
+        await rd.prepare_day(day)
+        for name, n in rd.held_counts().items():
+            peak[name] = max(peak[name], n)
+    assert rd.biased_days == frozenset(sessions)
+    members = await rd.universe(sessions[-1])
+    assert len(members) == 800
+    assert all(u.avg_volume == 2_000_000 and u.atr14 is not None and u.price is not None for u in members)
+    span = 14 + len(sessions)
+    assert peak["opening_bars"] <= 800 * (14 + CHUNK_SESSIONS + 1) < 800 * span // 4
+    assert peak["daily_bars"] <= 800 * 55
+    assert peak["minute_bars"] <= 30  # SPY's, today only

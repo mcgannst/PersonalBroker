@@ -1122,6 +1122,31 @@ commentary rendered as text, the week asked for around DST and holidays, an erro
 6. **Restart in market hours:** on a normal (not early-close) session day, between 10:30 and 11:15 ET or between 12:00 and 13:15 ET (clear of 09:35, the 11:30 entry cancel and check-in, the 12:32 and 13:30 cron lines, 15:30 and 15:50), `docker --context shared-docker-server restart trader-dev`; within 60 s the worker heartbeat is `session` and fresh; afterwards the day's `job_runs` has no failed row caused by the restart, there is at most one notification per dedupe key (the unique index guarantees it; check no `unknown` row was created for an already-delivered message), and any working order of the live run is still working or filled normally. If the phase ends outside market hours, the orchestrator records this step for the next trading day instead of waiting (non-blocking).
 7. **First Saturday:** on the first Saturday after the deploy whose week LIVE 5 did not already report, the 09:00 ET cron run sends the weekly report on its own and `job_runs` has `weekly` succeeded for that week's last session; the orchestrator records it (non-blocking).
 
+**LIVE notes (P5-T18 builder, Sun 2026-09-27 evening MT):**
+- LIVE 1-2: deployed 9918781 at 20:21 MT (22:21 ET Sunday; the first build hit a transient BuildKit
+  "lease does not exist" error before anything shipped, the retry was clean). Health 200 after 18 s, status ok;
+  `/api/meta` shows phase-1-complete-156-g9918781; `alembic current` = 0006 (head); limits
+  `1073741824 2000000000 256 map[max-file:5 max-size:10m]`; `supercronic -test` valid with the weekly line;
+  worker heartbeat idle and fresh. The downtime (22:19-22:21 ET Sunday) crossed no cron line, so no job was
+  re-run. The FinViz earnings-window fix (5cd8a3f) is live for Monday's 08:00 ET premarket: a dry read of both
+  window screens from inside the container (FinViz only) parsed the Earnings column. Run on Sunday, the
+  prevdays5 screen showed Sep 23 rows "outside 09-24..09-28", which is expected: prevdays5 counts back from the
+  real day, so it lines up on Monday.
+- LIVE 3: `trader replay --from 2026-09-11 --to 2026-09-25 --label "P5 LIVE check"` twice: replays 18 and
+  19, both exit 0, `full` data, 11 sessions, 12 Questrade requests each. Normalized trades, fills,
+  candidates, orders, metrics, progress and all 22 events of each run: **identical**. Live metrics unchanged,
+  0 notifications, 0 job_runs, 0 event rows without a run id or of the live run, audit gained 2 x
+  `replay.start`. Peak container memory 369.7 MiB (36% of 1 GiB). **Limitation:** 0 candidates and 0 trades,
+  because trader_dev's only universe snapshot is 2026-09-28 (tonight's nightly), and the biased-universe
+  fallback takes the newest snapshot ON OR BEFORE the wall-clock date (09-27). So the check proved
+  determinism and isolation of the loop, the real SPY data and the overlay decisions, but not strategy
+  trades. Re-run it on a weekday evening once a snapshot dated on or before that day exists (deferred, OPEN).
+- LIVE 4: the Playwright live smoke (with `/replay` and `SMOKE_REPLAY_ID=18`, the "Compared with live" card)
+  passed.
+- LIVE 5 (manual weekday weekly run) and LIVE 6 (restart in market hours): need a trading day. Recorded as
+  deferred, non-blocking OPEN items. LIVE 7: the first Saturday (2026-10-03) cron run, OPEN.
+
+
 ---
 
 ## Resolved decisions (planner, 2026-09-27, each with its reason)

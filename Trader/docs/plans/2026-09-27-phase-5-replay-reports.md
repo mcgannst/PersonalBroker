@@ -1087,12 +1087,31 @@ commentary rendered as text, the week asked for around DST and holidays, an erro
 - The golden test runs the replay twice in the same database (two runs) and once more in a fresh database, and compares every normalized output with the expected file and with each other.
 
 **Acceptance tests:**
-- [ ] 1. **Golden:** the `orb_week` replay's normalized trades, rankings and metrics equal `orb_week_expected.json`, including the same-bar day's stop-out at `stop − slip − hs`, the gap-through fill at the open less costs, the overlay exit and the early-close flatten.
-- [ ] 2. **Determinism:** the three runs (same DB twice, fresh DB once) give identical normalized outputs, and their progress JSON is identical too (it holds no wall-clock fields).
-- [ ] 3. **Isolation (DB):** counting every table before and after an offline replay with an override: only the tables and rows of the decision "Replay isolation" changed (every new row with a run id carries the replay's, and no `event_log` row without a run id was added), `audit_log` gained exactly `replay.start`, `strategy_configs` gained only a `replay`-scoped row, `job_runs`, `notifications`, `catalysts`, `universe_snapshots`, `open_bar_stats`, `candle_archive`, `intraday_candles`, `daily_candles`, `settings` and `notify_cursors` are unchanged; `compute_metrics(live)` and `GET /api/dashboard` are identical before and after; one relay pump sends nothing.
-- [ ] 4. **Isolation (static):** no module under `trader/replay/` imports `anthropic`, `trader.adapters.telegram`, `trader.notify.notifier` or `trader.notify.relay`, or references `CatalystClassifier`, `CatalystService`, `fire_event`, `run_job`, `run_job_async`, `.set(` on a settings store or `ensure_defaults(` (an AST scan); for determinism it also imports none of `random`, `uuid`, `secrets` and calls no `float(` on a price or quantity.
-- [ ] 5. **Weekly day:** a seeded live week with trades, journal answers and one kill-switch trip; `trader weekly` (CliRunner, fake Anthropic returning a commentary that quotes only facts, fake Telegram) stores the report, sends one message whose numbers equal `compute_metrics` for that week, passes `check_numbers`, and `GET /api/reports/weekly` returns it; a second run sends nothing.
-- [ ] 6. Gate and commit `P5-T18: ...` (the LIVE results go in the activity log and this file's LIVE notes).
+- [x] 1. **Golden:** the `orb_week` replay's normalized trades, rankings and metrics equal `orb_week_expected.json`, including the same-bar day's stop-out at `stop − slip − hs`, the gap-through fill at the open less costs, the overlay exit and the early-close flatten.
+- [x] 2. **Determinism:** the three runs (same DB twice, fresh DB once) give identical normalized outputs, and their progress JSON is identical too (it holds no wall-clock fields).
+- [x] 3. **Isolation (DB):** counting every table before and after an offline replay with an override: only the tables and rows of the decision "Replay isolation" changed (every new row with a run id carries the replay's, and no `event_log` row without a run id was added), `audit_log` gained exactly `replay.start`, `strategy_configs` gained only a `replay`-scoped row, `job_runs`, `notifications`, `catalysts`, `universe_snapshots`, `open_bar_stats`, `candle_archive`, `intraday_candles`, `daily_candles`, `settings` and `notify_cursors` are unchanged; `compute_metrics(live)` and `GET /api/dashboard` are identical before and after; one relay pump sends nothing.
+- [x] 4. **Isolation (static):** no module under `trader/replay/` imports `anthropic`, `trader.adapters.telegram`, `trader.notify.notifier` or `trader.notify.relay`, or references `CatalystClassifier`, `CatalystService`, `fire_event`, `run_job`, `run_job_async`, `.set(` on a settings store or `ensure_defaults(` (an AST scan); for determinism it also imports none of `random`, `uuid`, `secrets` and calls no `float(` on a price or quantity.
+- [x] 5. **Weekly day:** a seeded live week with trades, journal answers and one kill-switch trip; `trader weekly` (CliRunner, fake Anthropic returning a commentary that quotes only facts, fake Telegram) stores the report, sends one message whose numbers equal `compute_metrics` for that week, passes `check_numbers`, and `GET /api/reports/weekly` returns it; a second run sends nothing.
+- [x] 6. Gate and commit `P5-T18: ...` (the LIVE results go in the activity log and this file's LIVE notes).
+
+**Build notes (P5-T18 builder, 2026-09-27):**
+- **Scenario days:** the plan's five behaviours fit four sessions only by pairing two of them: Mon 23 same-bar
+  entry and stop (BBB), Tue 24 gap through the stop (CCC), Wed 25 the biased day (no snapshot) with the
+  overlay exit on a down day for SPY (AAA), Fri 27 the clean breakout flattened at close - 10m = 12:50 on the
+  early close (DDD). Thanksgiving is skipped. Default params need catalysts of quality >= 50, so the fixture
+  writes its own `catalysts` rows (seed_replay_world's are quality 4); every other row goes through
+  `seed_replay_world`.
+- **Fixture format:** `golden/orb_week_data.json` is generated by `build_orb_week_data()` in the test (a test
+  keeps the file equal to it); `UPDATE_GOLDEN=1` rewrites both files. The expected file holds trades, fills,
+  per-day rankings, whole-run metrics, progress and the biased label; orders and ledger rows are compared
+  between the three runs only. The fresh database is a second database in the same testcontainer, migrated
+  to head.
+- **Isolation (DB):** the override (`killswitch.daily_loss_pct = 0.01`) also trips a kill switch inside the
+  replay (row and event with the replay's run id), so the relay check covers a trip. Every table outside the
+  allowed list is compared row for row, not only counted.
+- **Static scan:** also flags `import time`, `registry.update(` and `float(`; a subprocess check confirms
+  importing the whole package loads no anthropic, Telegram, notifier or relay module transitively.
+- **Smoke:** the live mode visits `/replay`, and `/replay?id=$SMOKE_REPLAY_ID` (the comparison card) when set.
 
 **LIVE steps** (dev only; Questrade read only; no fake rows in the live run; never print a secret; the soak protection rule applies):
 1. **Before deploying:** P4-T19 is accepted and `trader-dev` is healthy; migration 0006 is applied (T1 LIVE); the current time is outside 09:15–16:30 ET on a session day. Cron lines are NOT a reason to wait (Stephen, 2026-09-27): deploy when ready, then compare the downtime window with `docker/crontab`, run by hand any job it skipped (`docker --context shared-docker-server exec trader-dev trader <job>`; the jobs are single-flight and idempotent) and confirm its `job_runs` row succeeded.

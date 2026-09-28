@@ -1,0 +1,382 @@
+{
+ "biased_label": true,
+ "fills": [
+  {
+   "order_type": "stop",
+   "price": "20.5306",
+   "purpose": "entry",
+   "qty": 34,
+   "reason": "orb_breakout",
+   "side": "buy",
+   "slippage": "0.0103",
+   "ticker": "BBB",
+   "ts": "2026-11-23T14:41:00+00:00"
+  },
+  {
+   "order_type": "stop",
+   "price": "20.3896",
+   "purpose": "stop",
+   "qty": 34,
+   "reason": "protective_stop",
+   "side": "sell",
+   "slippage": "0.0102",
+   "ticker": "BBB",
+   "ts": "2026-11-23T14:41:00+00:00"
+  },
+  {
+   "order_type": "stop",
+   "price": "15.4277",
+   "purpose": "entry",
+   "qty": 46,
+   "reason": "orb_breakout",
+   "side": "buy",
+   "slippage": "0.0100",
+   "ticker": "CCC",
+   "ts": "2026-11-24T14:36:00+00:00"
+  },
+  {
+   "order_type": "stop",
+   "price": "15.0824",
+   "purpose": "stop",
+   "qty": 46,
+   "reason": "protective_stop",
+   "side": "sell",
+   "slippage": "0.0100",
+   "ticker": "CCC",
+   "ts": "2026-11-24T15:31:00+00:00"
+  },
+  {
+   "order_type": "stop",
+   "price": "10.5253",
+   "purpose": "entry",
+   "qty": 66,
+   "reason": "orb_breakout",
+   "side": "buy",
+   "slippage": "0.0100",
+   "ticker": "AAA",
+   "ts": "2026-11-25T14:36:00+00:00"
+  },
+  {
+   "order_type": "market",
+   "price": "10.6846",
+   "purpose": "exit",
+   "qty": 66,
+   "reason": "overlay_negative",
+   "side": "sell",
+   "slippage": "0.0100",
+   "ticker": "AAA",
+   "ts": "2026-11-25T20:31:00+00:00"
+  },
+  {
+   "order_type": "stop",
+   "price": "30.5406",
+   "purpose": "entry",
+   "qty": 23,
+   "reason": "orb_breakout",
+   "side": "buy",
+   "slippage": "0.0153",
+   "ticker": "DDD",
+   "ts": "2026-11-27T14:36:00+00:00"
+  },
+  {
+   "order_type": "market",
+   "price": "30.7692",
+   "purpose": "exit",
+   "qty": 23,
+   "reason": "flatten_close",
+   "side": "sell",
+   "slippage": "0.0154",
+   "ticker": "DDD",
+   "ts": "2026-11-27T17:51:00+00:00"
+  }
+ ],
+ "metrics": {
+  "adherence_pct": null,
+  "avg_loss_r": "-2.0545",
+  "avg_slippage": "0.9108",
+  "avg_slippage_per_share": "0.0216",
+  "avg_win_r": "1.5626",
+  "date_from": null,
+  "date_to": null,
+  "expectancy_r": "-0.2460",
+  "losses": 2,
+  "max_drawdown_pct": "0.0236",
+  "profit_factor": "0.7603",
+  "r_histogram": [
+   [
+    "-Infinity",
+    "-3.0",
+    0
+   ],
+   [
+    "-3.0",
+    "-2.5",
+    1
+   ],
+   [
+    "-2.5",
+    "-2.0",
+    0
+   ],
+   [
+    "-2.0",
+    "-1.5",
+    0
+   ],
+   [
+    "-1.5",
+    "-1.0",
+    1
+   ],
+   [
+    "-1.0",
+    "-0.5",
+    0
+   ],
+   [
+    "-0.5",
+    "0.0",
+    0
+   ],
+   [
+    "0.0",
+    "0.5",
+    0
+   ],
+   [
+    "0.5",
+    "1.0",
+    0
+   ],
+   [
+    "1.0",
+    "1.5",
+    1
+   ],
+   [
+    "1.5",
+    "2.0",
+    1
+   ],
+   [
+    "2.0",
+    "2.5",
+    0
+   ],
+   [
+    "2.5",
+    "3.0",
+    0
+   ],
+   [
+    "3.0",
+    "3.5",
+    0
+   ],
+   [
+    "3.5",
+    "4.0",
+    0
+   ],
+   [
+    "4.0",
+    "4.5",
+    0
+   ],
+   [
+    "4.5",
+    "5.0",
+    0
+   ],
+   [
+    "5.0",
+    "Infinity",
+    0
+   ]
+  ],
+  "total_fees": "0.0577",
+  "total_pnl": "-4.9639",
+  "trades": 4,
+  "trades_without_r": 0,
+  "win_rate": "0.5000",
+  "wins": 2
+ },
+ "progress": {
+  "biased_days": [
+   "2026-11-25"
+  ],
+  "current_date": "2026-11-27",
+  "forced_closes": 0,
+  "missing_minute_bars": 0,
+  "missing_opening_bars": 0,
+  "questrade_requests": 0,
+  "sessions_done": 4,
+  "sessions_total": 4,
+  "trades": 4
+ },
+ "rankings": {
+  "2026-11-23": [
+   {
+    "passed": true,
+    "rank": 1,
+    "reject_reason": null,
+    "rvol": "5.0000",
+    "ticker": "BBB"
+   },
+   {
+    "passed": false,
+    "rank": 2,
+    "reject_reason": "bearish_candle",
+    "rvol": "4.0000",
+    "ticker": "DDD"
+   },
+   {
+    "passed": false,
+    "rank": 3,
+    "reject_reason": "lower_rank",
+    "rvol": "3.0000",
+    "ticker": "AAA"
+   },
+   {
+    "passed": false,
+    "rank": 4,
+    "reject_reason": "catalyst_missing",
+    "rvol": "2.0000",
+    "ticker": "CCC"
+   }
+  ],
+  "2026-11-24": [
+   {
+    "passed": true,
+    "rank": 1,
+    "reject_reason": null,
+    "rvol": "5.0000",
+    "ticker": "CCC"
+   },
+   {
+    "passed": false,
+    "rank": 2,
+    "reject_reason": "catalyst_missing",
+    "rvol": "3.0000",
+    "ticker": "BBB"
+   },
+   {
+    "passed": false,
+    "rank": 3,
+    "reject_reason": "doji",
+    "rvol": "2.0000",
+    "ticker": "AAA"
+   }
+  ],
+  "2026-11-25": [
+   {
+    "passed": true,
+    "rank": 1,
+    "reject_reason": null,
+    "rvol": "5.0000",
+    "ticker": "AAA"
+   },
+   {
+    "passed": false,
+    "rank": 2,
+    "reject_reason": "lower_rank",
+    "rvol": "4.0000",
+    "ticker": "BBB"
+   },
+   {
+    "passed": false,
+    "rank": 3,
+    "reject_reason": "catalyst_missing",
+    "rvol": "3.0000",
+    "ticker": "CCC"
+   },
+   {
+    "passed": false,
+    "rank": 4,
+    "reject_reason": "catalyst_bearish",
+    "rvol": "2.0000",
+    "ticker": "DDD"
+   }
+  ],
+  "2026-11-27": [
+   {
+    "passed": true,
+    "rank": 1,
+    "reject_reason": null,
+    "rvol": "5.0000",
+    "ticker": "DDD"
+   },
+   {
+    "passed": false,
+    "rank": 2,
+    "reject_reason": "catalyst_low_quality",
+    "rvol": "3.0000",
+    "ticker": "AAA"
+   },
+   {
+    "passed": false,
+    "rank": 3,
+    "reject_reason": "catalyst_missing",
+    "rvol": "2.0000",
+    "ticker": "BBB"
+   },
+   {
+    "passed": false,
+    "rank": 4,
+    "reject_reason": "lower_rank",
+    "rvol": "1.5000",
+    "ticker": "CCC"
+   }
+  ]
+ },
+ "trades": [
+  {
+   "closed_at": "2026-11-23T14:41:00+00:00",
+   "entry_price": "20.5306",
+   "exit_price": "20.3896",
+   "exit_reason": "protective_stop",
+   "opened_at": "2026-11-23T14:41:00+00:00",
+   "pnl": "-4.8083",
+   "pnl_r": "-1.1726",
+   "qty": 34,
+   "session_date": "2026-11-23",
+   "ticker": "BBB"
+  },
+  {
+   "closed_at": "2026-11-24T15:31:00+00:00",
+   "entry_price": "15.4277",
+   "exit_price": "15.0824",
+   "exit_reason": "protective_stop",
+   "opened_at": "2026-11-24T14:36:00+00:00",
+   "pnl": "-15.8981",
+   "pnl_r": "-2.9364",
+   "qty": 46,
+   "session_date": "2026-11-24",
+   "ticker": "CCC"
+  },
+  {
+   "closed_at": "2026-11-25T20:31:00+00:00",
+   "entry_price": "10.5253",
+   "exit_price": "10.6846",
+   "exit_reason": "overlay_negative",
+   "opened_at": "2026-11-25T14:36:00+00:00",
+   "pnl": "10.4993",
+   "pnl_r": "1.3797",
+   "qty": 66,
+   "session_date": "2026-11-25",
+   "ticker": "AAA"
+  },
+  {
+   "closed_at": "2026-11-27T17:51:00+00:00",
+   "entry_price": "30.5406",
+   "exit_price": "30.7692",
+   "exit_reason": "flatten_close",
+   "opened_at": "2026-11-27T14:36:00+00:00",
+   "pnl": "5.2432",
+   "pnl_r": "1.7455",
+   "qty": 23,
+   "session_date": "2026-11-27",
+   "ticker": "DDD"
+  }
+ ]
+}

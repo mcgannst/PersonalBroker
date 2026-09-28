@@ -3,7 +3,8 @@
 //   shows the pending AAA entry, tap Approve, the card reports "Approved" and leaves the pending list, open the
 //   seeded position's chain at /trades?position=<id>, /system renders, log out.
 // - live: trader-dev, READ-ONLY. Log in, the dashboard renders with its session phase, every page renders
-//   without an error box, log out. It never clicks Approve, Reject, Save or Run.
+//   without an error box (the Replay page included, and a finished replay's comparison when SMOKE_REPLAY_ID
+//   names one), log out. It never clicks Approve, Reject, Save, Run, New replay or Cancel.
 // Both modes check at 390 px that no page scrolls sideways.
 // Credentials come only from the environment (never printed, never typed into a recorded trace in live mode):
 // SMOKE_USER/SMOKE_PASSWORD, else TRADER_WEB_USER/TRADER_WEB_PASSWORD, else ADMIN_USERNAME/ADMIN_PASSWORD_INITIAL.
@@ -132,10 +133,21 @@ test.describe("smoke (live, read-only)", () => {
       ["/settings", "Settings"],
       ["/system", "System"],
       [`/reports?week=${thisFriday()}`, "Reports"],
+      ["/replay", "Replay"],
     ];
     for (const [path, heading] of pages) {
       await page.goto(path);
       await rendered(page, heading);
+    }
+
+    // P5-T18 LIVE 4: a finished replay's page shows its comparison with the live run (read only: the page's
+    // "New replay" and "Cancel" buttons are never clicked).
+    const replayId = process.env.SMOKE_REPLAY_ID;
+    if (replayId) {
+      await page.goto(`/replay?id=${encodeURIComponent(replayId)}`);
+      await rendered(page, "Replay");
+      await expect(page.getByRole("region", { name: `Replay ${replayId}` })).toBeVisible();
+      await expect(page.getByText("Compared with live")).toBeVisible();
     }
 
     await logout(page);

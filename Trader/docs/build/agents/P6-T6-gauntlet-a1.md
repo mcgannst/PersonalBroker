@@ -1,0 +1,8 @@
+# P6-T6 Gauntlet (Verifier + Breaker + Reviewer), attempt 1
+
+- 2026-09-27 23:10 MT: started. Worktree synced with trunk (HEAD 3ccd3ff). Read master plan §6 and phase-6 plan (T6, D3, Review Focus).
+- 2026-09-27 23:14 MT: verify: git status clean at 3ccd3ff. Acceptance boxes 1-4 and 7-15 ticked (5 and 6 removed by the amendment). Full gate started (gate.sh, background).
+- 2026-09-27 23:20 MT: read prod_env.py, env_check.py, cron_gap.py, deploy.sh and the builder tests. Wrote tests/gauntlet/test_p6_t6_breaker.py (14 tests, 46 cases): secrets on every create-db failure path (testcontainers, statement log), existing roles demoted, file refusals (mode, repo, ~/Documents, symlinks), name injection, cron_gap midnight/weekend/holiday/early-close/DST/margins/warning, deploy.sh prod guards against a real git repo, stamps on failure, env_check compare/rules/dump.
+- 2026-09-27 23:24 MT: breaker run: 45 passed, 1 failed. Two annotated tags on the release commit (phase tag newer): deploy.sh prod builds trader:v1.0.0 with APP_VERSION=phase-6-complete, so /api/meta would not read v1.0.0 (T5 LIVE 6 and 9 expect it).
+- 2026-09-27 23:26 MT: gate (started before the breaker file existed): green. ruff, mypy (125 files), 3249 pytest, 436 vitest.
+- 2026-09-27 23:32 MT: review done. Must-fix: deploy.sh:96 prod APP_VERSION should be the verified tag. Should-fix: a job running at `down from` and killed by the recreate is not listed by cron_gap (plan D3 gap); /proc/1/environ note (the entrypoint unset is not a boundary). Nits: _role_setting comma split, ADMIN_DATABASES "", probe left behind, public schema CREATE, malformed-URL db part, quoted value with inline comment. Committing the breaker file (1 failing case) and pushing.

@@ -320,8 +320,10 @@ async def test_a_questrade_error_serves_the_cached_bars_with_a_warning(
 
 
 class HangingQuestrade(FakeQuestrade):
+    """Ignores the deadline it is given and never returns: the service's own guard must still stop it."""
+
     async def candles_many(
-        self, reqs: Sequence[CandleRequest]
+        self, reqs: Sequence[CandleRequest], *, deadline_s: float | None = None
     ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
         self.calls.append(("candles_many", len(reqs)))
         await asyncio.Event().wait()  # never returns
@@ -342,6 +344,7 @@ async def test_opening_bars_stop_at_the_deadline_and_report_timeouts(
     assert set(got.bars) == {ids["AAA"]}  # the cached bar is still served
     assert got.missing == {ids["BBB"]: "timeout", ids["CCC"]: "timeout", ids["DDD"]: "no_questrade_id"}
     assert [e["event"] for e in logs] == ["market.opening_bars_timeout"]
+    assert (logs[0]["completed"], logs[0]["outstanding"]) == (0, 2)
 
 
 async def test_universe_status_without_a_nightly_row_treats_a_fallback_as_stale(
@@ -452,3 +455,95 @@ async def test_a_universe_of_550_fetches_within_the_rate_limit_and_the_budget(
     span = times[-1] - times[0]
     assert span == pytest.approx((n - 1) / 20.0)  # evenly spaced at 20/s: ~27.5 s
     assert span < min(FETCH_DEADLINE_S, 60), f"took {span:.1f} s of virtual time"
+
+
+# --- FIX-OPENBARS (Mon 2026-09-28): the deadline keeps the bars that already arrived ---
+
+
+def _bar_json(volume: int) -> dict[str, object]:
+    return {
+        "start": OPEN.isoformat(),
+        "end": (OPEN + timedelta(minutes=5)).isoformat(),
+        "open": 21.00,
+        "high": 21.50,
+        "low": 20.90,
+        "close": 21.40,
+        "volume": volume,
+    }
+
+
+def _mock_opening_bars(slow_qids: set[int], volumes: dict[int, int]) -> None:
+    """Questrade ids in `slow_qids` never answer; the others answer at once with their volume."""
+    never = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        qid = int(request.url.path.rsplit("/", 1)[1])
+        if qid in slow_qids:
+            await never.wait()
+        return httpx.Response(200, json={"candles": [_bar_json(volumes.get(qid, 5000))]})
+
+    respx.get(url__regex=rf"{QT_BASE}markets/candles/\d+").mock(side_effect=handler)
+
+
+@respx.mock
+async def test_opening_bars_keep_the_bars_that_arrived_before_the_deadline(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
+    """Mon 2026-09-28: 543 requests, the 45 s deadline fired and every symbol, fetched or not, was
+    reported "timeout" (0 candidates). Only the requests still outstanding may be "timeout"."""
+    _mock_opening_bars({103}, {101: 5000, 102: 3000})
+    async with QuestradeClient(_Tokens(), FixedClock(AFTER_BAR), market_rps=1000.0) as client:
+        svc = MarketDataService(db_factory, FixedClock(AFTER_BAR), CAL, client, fetch_deadline_s=0.3)
+        with capture_logs() as logs:
+            got = await asyncio.wait_for(svc.opening_bars(DAY), timeout=5)
+    assert set(got.bars) == {ids["AAA"], ids["BBB"]}
+    assert got.bars[ids["BBB"]].volume == 3000
+    assert got.missing == {ids["CCC"]: "timeout", ids["DDD"]: "no_questrade_id"}
+    assert _cached_starts(db_factory, ids["AAA"]) == [OPEN]  # the fetched bars are cached as before
+    (warn,) = [e for e in logs if e["event"] == "market.opening_bars_timeout"]
+    assert warn["log_level"] == "warning"
+    assert (warn["symbols"], warn["completed"], warn["outstanding"]) == (3, 2, 1)
+    assert warn["deadline_s"] == 0.3 and warn["elapsed_s"] >= 0.3
+    assert warn["client_stats"]["requests"] == 3 and warn["client_stats"]["http_429"] == 0  # all 3 sent
+    assert "pause_s" in warn["client_stats"]
+    assert "tok" not in str(warn) and QT_BASE not in str(warn)
+
+
+@respx.mock
+async def test_opening_bars_log_the_fetch_when_it_finishes_in_time(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
+    _mock_opening_bars(set(), {})
+    async with QuestradeClient(_Tokens(), FixedClock(AFTER_BAR), market_rps=1000.0) as client:
+        svc = MarketDataService(db_factory, FixedClock(AFTER_BAR), CAL, client, fetch_deadline_s=5.0)
+        with capture_logs() as logs:
+            got = await svc.opening_bars(DAY)
+    assert got.missing == {ids["DDD"]: "no_questrade_id"}
+    assert [e["event"] for e in logs] == ["market.opening_bars_fetched"]
+    (info,) = logs
+    assert (info["symbols"], info["completed"], info["outstanding"]) == (3, 3, 0)
+    assert info["client_stats"]["requests"] == 3
+
+
+@respx.mock
+async def test_orb_scans_the_symbols_whose_bars_arrived_before_the_deadline(
+    db_factory: sessionmaker[Session], ids: dict[str, int]
+) -> None:
+    """The ORB scan ranks the partial set it has; the timed-out symbols are only noted as missing."""
+    from tests.strategies.fakes import FakeCatalyst, FakeCatalysts, make_ctx
+    from trader.strategies.base import EnterLong
+    from trader.strategies.orb_sip import ORB_EVENT, OrbSip
+
+    _mock_opening_bars({103}, {101: 5000, 102: 3000})  # CCC never answers
+    async with QuestradeClient(_Tokens(), FixedClock(AFTER_BAR), market_rps=1000.0) as client:
+        svc = MarketDataService(db_factory, FixedClock(AFTER_BAR), CAL, client, fetch_deadline_s=0.3)
+        strategy = OrbSip()
+        cats = FakeCatalysts({ids["AAA"]: FakeCatalyst(), ids["BBB"]: FakeCatalyst()})
+        ctx = make_ctx(svc, strategy.params, cats, now=AFTER_BAR, session=DAY)  # type: ignore[arg-type]
+        orb = next(e for e in strategy.schedule(CAL) if e.key == ORB_EVENT)
+        intents = await asyncio.wait_for(strategy.on_event(ctx, orb), timeout=5)
+    (entry,) = intents
+    assert isinstance(entry, EnterLong) and entry.symbol_id == ids["AAA"]  # rvol 5 ranks first
+    assert {c.symbol_id for c in ctx.candidates} == {ids["AAA"], ids["BBB"]}
+    note = next(n for n in ctx.notes if "no opening bar" in n.message)
+    assert note.data["missing"] == {str(ids["CCC"]): "timeout", str(ids["DDD"]): "no_questrade_id"}

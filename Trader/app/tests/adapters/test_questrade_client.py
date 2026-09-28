@@ -566,3 +566,106 @@ async def test_concurrent_401s_force_one_refresh() -> None:
         await asyncio.gather(*(c.server_time() for _ in range(10)))
     assert tokens.accessed == 1
     assert tokens.forced == 1
+
+
+# --- FIX-OPENBARS (Mon 2026-09-28): a batch deadline keeps every completed result ---
+
+
+def other_tasks() -> list[asyncio.Task[Any]]:
+    return [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
+
+
+@respx.mock
+async def test_candles_many_keeps_completed_results_at_the_deadline() -> None:
+    """The 9:35 batch of 2026-09-28 lost every bar that had arrived when the deadline cancelled the
+    whole gather. Now the fast requests keep their bars (or their own errors), only the requests still
+    outstanding at the deadline are left out, and those are cancelled cleanly."""
+    slow = {9, 10}
+    never = asyncio.Event()
+    cancelled: list[int] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        sid = int(request.url.path.rsplit("/", 1)[1])
+        if sid in slow:
+            try:
+                await never.wait()
+            except asyncio.CancelledError:
+                cancelled.append(sid)
+                raise
+        if sid == 8:
+            return httpx.Response(400, json={"code": 1002})
+        return httpx.Response(200, json={"candles": [BAR]})
+
+    respx.get(url__regex=BASE + r"markets/candles/\d+").mock(side_effect=handler)
+    reqs = [CandleRequest(i, START, START + timedelta(minutes=5), "FiveMinutes") for i in range(1, 11)]
+    async with QuestradeClient(FakeTokens(), FixedClock(NOW), market_rps=1000.0) as c:
+        got = await asyncio.wait_for(c.candles_many(reqs, deadline_s=0.3), timeout=5)
+        assert set(got) == set(reqs[:8])  # the two slow ones are absent: the caller reports "timeout"
+        assert all(len(got[r]) == 1 for r in reqs[:7])  # type: ignore[arg-type]
+        err = got[reqs[7]]
+        assert isinstance(err, QuestradeApiError) and err.status == 400
+        assert sorted(cancelled) == [9, 10]
+        assert other_tasks() == []  # nothing leaked
+        # The bucket and the HTTP client are still usable straight away.
+        again = await asyncio.wait_for(c.candles(1, START, START + timedelta(minutes=5), "FiveMinutes"), 2)
+        assert len(again) == 1
+
+
+@respx.mock
+async def test_candles_many_without_a_deadline_waits_for_every_request() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.05)
+        return httpx.Response(200, json={"candles": [BAR]})
+
+    respx.get(url__regex=BASE + r"markets/candles/\d+").mock(side_effect=handler)
+    reqs = [CandleRequest(i, START, START + timedelta(minutes=5), "FiveMinutes") for i in range(1, 6)]
+    async with QuestradeClient(FakeTokens(), FixedClock(NOW), market_rps=1000.0) as c:
+        got = await c.candles_many(reqs)
+    assert set(got) == set(reqs)
+
+
+async def test_cancelled_waiters_give_their_slots_back() -> None:
+    """Requests cancelled at a deadline must not leave their reserved slots behind: the next call
+    waits one interval after the last slot actually used, not behind the abandoned queue."""
+    waits: list[float] = []
+
+    async def blocking_sleep(s: float) -> None:
+        waits.append(s)
+        await asyncio.Event().wait()
+
+    bucket = TokenBucket(2.0, monotonic=lambda: 0.0, sleep=blocking_sleep)
+    await bucket.acquire()  # slot 0: through at once
+    queued = [asyncio.create_task(bucket.acquire()) for _ in range(10)]
+    await asyncio.sleep(0)
+    assert waits == pytest.approx([0.5 * i for i in range(1, 11)])
+    for t in queued:
+        t.cancel()
+    await asyncio.gather(*queued, return_exceptions=True)
+    nxt = asyncio.create_task(bucket.acquire())
+    await asyncio.sleep(0)
+    assert waits[-1] == pytest.approx(0.5)
+    nxt.cancel()
+    await asyncio.gather(nxt, return_exceptions=True)
+
+
+@respx.mock
+async def test_stats_count_requests_429s_and_pause_seconds_per_category() -> None:
+    sleeps = Sleeps()
+    respx.get(BASE + "markets/quotes").mock(
+        side_effect=[
+            httpx.Response(429, headers={"X-RateLimit-Reset": "junk"}),
+            httpx.Response(429, headers={"X-RateLimit-Reset": "junk"}),
+            httpx.Response(503),
+            httpx.ConnectTimeout("timed out"),
+            httpx.Response(200, json={"quotes": []}),
+        ]
+    )
+    async with recording_client(sleeps) as c:
+        assert await c.quotes([1]) == []
+        market = c.stats["market"]
+        assert c.stats["account"].requests == 0
+    assert market.requests == 5
+    assert market.http_429 == 2
+    assert market.pause_s == pytest.approx(0.5 + 1.0)
+    assert market.http_5xx == 1 and market.transport_errors == 1
+    assert "tok" not in repr(c.stats) and BASE not in repr(c.stats)

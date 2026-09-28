@@ -145,7 +145,7 @@ class _NoQuestrade:
         raise RuntimeError("replay data never fetches through MarketDataService")
 
     async def candles_many(
-        self, reqs: Sequence[CandleRequest]
+        self, reqs: Sequence[CandleRequest], *, deadline_s: float | None = None
     ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
         raise RuntimeError("replay data never fetches through MarketDataService")
 

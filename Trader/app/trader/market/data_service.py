@@ -37,8 +37,11 @@ from trader.market.types import (
 OPENING_BAR = timedelta(minutes=5)
 OPENING_BAR_CODE = INTERVAL_CODES["FiveMinutes"]
 # One batch of opening bars must finish well inside the 60 s budget for the 9:35 scan: ~550 symbols at
-# 20 req/s take ~28 s. Symbols still outstanding at the deadline are reported as missing "timeout".
+# 20 req/s take ~28 s. Symbols still outstanding at the deadline are reported as missing "timeout"; the
+# bars that completed by then are kept (FIX-OPENBARS, Mon 2026-09-28).
 FETCH_DEADLINE_S = 45.0
+# Backstop past the deadline for a client that does not honour `deadline_s` (min of this and the deadline).
+DEADLINE_GUARD_S = 5.0
 STEP: dict[Interval, timedelta] = {
     "OneMinute": timedelta(minutes=1),
     "FiveMinutes": timedelta(minutes=5),
@@ -56,7 +59,7 @@ class QuoteClient(Protocol):
         self, symbol_id: int, start: datetime, end: datetime, interval: Interval
     ) -> list[Candle]: ...
     async def candles_many(
-        self, reqs: Sequence[CandleRequest]
+        self, reqs: Sequence[CandleRequest], *, deadline_s: float | None = None
     ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]: ...
 
 
@@ -219,16 +222,7 @@ class MarketDataService:
         }
         results: dict[CandleRequest, list[Candle] | QuestradeApiError] = {}
         if reqs:
-            try:
-                async with asyncio.timeout(self._fetch_deadline_s):
-                    results = await self._client.candles_many(list(reqs.values()))
-            except TimeoutError:
-                log.warning(
-                    "market.opening_bars_timeout",
-                    session_date=session_date.isoformat(),
-                    symbols=len(reqs),
-                    deadline_s=self._fetch_deadline_s,
-                )
+            results = await self._fetch_opening_bars(session_date, list(reqs.values()))
         now = self._clock.now()
         fetched: dict[int, Candle] = {}
         for sid, req in reqs.items():
@@ -251,6 +245,49 @@ class MarketDataService:
                     repo.upsert_intraday_candles(s, sid, OPENING_BAR_CODE, [found])
         bars.update(fetched)
         return OpeningBars(bars, missing)
+
+    def _market_stats(self) -> dict[str, float] | None:
+        """The client's market-category counters (requests, 429s, pause seconds...), when it keeps them."""
+        stats = getattr(self._client, "stats", None)
+        market = stats.get("market") if isinstance(stats, dict) else None
+        if market is None or not dataclasses.is_dataclass(market) or isinstance(market, type):
+            return None
+        return {k: v for k, v in dataclasses.asdict(market).items() if isinstance(v, int | float)}
+
+    async def _fetch_opening_bars(
+        self, session_date: date, reqs: list[CandleRequest]
+    ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
+        """One batch under the deadline. The client keeps every result completed by then and leaves the
+        outstanding requests out (reported "timeout" by the caller). A hard guard a little past the
+        deadline stops a client that ignores it; that loses the batch, so it is only a backstop."""
+        deadline = self._fetch_deadline_s
+        loop = asyncio.get_running_loop()
+        before = self._market_stats() or {}
+        started = loop.time()
+        results: dict[CandleRequest, list[Candle] | QuestradeApiError] = {}
+        try:
+            async with asyncio.timeout(deadline + min(DEADLINE_GUARD_S, deadline)):
+                results = await self._client.candles_many(reqs, deadline_s=deadline)
+        except TimeoutError:
+            results = {}
+        elapsed = loop.time() - started
+        after = self._market_stats()
+        completed = sum(1 for r in reqs if r in results)
+        fields: dict[str, Any] = {
+            "session_date": session_date.isoformat(),
+            "symbols": len(reqs),
+            "completed": completed,
+            "outstanding": len(reqs) - completed,
+            "deadline_s": deadline,
+            "elapsed_s": round(elapsed, 3),
+        }
+        if after is not None:  # this batch's share of the client's counters
+            fields["client_stats"] = {k: round(v - before.get(k, 0), 3) for k, v in after.items()}
+        if completed < len(reqs):
+            log.warning("market.opening_bars_timeout", **fields)
+        else:
+            log.info("market.opening_bars_fetched", **fields)
+        return results
 
     async def candles(
         self, symbol_id: int, start: datetime, end: datetime, interval: Interval

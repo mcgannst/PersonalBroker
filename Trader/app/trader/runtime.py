@@ -446,10 +446,18 @@ class LazyQuestrade:
     ) -> list[Candle]:
         return await (await self.client()).candles(symbol_id, start, end, interval)
 
+    @property
+    def stats(self) -> dict[str, Any] | None:
+        """The open client's per-category request counters (429s, pause seconds...); None until open."""
+        if self._client is None:
+            return None
+        stats = getattr(self._client, "stats", None)
+        return dict(stats) if isinstance(stats, dict) else None
+
     async def candles_many(
-        self, reqs: Sequence[CandleRequest]
+        self, reqs: Sequence[CandleRequest], *, deadline_s: float | None = None
     ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
-        return await (await self.client()).candles_many(reqs)
+        return await (await self.client()).candles_many(reqs, deadline_s=deadline_s)
 
 
 async def open_catalysts(core: Core, stack: AsyncExitStack) -> CatalystSource:

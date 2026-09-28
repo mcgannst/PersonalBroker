@@ -64,7 +64,7 @@ class FakeQuestrade:
         return self._candles(symbol_id, start, end, interval)
 
     async def candles_many(
-        self, reqs: Sequence[CandleRequest]
+        self, reqs: Sequence[CandleRequest], *, deadline_s: float | None = None
     ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
         self.calls.append(("candles_many", len(reqs)))
         out: dict[CandleRequest, list[Candle] | QuestradeApiError] = {}

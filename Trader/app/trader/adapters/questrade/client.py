@@ -9,6 +9,7 @@ import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Self
@@ -46,8 +47,23 @@ class QuestradeApiError(Exception):
         self.status = status
 
 
+@dataclass
+class CallStats:
+    """Counters for one rate-limit category since the client was created (numbers only, never a token
+    or URL). `pause_s` sums the 429 pauses put on the shared bucket; overlapping pauses both count."""
+
+    requests: int = 0
+    http_429: int = 0
+    pause_s: float = 0.0
+    http_5xx: int = 0
+    transport_errors: int = 0
+
+
 class TokenBucket:
-    """Spaces calls evenly at `rate` per second. `pause_until` holds back every caller."""
+    """Spaces calls evenly at `rate` per second. `pause_until` holds back every caller.
+
+    A waiter cancelled before its slot (a batch deadline) gives the queue back once no waiter is left,
+    so the next call is spaced from the last slot actually used, not from the abandoned queue."""
 
     def __init__(
         self,
@@ -61,6 +77,8 @@ class TokenBucket:
         self._next: float | None = None
         self._paused_until = float("-inf")
         self._lock = asyncio.Lock()
+        self._waiters = 0
+        self._last_granted: float | None = None
 
     def now(self) -> float:
         """The bucket's own monotonic time (the clock `pause_until` is measured on)."""
@@ -72,18 +90,28 @@ class TokenBucket:
         self._next = t_monotonic if self._next is None else max(self._next, t_monotonic)
 
     async def acquire(self) -> None:
-        while True:
-            async with self._lock:
-                now: float = self._monotonic()
-                slot: float = max(now, self._paused_until)
-                if self._next is not None:
-                    slot = max(slot, self._next)
-                self._next = slot + self._interval
-            if slot > now:
-                await self._sleep(slot - now)
-            # A pause that began while we waited and ends after our slot sends us back into the queue.
-            if self._paused_until <= slot:
-                return
+        self._waiters += 1
+        try:
+            while True:
+                async with self._lock:
+                    now: float = self._monotonic()
+                    slot: float = max(now, self._paused_until)
+                    if self._next is not None:
+                        slot = max(slot, self._next)
+                    self._next = slot + self._interval
+                if slot > now:
+                    await self._sleep(slot - now)
+                # A pause that began while we waited and ends after our slot sends us back into the queue.
+                if self._paused_until <= slot:
+                    if self._last_granted is None or slot > self._last_granted:
+                        self._last_granted = slot
+                    return
+        except asyncio.CancelledError:
+            if self._waiters == 1:  # the last waiter left: drop the slots nobody will use
+                self._next = None if self._last_granted is None else self._last_granted + self._interval
+            raise
+        finally:
+            self._waiters -= 1
 
 
 def _dt(value: str | None) -> datetime | None:
@@ -151,6 +179,7 @@ class QuestradeClient:
             "account": TokenBucket(account_rps, sleep=sleep),
         }
         self.rate_limit_remaining: dict[Category, int] = {}
+        self.stats: dict[Category, CallStats] = {"market": CallStats(), "account": CallStats()}
         self._token: AccessToken | None = None
         self._token_lock = asyncio.Lock()
 
@@ -165,6 +194,7 @@ class QuestradeClient:
         reset: float | None = _float_or_none(resp.headers.get("X-RateLimit-Reset"))
         reset_delta: float = 0.0 if reset is None else reset - self._clock.now().timestamp()
         pause: float = min(MAX_429_PAUSE, max(reset_delta, 0.5 * 2**attempt))
+        self.stats[category].pause_s += pause
         bucket = self._buckets[category]
         bucket.pause_until(bucket.now() + pause)
 
@@ -193,10 +223,12 @@ class QuestradeClient:
         refreshed = False
         last_status: int = 0
         last_text: str = ""
+        stats = self.stats[category]
         for attempt in range(MAX_ATTEMPTS):
             final: bool = attempt == MAX_ATTEMPTS - 1
             await self._buckets[category].acquire()
             token: AccessToken = await self._access()
+            stats.requests += 1
             try:
                 resp: httpx.Response = await self._http.get(
                     token.api_base + path,
@@ -204,6 +236,7 @@ class QuestradeClient:
                     headers={"Authorization": f"Bearer {token.token}"},
                 )
             except httpx.TransportError as exc:
+                stats.transport_errors += 1
                 last_status, last_text = 0, self._transport_message(exc, token)
                 if not final:
                     await self._sleep(0.5 * 2**attempt)
@@ -219,10 +252,12 @@ class QuestradeClient:
                 await self._refresh_after_401(token)
                 continue
             if resp.status_code == 429:
+                stats.http_429 += 1
                 if not final:
                     self._pause_after_429(resp, category, attempt)
                 continue
             if resp.status_code >= 500:
+                stats.http_5xx += 1
                 if not final:
                     await self._sleep(0.5 * 2**attempt)
                 continue
@@ -336,9 +371,13 @@ class QuestradeClient:
         return out
 
     async def candles_many(
-        self, reqs: Sequence[CandleRequest]
+        self, reqs: Sequence[CandleRequest], *, deadline_s: float | None = None
     ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
-        """Every request gets its own result: candles, or the error for that request alone."""
+        """Every completed request gets its own result: candles, or the error for that request alone.
+
+        With `deadline_s`, requests still outstanding when it passes are cancelled (and awaited, so none
+        outlives the call) and left out of the result; every request that completed keeps its result.
+        Without it, every request is waited for. Cancelling the call itself cancels every request."""
 
         async def one(r: CandleRequest) -> list[Candle] | QuestradeApiError:
             try:
@@ -349,5 +388,17 @@ class QuestradeClient:
                 # json.JSONDecodeError is a ValueError.
                 return QuestradeApiError(0, f"{type(exc).__name__}: {exc}"[:300])
 
-        results = await asyncio.gather(*(one(r) for r in reqs))
-        return dict(zip(reqs, results, strict=True))
+        unique: list[CandleRequest] = list(dict.fromkeys(reqs))
+        tasks: dict[CandleRequest, asyncio.Task[list[Candle] | QuestradeApiError]] = {
+            r: asyncio.create_task(one(r)) for r in unique
+        }
+        try:
+            if tasks:
+                await asyncio.wait(tasks.values(), timeout=deadline_s)
+        finally:
+            outstanding = [t for t in tasks.values() if not t.done()]
+            for t in outstanding:
+                t.cancel()
+            if outstanding:
+                await asyncio.gather(*outstanding, return_exceptions=True)
+        return {r: t.result() for r, t in tasks.items() if not t.cancelled()}

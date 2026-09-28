@@ -280,6 +280,7 @@ def test_json_shape(world: SoakWorld) -> None:
         "orb_open_seconds",
         "reset",
         "outage",
+        "provisional",
         "checks",
     ]
     assert day["orb_open"] == "succeeded" and day["orb_open_seconds"] == 31.2
@@ -377,6 +378,76 @@ def test_the_saturday_final_line_settles_friday(world: SoakWorld) -> None:
     assert result.exit_code == 0, result.output
     [sent] = world.api.calls_of("send_message")
     assert sent["text"].startswith("<b>Soak Fri 2 Oct</b> (final): clean ✅")
+
+
+def test_the_1030_final_line_settles_a_friday_whose_weekly_failed_for_good(world: SoakWorld) -> None:
+    """Fix round 1: at the 10:30 ET Saturday line the weekly's in-process retries are exhausted (3 failed
+    rows) before its Sat 12:00 ET deadline: Friday is provisionally not clean (with sound), not pending, and
+    not counted; a catch-up before 12:00 turns it clean on the next report."""
+    fri, sat = date(2026, 10, 2), date(2026, 10, 3)
+    rows = [r for r in clean_rows(fri) if r.job != "weekly"]
+    for minute in (0, 2, 6):
+        rows.append(JobRunRow("weekly", "failed", et(sat, 9, minute), et(sat, 9, minute + 1), "boom"))
+    seed_rows(world.factory, fri, rows)
+    world.clock.set(et(sat, 10, 30))
+    result = runner.invoke(app, ["soak-report", "--notify", "--final", "--json"])
+    assert result.exit_code == 0, result.output
+    data = last_json(result.output)
+    day = data["days"][-1]
+    assert (day["verdict"], day["provisional"]) == ("not_clean", True)
+    assert data["last_final"] != "2026-10-02"  # not final, not counted
+    [sent] = world.api.calls_of("send_message")
+    assert sent["text"].startswith("<b>Soak Fri 2 Oct</b> (final): NOT clean ❌ weekly failed (boom)")
+    assert "(catch-up possible until 10:00 MT)" in sent["text"]  # Sat 12:00 ET
+    assert "pending" not in sent["text"] and sent["silent"] is False
+    assert "08:30 MT" in sent["text"]
+    # a catch-up at 11:00 succeeds: the day turns clean and final on the next report
+    seed_rows(world.factory, fri, [JobRunRow("weekly", "succeeded", et(sat, 11, 0), et(sat, 11, 1), None)])
+    world.clock.set(et(sat, 12, 30))
+    after = soak.load_report(deps(world))
+    assert (after.days[-1].verdict, after.days[-1].provisional, after.last_final) == ("clean", False, fri)
+
+
+def test_with_notify_the_json_is_still_the_last_stdout_line(world: SoakWorld) -> None:
+    seed_rows(world.factory, TUE, clean_rows(TUE))
+    world.clock.set(et(TUE, 18, 5))
+    result = runner.invoke(app, ["soak-report", "--notify", "--json", "--sessions", "1"])
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().splitlines()
+    assert "sent soak:2026-09-29" in lines[:-1]
+    assert last_json(result.output)["through"] == "2026-09-29"
+    again = runner.invoke(app, ["soak-report", "--notify", "--json", "--sessions", "1"])
+    assert "already sent soak:2026-09-29, nothing to send" in again.output
+    assert last_json(again.output)["through"] == "2026-09-29"
+
+
+def test_a_failed_send_says_send_failed_not_sent(world: SoakWorld) -> None:
+    from trader.adapters.telegram.types import TelegramApiError
+
+    seed_rows(world.factory, TUE, clean_rows(TUE))
+    world.clock.set(et(TUE, 18, 5))
+    world.api.fail("send_message", TelegramApiError(400, "Bad Request: chat not found"), times=5)
+    result = runner.invoke(app, ["soak-report", "--notify", "--json", "--sessions", "1"])
+    assert result.exit_code == 0, result.output
+    assert "send failed soak:2026-09-29" in result.output
+    assert "\nsent soak:" not in "\n" + result.output
+    assert last_json(result.output)["through"] == "2026-09-29"
+    with world.factory() as s:
+        assert s.execute(select(m.Notification.status)).scalar_one() == "failed"
+
+
+def test_a_window_shorter_than_the_target_still_counts_over_the_target(world: SoakWorld) -> None:
+    """--sessions 2 --target 3 with three clean days in a row: the count is 3 (target reached), not capped
+    at the 2 days shown."""
+    wed = date(2026, 9, 30)
+    for d in (MON, TUE, wed):
+        seed_rows(world.factory, d, clean_rows(d))
+    world.clock.set(et(wed, 20, 0))
+    result = runner.invoke(app, ["soak-report", "--json", "--sessions", "2", "--target", "3"])
+    assert result.exit_code == 0, result.output
+    data = last_json(result.output)
+    assert [d["session_date"] for d in data["days"]] == ["2026-09-29", "2026-09-30"]
+    assert (data["consecutive_clean"], data["earliest_finish"], data["total_clean"]) == (3, None, 2)
 
 
 def test_without_telegram_nothing_is_sent(

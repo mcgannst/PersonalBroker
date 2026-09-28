@@ -822,29 +822,46 @@ def soak_report(
         report = soak.load_report(deps, through=last, sessions=sessions, target=target)
     except Exception as exc:
         _fail(f"soak-report: failed: {_one_line(exc)}")
-    if as_json:
-        typer.echo(json.dumps(soak.report_json(report)))
-    else:
-        for line in soak.report_lines(report):
+    # With --json the JSON is always the LAST stdout line (the send's status line comes before it), so a
+    # consumer can parse the last line; the table prints first and the status line after it.
+    body = [json.dumps(soak.report_json(report))] if as_json else soak.report_lines(report)
+    if not as_json:
+        for line in body:
             typer.echo(line)
-    if not notify:
-        return
-    if not runtime.telegram_configured(core.env):
-        typer.echo("Telegram not configured")
-        return
+    status: str | None = None
+    send_error: str | None = None
+    if notify:
+        label = soak.dedupe_key(report.through, final=final)
+        if not runtime.telegram_configured(core.env):
+            status = "Telegram not configured"
+        else:
 
-    async def send() -> bool:
-        async with AsyncExitStack() as stack:
-            api = await runtime.open_telegram(core, stack)
-            sending = _soak_deps(core, runtime.build_notifier(core, api), runtime.build_renderer(core))
-            return await soak.notify_report(sending, report, final=final)
+            async def send() -> str:
+                async with AsyncExitStack() as stack:
+                    api = await runtime.open_telegram(core, stack)
+                    sending = _soak_deps(
+                        core, runtime.build_notifier(core, api), runtime.build_renderer(core)
+                    )
+                    return await soak.notify_report(sending, report, final=final)
 
-    try:
-        sent = asyncio.run(send())
-    except Exception as exc:
-        _fail(f"soak-report: the line was not sent: {_one_line(exc)}")
-    label = soak.dedupe_key(report.through, final=final)
-    typer.echo(f"sent {label}" if sent else f"already sent {label}, nothing to send")
+            try:
+                outcome = asyncio.run(send())
+            except Exception as exc:
+                send_error = f"soak-report: the line was not sent: {_one_line(exc)}"
+            else:
+                status = {
+                    "sent": f"sent {label}",
+                    "duplicate": f"already sent {label}, nothing to send",
+                    "failed": f"send failed {label}",
+                    "off": "Telegram not configured",
+                }[outcome]
+    if status is not None:
+        typer.echo(status)
+    if as_json:
+        for line in body:
+            typer.echo(line)
+    if send_error is not None:
+        _fail(send_error)
 
 
 @app.command("soak-mark")

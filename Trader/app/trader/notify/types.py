@@ -239,6 +239,9 @@ class SoakLineView:
     session_date: date
     verdict: str  # clean | not_clean | pending
     failed: tuple[str, ...]
+    # The 9:35 scan's check status (succeeded | late | failed | missing | missed | pending), or "off" only
+    # when orb_sip is disabled and the scan is not expected. The line says "9:35 scan off" for "off" alone.
+    orb_open: str
     orb_open_seconds: float | None  # None: the 9:35 scan did not succeed on time, or is off
     consecutive_clean: int
     target: int
@@ -246,6 +249,9 @@ class SoakLineView:
     changed: tuple[tuple[date, str], ...]
     final: bool  # the Saturday line settling the week's last session (dedupe `soak:<date>:final`)
     env: str  # dev ("Soak") | prod ("Ops": no target, no finish date)
+    # Set when the day is not clean only through provisional failures (retries exhausted before the
+    # deadline): the line adds "catch-up possible until <this, MT>". None otherwise.
+    catch_up_until: datetime | None = None
 
 
 class Notifier(Protocol):

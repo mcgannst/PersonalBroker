@@ -12,7 +12,8 @@ before its deadline, the 9:35 scan fired within its late grace, and D has no `ou
   but an on-time success is `pending`;
 - `token-refresh` writes no row: it fails when a `questrade.token` error event was written in D's token
   window (after the previous session's close, by D 18:00 ET) and no Questrade-dependent job of D
-  (`premarket`, `event:orb_open`, `postclose`) succeeded after the last such event.
+  (`premarket`, `event:orb_open`, `postclose`) that started after the last such event and by D 18:00 ET
+  succeeded.
 
 The report is **read-only**: it never goes through `run_job` (no `job_runs` row, so it never expects
 itself) and builds its day plans without `runtime.plan_builder`, which would create a live run, ensure the
@@ -24,6 +25,7 @@ Deadlines are ET wall-clock times on the exchange calendar (early closes include
 in UTC; the Telegram line shows Mountain Time.
 """
 
+import asyncio
 import dataclasses
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
@@ -97,6 +99,13 @@ DEADLINES: Mapping[str, time] = {
 }
 WEEKLY_DEADLINE = time(12, 0)  # the Saturday after the week's last session
 
+# The day-level jobs with in-process retries (P5-T15). Before its deadline, such a job whose last
+# `retry_attempts` rows all failed (retries exhausted, nothing running, no success) is PROVISIONALLY failed
+# (fix round 1): the day shows not clean ("catch-up possible until <deadline>"), is not final and is not
+# counted; a successful catch-up before the deadline turns it clean on the next report.
+RETRIED_JOBS: frozenset[str] = frozenset({"nightly", "premarket", "preopen", "postclose", WEEKLY_JOB})
+DEFAULT_RETRY_ATTEMPTS: int = RuntimeSettings.model_fields["jobs_retry_attempts"].default
+
 
 @dataclass(frozen=True)
 class ExpectedJob:
@@ -123,6 +132,8 @@ class JobCheck:
     attempts: int
     finished_at: datetime | None
     error: str | None  # masked, at most ERROR_CHARS characters
+    # `failed` before its deadline with the retries exhausted: a catch-up may still turn it `succeeded`.
+    provisional: bool = False
 
 
 @dataclass(frozen=True)
@@ -143,6 +154,8 @@ class SoakDay:
     orb_open_seconds: float | None
     reset: bool
     outage: str | None
+    # not clean only through provisional failures: not final yet (not counted, may still turn clean)
+    provisional: bool = False
 
 
 @dataclass(frozen=True)
@@ -249,7 +262,23 @@ def _judged_at(job: str, r: JobRunRow) -> datetime:
     return r.finished_at or r.started_at
 
 
-def _job_check(exp: ExpectedJob, rows: Sequence[JobRunRow], now: datetime) -> JobCheck:
+def _retries_exhausted(job: str, mine: Sequence[JobRunRow], retry_attempts: int) -> bool:
+    """A retried day-level job whose last `retry_attempts` rows (in start order) all failed: the in-process
+    retries are over and nothing is running."""
+    if job not in RETRIED_JOBS or not mine or retry_attempts < 1:
+        return False
+    if any(r.status == "running" for r in mine):
+        return False
+    tail = mine[-retry_attempts:]
+    return len(tail) == retry_attempts and all(r.status == "failed" for r in tail)
+
+
+def _job_check(
+    exp: ExpectedJob,
+    rows: Sequence[JobRunRow],
+    now: datetime,
+    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
+) -> JobCheck:
     mine = sorted(
         (r for r in rows if r.job == exp.job), key=lambda r: (r.started_at, r.finished_at or r.started_at)
     )
@@ -265,6 +294,16 @@ def _job_check(exp: ExpectedJob, rows: Sequence[JobRunRow], now: datetime) -> Jo
         return JobCheck(exp.job, "missed", exp.deadline, attempts, r.finished_at, _mask(r.error))
     if now < exp.deadline:
         last = mine[-1] if mine else None
+        if last is not None and _retries_exhausted(exp.job, mine, retry_attempts):
+            return JobCheck(
+                exp.job,
+                "failed",
+                exp.deadline,
+                attempts,
+                last.finished_at,
+                _mask(last.error) or "failed",
+                provisional=True,
+            )
         return JobCheck(
             exp.job,
             "pending",
@@ -297,7 +336,11 @@ def _token_check(
     if not failures:
         return JobCheck(exp.job, "succeeded", exp.deadline, 0, None, None)
     last = failures[-1]
-    recovered = any(r.job in TOKEN_USERS and r.status == "succeeded" and r.started_at > last for r in rows)
+    # Only a run that started by the deadline counts: a forced re-run keyed to D days later must not turn a
+    # final day clean after the fact (a past verdict never flips).
+    recovered = any(
+        r.job in TOKEN_USERS and r.status == "succeeded" and last < r.started_at <= exp.deadline for r in rows
+    )
     if recovered:
         return JobCheck(exp.job, "succeeded", exp.deadline, len(failures), None, None)
     return JobCheck(
@@ -322,16 +365,21 @@ def evaluate_day(
     *,
     token_failures: Sequence[datetime] = (),
     outage: str | None = None,
+    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
 ) -> SoakDay:
     """The D1 verdict of one session from its rows (pure). `token_failures` are the `questrade.token` error
-    event times of D's token window; `outage` the reason of an outage mark."""
+    event times of D's token window; `outage` the reason of an outage mark; `retry_attempts` the
+    in-process attempts of the retried day-level jobs (`jobs.retry_attempts`). A day that is not clean only
+    through provisional failures is `not_clean` with `provisional` set (not final)."""
     checks: list[JobCheck] = []
     for exp in expected:
         if exp.job == TOKEN_JOB:
             checks.append(_token_check(exp, rows, now, token_failures))
         else:
-            checks.append(_job_check(exp, rows, now))
+            checks.append(_job_check(exp, rows, now, retry_attempts))
     failed = tuple(f"{c.job} {c.status}" for c in checks if c.status in FINAL_BAD)
+    final_bad = any(c.status in FINAL_BAD and not c.provisional for c in checks)
+    provisional = bool(failed) and outage is None and not final_bad
     if outage is not None or failed:
         verdict: SoakVerdict = "not_clean"
     elif any(c.status == "pending" for c in checks):
@@ -360,6 +408,7 @@ def evaluate_day(
         seconds,
         False,
         _mask(outage) if outage is not None else None,
+        provisional,
     )
 
 
@@ -402,15 +451,15 @@ def build_report(
     env: str,
 ) -> SoakReport:
     """The consecutive count over the final days in order (clean +1, not clean → 0, a reset mark → 0
-    before its day), stopping at the first pending day; the earliest finish is the session on which the
-    count would reach `target` if every later day is clean (None once reached). Pure."""
+    before its day), stopping at the first pending or provisional day; the earliest finish is the session on
+    which the count would reach `target` if every later day is clean (None once reached). Pure."""
     ordered = sorted(days, key=lambda d: d.session_date)
     count = 0
     last_final: date | None = None
     for day in ordered:
         if day.reset:
             count = 0
-        if day.verdict == "pending":
+        if day.verdict == "pending" or day.provisional:  # not final yet: never counted
             break
         count = count + 1 if day.verdict == "clean" else 0
         last_final = day.session_date
@@ -476,6 +525,7 @@ def line_view(report: SoakReport, *, final: bool) -> SoakLineView:
         session_date=day.session_date,
         verdict=day.verdict,
         failed=tuple(failed),
+        orb_open=day.orb_open,
         orb_open_seconds=day.orb_open_seconds,
         consecutive_clean=report.consecutive_clean,
         target=report.target,
@@ -483,6 +533,7 @@ def line_view(report: SoakReport, *, final: bool) -> SoakLineView:
         changed=report.changed,
         final=final,
         env=report.env,
+        catch_up_until=(max(c.deadline for c in day.checks if c.provisional) if day.provisional else None),
     )
 
 
@@ -639,7 +690,15 @@ def _evaluate_window(
         failures = [t for t in token_events if start < t <= end and t <= now]
         mark = in_force.get(d)
         outage = mark.reason if mark is not None and mark.kind == "outage" else None
-        day = evaluate_day(d, expected, day_rows, now, token_failures=failures, outage=outage)
+        day = evaluate_day(
+            d,
+            expected,
+            day_rows,
+            now,
+            token_failures=failures,
+            outage=outage,
+            retry_attempts=settings.jobs_retry_attempts,
+        )
         if mark is not None and mark.kind == "reset":
             day = dataclasses.replace(day, reset=True)
         days.append(day)
@@ -655,11 +714,14 @@ def load_report(
 ) -> SoakReport:
     """The report over the last `sessions` sessions up to `through` (default: the latest session on or
     before today's ET date). Read-only. `changed` compares the verdicts with the window evaluated as of the
-    previous soak line."""
+    previous soak line. With `sessions` < `target` the count and the earliest finish are taken over the last
+    `target` sessions (a shorter window would cap the count below the target), and only the last `sessions`
+    days are reported."""
     cal = deps.calendar
     now = deps.clock.now()
     last = through if through is not None else default_through(cal, now)
-    window = session_window(cal, last, sessions)
+    shown = max(sessions, 0)
+    window = session_window(cal, last, max(sessions, target))
     settings = deps.settings()
     orb_required = deps.orb_enabled()
     plans = {d: deps.plan(d) for d in window}
@@ -676,6 +738,12 @@ def load_report(
     report = build_report(
         days, cal=cal, through=window[-1] if window else last, target=target, now=now, env=deps.env
     )
+    first_shown = window[-shown] if 0 < shown <= len(window) else None
+    if shown < len(window):
+        kept = tuple(d for d in report.days if first_shown is not None and d.session_date >= first_shown)
+        report = dataclasses.replace(
+            report, days=kept, total_clean=sum(1 for d in kept if d.verdict == "clean")
+        )
     previous_at = _last_line_at(deps.factory)
     if previous_at is None or previous_at >= now:
         return report
@@ -687,7 +755,9 @@ def load_report(
     for old, new in zip(before, days, strict=True):
         if new.session_date >= report.through or new.session_date > shown_through:
             continue
-        if new.verdict != "pending" and new.verdict != old.verdict:
+        if first_shown is None or new.session_date < first_shown:
+            continue
+        if new.verdict != "pending" and not new.provisional and new.verdict != old.verdict:
             changed.append((new.session_date, _verdict_words(new)))
     return dataclasses.replace(report, changed=tuple(changed))
 
@@ -699,25 +769,39 @@ def dedupe_key(session_date: date, *, final: bool) -> str:
     return f"{DEDUPE_PREFIX}{session_date.isoformat()}" + (":final" if final else "")
 
 
-def _already_sent(factory: sessionmaker[Session], key: str) -> bool:
+def _line_status(factory: sessionmaker[Session], key: str) -> str | None:
+    """The `notifications` status of the line's dedupe key (None: no row)."""
     with factory() as s:
-        status = s.execute(
+        status: str | None = s.execute(
             select(m.Notification.status).where(m.Notification.dedupe_key == key)
         ).scalar_one_or_none()
+    return status
+
+
+def _already_sent(factory: sessionmaker[Session], key: str) -> bool:
+    status = _line_status(factory, key)
     return status is not None and status != "failed"
 
 
-async def notify_report(deps: SoakDeps, report: SoakReport, *, final: bool) -> bool:
+# notify_report's outcome: "sent", "duplicate" (the key was already taken, nothing sent), "failed" (the
+# notifier recorded the send as failed, unknown or still sending), "off" (no Telegram notifier).
+SendOutcome = Literal["sent", "duplicate", "failed", "off"]
+
+
+async def notify_report(deps: SoakDeps, report: SoakReport, *, final: bool) -> SendOutcome:
     """Send the line for the report's `through` session: at most one message per session (and one `final`
-    one), deduplicated by the notifier's `notifications` table. Returns whether a message was sent."""
+    one), deduplicated by the notifier's `notifications` table. The notifier never raises, so the outcome
+    is read back from its row: `sent` only when the row says `sent` (a notifier that keeps no row, as in
+    tests, counts as sent). The database reads run in a worker thread."""
     if isinstance(deps.notifier, NullNotifier):
-        return False
+        return "off"
     msg = deps.render.soak_line(line_view(report, final=final))
     key = msg.dedupe_key or dedupe_key(report.through, final=final)
-    if _already_sent(deps.factory, key):
-        return False
+    if await asyncio.to_thread(_already_sent, deps.factory, key):
+        return "duplicate"
     await deps.notifier.send(dataclasses.replace(msg, dedupe_key=key))
-    return True
+    status = await asyncio.to_thread(_line_status, deps.factory, key)
+    return "sent" if status in (None, "sent") else "failed"
 
 
 def record_mark(
@@ -774,6 +858,7 @@ def report_json(report: SoakReport) -> dict[str, Any]:
                 "orb_open_seconds": d.orb_open_seconds,
                 "reset": d.reset,
                 "outage": d.outage,
+                "provisional": d.provisional,
                 "checks": [
                     {
                         "job": c.job,
@@ -807,6 +892,8 @@ def report_lines(report: SoakReport) -> list[str]:
             marks.append("reset")
         if d.outage is not None:
             marks.append(f"outage ({d.outage})")
+        if d.provisional:
+            marks.append("provisional (catch-up possible)")
         lines.append(
             f"{d.session_date.isoformat()} {d.session_date:%a}  {d.verdict:<9}  9:35 {scan:<9}  "
             f"failed: {'; '.join(bad) or '-'}  marks: {', '.join(marks) or '-'}"

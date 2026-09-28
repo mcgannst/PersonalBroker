@@ -121,7 +121,9 @@ def test_spec_section_9_and_the_master_plan_have_the_soak_rows() -> None:
     spec = (ROOT / "Trader" / "docs" / "SPEC.md").read_text()
     section = spec.split("## 9. Schedule", 1)[1].split("## 10.", 1)[0]
     assert "| 18:05 Mon–Fri | 16:05 | Soak/ops line" in section
-    assert "| Sat 10:30 | 08:30 | Final soak/ops line" in section
+    assert "| Sat 10:30 | 08:30 | Final soak/ops line" in section  # the Saturday line (P6-T2)
+    assert "17:05 MT from 2026-11-01" in section and "09:30 MT from 2026-11-01" in section
+    assert "UTC−6 all year" in section
     plan = (ROOT / "Trader" / "docs" / "plans" / "2026-09-26-build-master-plan.md").read_text()
     contracts = plan.split("### 7.1 Cross-phase contracts", 1)[1].split("### 7.2", 1)[0]
     rows = {line.split("|")[1].strip() for line in contracts.splitlines() if line.startswith("| ")}

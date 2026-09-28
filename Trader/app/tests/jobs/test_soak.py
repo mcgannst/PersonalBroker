@@ -264,6 +264,41 @@ def test_a_failure_before_the_deadline_is_pending() -> None:
     assert day.verdict == "pending"
 
 
+def test_retries_exhausted_before_the_deadline_is_provisionally_failed_until_a_catch_up() -> None:
+    """Fix round 1 (D1): three failed preopen attempts (jobs.retry_attempts) by 09:26 ET: provisionally
+    failed, the day not clean but not final and not counted; an on-time catch-up at 09:29 turns it clean.
+    Fewer failed rows than the attempts stay pending; a job without in-process retries stays pending."""
+    base = [r for r in clean_rows(TUE) if r.started_at < et(TUE, 9, 20)]
+    tries = [
+        row("preopen", et(TUE, 9, 20), et(TUE, 9, 20, 30), "failed", "TokenExpired"),
+        row("preopen", et(TUE, 9, 22, 30), et(TUE, 9, 23), "failed", "TokenExpired"),
+        row("preopen", et(TUE, 9, 25), et(TUE, 9, 25, 30), "failed", "TokenExpired"),
+    ]
+    now = et(TUE, 9, 26)
+    day = evaluate(TUE, base + tries, now)
+    c = check(day, "preopen")
+    assert (c.status, c.provisional, c.attempts) == ("failed", True, 3)
+    assert (day.verdict, day.provisional) == ("not_clean", True)
+    report = build_report([day], cal=CAL, through=TUE, target=10, now=now, env="dev")
+    assert report.last_final is None and report.consecutive_clean == 0
+    msg = renderer(now).soak_line(line_view(report, final=False))
+    assert "catch-up possible until 07:30 MT" in msg.text and msg.silent is False
+    two = evaluate(TUE, base + tries[:2], now)
+    assert check(two, "preopen").status == "pending" and two.verdict == "pending"
+    caught = evaluate(TUE, [*base, *tries, row("preopen", et(TUE, 9, 29), et(TUE, 9, 29, 40))], LATER)
+    assert check(caught, "preopen").status == "succeeded"
+    # after the deadline with no catch-up it is final
+    final = evaluate(TUE, [r for r in clean_rows(TUE) if r.job != "preopen"] + tries, LATER)
+    assert (check(final, "preopen").provisional, final.provisional, final.verdict) == (
+        False,
+        False,
+        "not_clean",
+    )
+    # a check-in (no in-process retries) that failed before its deadline stays pending
+    failed_checkin = [row("checkin@11:30", et(TUE, 11, 30), et(TUE, 11, 30, 5), "failed", "boom")] * 3
+    assert check(evaluate(TUE, failed_checkin, et(TUE, 11, 40)), "checkin@11:30").status == "pending"
+
+
 # --- 7. the token check -------------------------------------------------------------------------------------
 
 
@@ -304,6 +339,17 @@ def test_token_failure_after_a_succeeded_postclose_fails() -> None:
     day = evaluate(TUE, clean_rows(TUE), LATER, token_failures=(et(TUE, 17, 0),))
     assert check(day, "token-refresh").status == "failed"
     assert "token-refresh failed" in day.failed
+
+
+def test_a_token_user_started_after_the_deadline_never_recovers_the_day() -> None:
+    """Fix round 1: a forced postclose keyed to D a week later started after D 18:00 ET; the final verdict
+    must not flip to clean."""
+    fail = (et(TUE, 17, 0),)
+    rows = clean_rows(TUE) + [row("postclose", et(TUE, 18, 0, 1), et(TUE, 18, 2))]
+    day = evaluate(TUE, rows, LATER, token_failures=fail)
+    assert check(day, "token-refresh").status == "failed"
+    on_edge = clean_rows(TUE) + [row("postclose", et(TUE, 18, 0), et(TUE, 18, 2))]
+    assert check(evaluate(TUE, on_edge, LATER, token_failures=fail), "token-refresh").status == "succeeded"
 
 
 def test_no_token_event_succeeds() -> None:
@@ -450,6 +496,7 @@ def view(**kw: object) -> SoakLineView:
         "session_date": MON,
         "verdict": "clean",
         "failed": (),
+        "orb_open": "succeeded",
         "orb_open_seconds": 31.2,
         "consecutive_clean": 1,
         "target": 10,
@@ -501,6 +548,33 @@ def test_the_final_line_has_its_own_key_and_prod_is_ops_without_target() -> None
     assert ops.text.startswith("<b>Ops Mon 28 Sep</b>")
     assert "target" not in ops.text
     assert "earliest finish" not in ops.text
+
+
+def test_the_scan_is_off_only_when_orb_sip_is_disabled() -> None:
+    """Fix round 1: with orb_sip enabled and the 9:35 scan still pending (a manual line at 09:00 ET on a day
+    already not clean), the line says "9:35 scan pending", never "off"."""
+    now = et(TUE, 9, 0)
+    day = evaluate(TUE, [], now)
+    report = build_report([day], cal=CAL, through=TUE, target=10, now=now, env="dev")
+    lv = line_view(report, final=False)
+    assert lv.orb_open == "pending"
+    text = renderer(now).soak_line(lv).text
+    assert "9:35 scan pending" in text and "9:35 scan off" not in text
+    off = renderer().soak_line(view(orb_open="off", orb_open_seconds=None)).text
+    assert "9:35 scan off" in off
+    missed = (
+        renderer()
+        .soak_line(
+            view(
+                verdict="not_clean",
+                orb_open="missed",
+                orb_open_seconds=None,
+                failed=("event:orb_open missed",),
+            )
+        )
+        .text
+    )
+    assert "9:35 scan off" not in missed and "event:orb_open missed" in missed
 
 
 def test_a_pending_friday_says_the_weekly_report_is_due() -> None:

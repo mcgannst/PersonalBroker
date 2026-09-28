@@ -713,11 +713,15 @@ class MessageRenderer:
             verdict = "pending ⏳" + (f" ({', '.join(open_)})" if open_ else "")
         else:
             verdict = "NOT clean ❌" + (f" {_e('; '.join(view.failed))}" if view.failed else "")
+            if view.catch_up_until is not None:  # not final: retries exhausted before the deadline
+                verdict += f" (catch-up possible until {self._time(view.catch_up_until)})"
         parts = [f"{head}: {verdict}"]
         if view.orb_open_seconds is not None:
             parts.append(f"9:35 scan {round(view.orb_open_seconds)} s")
-        elif not any(f.startswith("event:orb_open") for f in view.failed):
+        elif view.orb_open == "off":  # orb_sip disabled: the scan is not expected
             parts.append("9:35 scan off")
+        elif not any(f.startswith("event:orb_open") for f in view.failed):
+            parts.append(f"9:35 scan {_e(view.orb_open)}")  # e.g. "pending" before 09:37:05 ET
         if view.env != "prod":
             n = view.consecutive_clean
             if n:

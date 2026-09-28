@@ -283,7 +283,8 @@ async def test_transport_error_on_every_attempt_raises_status_0_without_url_or_t
 
 @respx.mock
 async def test_429_on_every_attempt_does_not_pause_after_the_last() -> None:
-    """Finding 3 (429 path): four pauses for five attempts, growing exponentially."""
+    """Finding 3 (429 path): four pauses for five attempts, growing exponentially (capped at 2 s for
+    market data, FIX-PACING)."""
     sleeps = Sleeps()
     respx.get(BASE + "markets/quotes").mock(
         return_value=httpx.Response(429, headers={"X-RateLimit-Reset": "junk"})
@@ -293,7 +294,7 @@ async def test_429_on_every_attempt_does_not_pause_after_the_last() -> None:
             await c.quotes([1])
     assert err.value.status == 429
     backoffs = [s for s in sleeps.calls if s >= 0.4]
-    assert backoffs == pytest.approx([0.5, 1.0, 2.0, 4.0], abs=0.05)
+    assert backoffs == pytest.approx([0.5, 1.0, 2.0, 2.0], abs=0.07)
 
 
 @respx.mock

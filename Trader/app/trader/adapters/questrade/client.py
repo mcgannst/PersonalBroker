@@ -7,6 +7,7 @@ entirely before it return HTTP 400, so start times are clamped; candles include 
 
 import asyncio
 import json
+import math
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -26,6 +27,18 @@ NAMES_PER_CALL = 100
 MAX_ATTEMPTS = 5
 MAX_CANDLES_PER_REQUEST = 20_000
 MAX_429_PAUSE = 30.0
+# Market data is paced below Questrade's 20 req/s market limit: at exactly 20 the per-second window
+# still answers 429 (2026-09-28 opening bars: 543 requests, 3 x 429 alone, 38 x 429 with other load).
+MARKET_RPS = 17.0
+# A 429 whose X-RateLimit-Reset is within WINDOW_429_MAX_PAUSE is the per-second window: pause until the
+# reset plus a small margin, at least WINDOW_429_MIN_PAUSE. A Reset further ahead is a real (hourly)
+# exhaustion and is waited for, at most MAX_429_PAUSE. Without a usable Reset (missing, unparseable, or
+# more than STALE_429_RESET in the past, i.e. clock skew) the pause backs off 0.5 * 2**attempt, capped
+# at WINDOW_429_MAX_PAUSE for market data.
+WINDOW_429_MARGIN = 0.05
+WINDOW_429_MIN_PAUSE = 0.05
+WINDOW_429_MAX_PAUSE = 2.0
+STALE_429_RESET = 1.0
 # A cached access token is reused until this long before it expires (by the client's clock).
 TOKEN_REUSE_MARGIN = timedelta(seconds=120)
 Category = Literal["market", "account"]
@@ -164,10 +177,11 @@ class QuestradeClient:
         tokens: TokenSource,
         clock: Clock,
         *,
-        market_rps: float = 20.0,
+        market_rps: float = MARKET_RPS,
         account_rps: float = 30.0,
         http: httpx.AsyncClient | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._tokens = tokens
         self._clock = clock
@@ -175,8 +189,8 @@ class QuestradeClient:
         self._http: httpx.AsyncClient = http if http is not None else httpx.AsyncClient(timeout=30)
         self._sleep = sleep
         self._buckets: dict[Category, TokenBucket] = {
-            "market": TokenBucket(market_rps, sleep=sleep),
-            "account": TokenBucket(account_rps, sleep=sleep),
+            "market": TokenBucket(market_rps, monotonic=monotonic, sleep=sleep),
+            "account": TokenBucket(account_rps, monotonic=monotonic, sleep=sleep),
         }
         self.rate_limit_remaining: dict[Category, int] = {}
         self.stats: dict[Category, CallStats] = {"market": CallStats(), "account": CallStats()}
@@ -193,8 +207,15 @@ class QuestradeClient:
 
     def _pause_after_429(self, resp: httpx.Response, category: Category, attempt: int) -> None:
         reset: float | None = _float_or_none(resp.headers.get("X-RateLimit-Reset"))
-        reset_delta: float = 0.0 if reset is None else reset - self._clock.now().timestamp()
-        pause: float = min(MAX_429_PAUSE, max(reset_delta, 0.5 * 2**attempt))
+        delta: float | None = None if reset is None else reset - self._clock.now().timestamp()
+        pause: float
+        if delta is None or math.isnan(delta) or delta < -STALE_429_RESET:  # no usable Reset
+            cap: float = WINDOW_429_MAX_PAUSE if category == "market" else MAX_429_PAUSE
+            pause = min(cap, 0.5 * 2**attempt)
+        elif delta > WINDOW_429_MAX_PAUSE:
+            pause = min(MAX_429_PAUSE, delta)
+        else:
+            pause = min(WINDOW_429_MAX_PAUSE, max(WINDOW_429_MIN_PAUSE, delta + WINDOW_429_MARGIN))
         self.stats[category].pause_s += pause
         bucket = self._buckets[category]
         bucket.pause_until(bucket.now() + pause)

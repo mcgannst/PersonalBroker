@@ -37,8 +37,8 @@ from trader.market.types import (
 OPENING_BAR = timedelta(minutes=5)
 OPENING_BAR_CODE = INTERVAL_CODES["FiveMinutes"]
 # One batch of opening bars must finish well inside the 60 s budget for the 9:35 scan: ~550 symbols at
-# 20 req/s take ~28 s. Symbols still outstanding at the deadline are reported as missing "timeout"; the
-# bars that completed by then are kept (FIX-OPENBARS, Mon 2026-09-28).
+# 17 req/s (MARKET_RPS, FIX-PACING) take ~32 s. Symbols still outstanding at the deadline are reported
+# as missing "timeout"; the bars that completed by then are kept (FIX-OPENBARS, Mon 2026-09-28).
 FETCH_DEADLINE_S = 45.0
 # Backstop past the deadline for a client that does not honour `deadline_s` (min of this and the deadline).
 DEADLINE_GUARD_S = 5.0

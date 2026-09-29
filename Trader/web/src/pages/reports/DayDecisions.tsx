@@ -259,7 +259,33 @@ interface Filters {
   ticker: string;
 }
 
-const NO_FILTERS: Filters = { stage: "", outcome: "", ticker: "" };
+/** A ticker the URL may carry (`&ticker=`, the dashboard's rejection links, plan S8). */
+const URL_TICKER = /^[A-Z.]{1,10}$/;
+
+/**
+ * The initial filters from the URL's `stage`, `outcome` and `ticker` (the dashboard's rejection links,
+ * `/reports?day=D&stage=scan&outcome=rejected&ticker=T`); each invalid value is ignored (DB-T11).
+ */
+export function filtersFromParams(params: URLSearchParams): Filters {
+  const stage = params.get("stage") ?? "";
+  const outcome = params.get("outcome") ?? "";
+  const ticker = params.get("ticker") ?? "";
+  return {
+    stage: (DECISION_STAGES as readonly string[]).includes(stage) ? (stage as DecisionStage) : "",
+    outcome: (DECISION_OUTCOMES as readonly string[]).includes(outcome) ? (outcome as DecisionOutcome) : "",
+    ticker: URL_TICKER.test(ticker) ? ticker : "",
+  };
+}
+
+/** `params` with the filters written in (empty ones removed); every other parameter kept. */
+function withFilters(params: URLSearchParams, f: Filters): URLSearchParams {
+  const next = new URLSearchParams(params);
+  const set = (key: string, value: string) => (value ? next.set(key, value) : next.delete(key));
+  set("stage", f.stage);
+  set("outcome", f.outcome);
+  set("ticker", f.ticker.trim());
+  return next;
+}
 
 function FilterBar({ filters, onChange }: { filters: Filters; onChange: (f: Filters) => void }) {
   return (
@@ -303,7 +329,8 @@ function FilterBar({ filters, onChange }: { filters: Filters; onChange: (f: Filt
 
 function DayBody({ day, runId }: { day: IsoDate; runId: number | null }) {
   const api = useApi();
-  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [params, setParams] = useSearchParams();
+  const [filters, setFilters] = useState<Filters>(() => filtersFromParams(params));
   const [offset, setOffset] = useState(0);
   const ticker = filters.ticker.trim();
   const q: DecisionDayQuery = {
@@ -322,6 +349,7 @@ function DayBody({ day, runId }: { day: IsoDate; runId: number | null }) {
   const changeFilters = (f: Filters) => {
     setFilters(f);
     setOffset(0);
+    setParams(withFilters(params, f), { replace: true });
   };
 
   if (dayQuery.isPending) return <Loading />;

@@ -1,13 +1,18 @@
-// Live updates (P4-T12, SPEC §12 "Live updates use SSE"). `LiveUpdatesProvider` (mounted once by the shell
-// while logged in) opens ONE `EventSource` on `/api/stream` and turns its messages into query invalidations:
+// Live updates (P4-T12, SPEC §12 "Live updates use SSE"; live dashboard plan S9, DB-T11). `LiveUpdatesProvider`
+// (mounted once by the shell while logged in) opens ONE `EventSource` on `/api/stream` and turns its messages
+// into query invalidations:
 //   - `invalidate` {topics}  -> invalidate every prefix in `TOPIC_KEYS[topic]`
 //   - `events` {items}       -> invalidate `events` and `dashboard`
 //   - `hello`                -> connected
+// Invalidations of the `dashboard` and `system` prefixes (the Dashboard's `live` and the Control page's
+// `control` queries live under them; the `marks` topic changes every 2 s in the session) are throttled to at
+// most one per `LIVE_THROTTLE_MS`: the first runs at once, the rest of the window collapse into ONE trailing
+// invalidation at its end (never dropped). Other prefixes are invalidated at once.
 // On an error it shows "not connected" and lets the browser reconnect by itself (the server sends
 // `retry: 3000`). When the browser gives up (readyState CLOSED, for example after a 401 on reconnect) it asks
 // `/auth/me`: a 401 logs out, anything else reopens the stream after a short delay. While not connected the
-// dashboard query defaults to `refetchInterval` 15 s (`setQueryDefaults`), so the page stays fresh without
-// the stream; the default is cleared on reconnect.
+// `dashboard` and `system` queries default to `refetchInterval` 15 s (`setQueryDefaults`), so the pages stay
+// fresh without the stream; the default is cleared on reconnect, and losing the stream refetches both once.
 //
 // `useLiveUpdates()` only reads the provider's state, so any page may call it (for example to show the live
 // dot) without opening a second stream. Outside a provider it reports `connected: false`.
@@ -33,8 +38,12 @@ export interface EventSourceLike {
 
 export type EventSourceFactory = (url: string) => EventSourceLike;
 
-/** How often the dashboard is refetched while the stream is down. */
+/** How often the dashboard and control queries are refetched while the stream is down. */
 export const DISCONNECTED_REFETCH_MS = 15_000;
+/** At most one invalidation of a throttled prefix per this many ms (plan S9). */
+export const LIVE_THROTTLE_MS = 2_000;
+/** The query prefixes whose SSE invalidations are throttled and which poll while the stream is down. */
+export const LIVE_PREFIXES: readonly string[] = ["dashboard", "system"];
 /** How long to wait before reopening a stream the browser gave up on. */
 export const REOPEN_DELAY_MS = 5_000;
 const CLOSED = 2;
@@ -59,14 +68,59 @@ function parse(ev: MessageEvent): unknown {
   }
 }
 
-/** Sets the dashboard query's `refetchInterval` default and applies it to the dashboard queries mounted now. */
-function setDashboardPolling(queryClient: QueryClient, refetchInterval: number | false): void {
-  queryClient.setQueryDefaults(qk.dashboard(), { refetchInterval });
-  for (const query of queryClient.getQueryCache().findAll({ queryKey: qk.dashboard() })) {
-    for (const observer of query.observers) {
-      if (observer.options.refetchInterval !== refetchInterval) observer.setOptions({ ...observer.options, refetchInterval });
+/** Sets the `refetchInterval` default of the `dashboard` and `system` queries and applies it to those mounted now. */
+function setLivePolling(queryClient: QueryClient, refetchInterval: number | false): void {
+  for (const prefix of LIVE_PREFIXES) {
+    const queryKey = [prefix];
+    queryClient.setQueryDefaults(queryKey, { refetchInterval });
+    for (const query of queryClient.getQueryCache().findAll({ queryKey })) {
+      for (const observer of query.observers) {
+        if (observer.options.refetchInterval !== refetchInterval) observer.setOptions({ ...observer.options, refetchInterval });
+      }
     }
   }
+}
+
+export interface Throttle {
+  /** Runs `key` now when its window is closed, else once at the end of the window. */
+  call(key: string): void;
+  /** Forgets every window and pending call (the provider unmounted). */
+  cancel(): void;
+}
+
+/**
+ * A per-key leading-and-trailing throttle: the first call runs at once and opens a `waitMs` window; calls inside
+ * the window mark it pending; when the window ends a pending call runs (and opens a new window), so the last
+ * update is never dropped and a key runs at most once per window.
+ */
+export function createThrottle(run: (key: string) => void, waitMs: number): Throttle {
+  const windows = new Map<string, { timer: ReturnType<typeof setTimeout>; pending: boolean }>();
+  const open = (key: string) => {
+    windows.set(key, { timer: setTimeout(() => close(key), waitMs), pending: false });
+  };
+  const close = (key: string) => {
+    const w = windows.get(key);
+    windows.delete(key);
+    if (w?.pending) {
+      run(key);
+      open(key);
+    }
+  };
+  return {
+    call(key) {
+      const w = windows.get(key);
+      if (w) {
+        w.pending = true;
+        return;
+      }
+      run(key);
+      open(key);
+    },
+    cancel() {
+      for (const w of windows.values()) clearTimeout(w.timer);
+      windows.clear();
+    },
+  };
 }
 
 export interface LiveUpdatesProviderProps {
@@ -85,6 +139,12 @@ export function LiveUpdatesProvider({ children, onUnauthorized, createEventSourc
   const [generation, setGeneration] = useState(0);
   const onUnauthorizedRef = useRef(onUnauthorized);
   onUnauthorizedRef.current = onUnauthorized;
+  // One throttle for the provider's life (a reopened stream keeps a pending trailing invalidation).
+  const throttle = useMemo(
+    () => createThrottle((prefix) => void queryClient.invalidateQueries({ queryKey: [prefix] }), LIVE_THROTTLE_MS),
+    [queryClient],
+  );
+  useEffect(() => () => throttle.cancel(), [throttle]);
 
   useEffect(() => {
     const factory = createEventSource ?? defaultFactory();
@@ -94,7 +154,10 @@ export function LiveUpdatesProvider({ children, onUnauthorized, createEventSourc
     const es = factory(api.streamUrl());
 
     const invalidate = (prefixes: readonly string[]) => {
-      for (const prefix of prefixes) void queryClient.invalidateQueries({ queryKey: [prefix] });
+      for (const prefix of prefixes) {
+        if (LIVE_PREFIXES.includes(prefix)) throttle.call(prefix);
+        else void queryClient.invalidateQueries({ queryKey: [prefix] });
+      }
     };
 
     es.addEventListener("hello", () => {
@@ -132,19 +195,21 @@ export function LiveUpdatesProvider({ children, onUnauthorized, createEventSourc
       es.close();
       setConnected(false);
     };
-  }, [api, queryClient, createEventSource, generation]);
+  }, [api, queryClient, createEventSource, generation, throttle]);
 
-  // While the stream is down the dashboard polls: a query default, so the Dashboard page needs no code for
-  // it. Observers already mounted only read defaults when their page re-renders, so they are updated too.
-  // Losing the stream also refetches the dashboard once (it may have missed updates).
+  // While the stream is down the Dashboard and Control queries poll: a query default, so the pages need no code
+  // for it. Observers already mounted only read defaults when their page re-renders, so they are updated too.
+  // Losing the stream also refetches both once (they may have missed updates).
   const wasConnected = useRef(false);
   useEffect(() => {
-    setDashboardPolling(queryClient, connected ? false : DISCONNECTED_REFETCH_MS);
-    if (wasConnected.current && !connected) void queryClient.invalidateQueries({ queryKey: qk.dashboard() });
+    setLivePolling(queryClient, connected ? false : DISCONNECTED_REFETCH_MS);
+    if (wasConnected.current && !connected) {
+      for (const queryKey of [qk.dashboard(), qk.system()]) void queryClient.invalidateQueries({ queryKey });
+    }
     wasConnected.current = connected;
   }, [connected, queryClient]);
 
-  useEffect(() => () => setDashboardPolling(queryClient, false), [queryClient]);
+  useEffect(() => () => setLivePolling(queryClient, false), [queryClient]);
 
   const value = useMemo(() => ({ connected }), [connected]);
   return createElement(LiveContext.Provider, { value }, children);

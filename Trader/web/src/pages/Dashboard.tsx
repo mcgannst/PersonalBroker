@@ -1,47 +1,74 @@
-// The Dashboard (P4-T13; SPEC §12; BR-30, BR-31, BR-33, BR-50): today at a glance and the one-tap
-// approvals away from Telegram.
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+// The Dashboard (live dashboard design §3, plan DB-T11; D1-D5, D9): a read-only live monitor fed by
+// `GET /api/live` (query `qk.live`, under the `dashboard` prefix, so every mutation and SSE topic that refreshes
+// the dashboard refreshes it; the provider throttles the 2 s `marks` topic, plan S9). Layout (phone: this order;
+// tablet and wider: sections 2 and 4 in two columns):
+//   1. TopBar (session, P&L by period, costs, books check, engine chip, live indicator)
+//   2. EquityChart | RiskPanel
+//   3. PositionsTable
+//   4. ActivityFeed | RejectionsPanel
+//   5. TodayTimeline, and "Pending approvals" (the one-tap flow) when the mode is manual or a proposal waits.
+// `?range=run` and `?expand=12,15` live in the URL beside `?proposal=` (the Telegram deep link: a pending
+// proposal is highlighted, a decided one opens its panel). Each part fails on its own (plan S15): its panel shows
+// the error with Retry; a whole-request failure keeps the frame and the last good data under the error box.
+// The only actions here are Approve/Reject of a pending proposal; the engine controls are on Control.
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
+import type { LiveQuery } from "../api/client";
 import { useApi } from "../api/client";
 import { qk } from "../api/queryKeys";
-import type { DashboardOut, DecisionOut } from "../api/types";
-import { Badge, Button, Empty, ErrorBox, Light, Loading } from "../components/ui";
+import type { DecisionOut, LiveOut, LiveRange } from "../api/types";
+import { Button, ErrorBox, Loading } from "../components/ui";
 import { skewFrom } from "../layout/serverTime";
-import { fmtDate } from "../lib/format";
+import { fmtDuration } from "../lib/format";
 import { parseId } from "../lib/params";
+import { useLiveUpdates } from "../live/useLiveUpdates";
 import "./dashboard/dashboard.css";
-import EventList from "./dashboard/EventList";
-import KillSwitchLights from "./dashboard/KillSwitchLights";
-import { phaseLabel, proposalHeadline } from "./dashboard/labels";
+import { proposalHeadline } from "./dashboard/labels";
 import PendingProposal from "./dashboard/PendingProposal";
-import PnlTiles from "./dashboard/PnlTiles";
-import PositionCard from "./dashboard/PositionCard";
 import ProposalPanel from "./dashboard/ProposalPanel";
-import Timeline from "./dashboard/Timeline";
+import { ActivityFeed } from "./live/ActivityFeed";
+import { EquityChart } from "./live/EquityChart";
+import { Panel } from "./live/Panel";
+import { PositionsTable } from "./live/PositionsTable";
+import { RejectionsPanel } from "./live/RejectionsPanel";
+import { RiskPanel } from "./live/RiskPanel";
+import { TodayTimeline } from "./live/TodayTimeline";
+import { TopBar, partError } from "./live/TopBar";
 
-function HeaderRow({ data }: { data: DashboardOut }) {
-  const problem = !data.token.ok || !data.worker.ok;
-  return (
-    <section className="card dash-header" aria-label="Session">
-      <div className="row">
-        <strong className="num">{fmtDate(data.session.date)}</strong>
-        <span>{phaseLabel(data.session.phase)}</span>
-        {data.approval_mode === "auto" ? <Badge tone="warn">AUTO</Badge> : <Badge tone="info">MANUAL</Badge>}
-      </div>
-      <div className="row">
-        <Light tone={data.token.ok ? "ok" : "bad"} label={data.token.ok ? "Token OK" : "Token problem"} />
-        <Light tone={data.worker.ok ? "ok" : "bad"} label={data.worker.ok ? "Worker OK" : "Worker problem"} />
-        {problem && (
-          <Link className="link-touch" to="/system">
-            Check System
-          </Link>
-        )}
-      </div>
-      {!data.telegram_configured && <p className="notice text-tone tone-warn">Telegram is not configured: approve here</p>}
-    </section>
-  );
+/** At most this many positions are expanded (and sent as `?expand=`: a 4th id makes `/api/live` answer 422). */
+export const EXPAND_MAX = 3;
+/** One id as `/api/live` accepts it (`[1-9][0-9]{0,18}`). */
+const EXPAND_ID = /^[1-9][0-9]{0,18}$/;
+
+export const TELEGRAM_OFF_NOTICE = "Telegram is not configured: approve here";
+export const NOTHING_PENDING = "Nothing waiting for approval";
+
+/** The URL's `?range=`: `run` or else `today`. */
+export function parseRange(value: string | null): LiveRange {
+  return value === "run" ? "run" : "today";
+}
+
+/** The URL's `?expand=`: the valid, distinct position ids, the first `EXPAND_MAX` only (the rest dropped). */
+export function parseExpand(value: string | null): number[] {
+  if (!value) return [];
+  const ids: number[] = [];
+  for (const part of value.split(",")) {
+    const raw = part.trim();
+    if (!EXPAND_ID.test(raw)) continue;
+    const id = Number(raw);
+    if (!Number.isSafeInteger(id) || ids.includes(id)) continue;
+    ids.push(id);
+    if (ids.length === EXPAND_MAX) break;
+  }
+  return ids;
+}
+
+/** The `api.live` query for a range and the expanded ids (`expand` only when there are any). */
+export function liveQuery(range: LiveRange, expand: readonly number[]): LiveQuery {
+  const ids = expand.slice(0, EXPAND_MAX);
+  return ids.length > 0 ? { range, expand: ids.join(",") } : { range };
 }
 
 function DecisionNotices({ decisions, onDismiss }: { decisions: DecisionOut[]; onDismiss: (id: number) => void }) {
@@ -58,101 +85,181 @@ function DecisionNotices({ decisions, onDismiss }: { decisions: DecisionOut[]; o
   );
 }
 
-function CandidatesSummary({ data }: { data: DashboardOut }) {
-  const top = data.candidates_top.slice(0, 5);
+/** Page-level notices: a stale or stopped worker (to Control), and positions without a working stop order. */
+function Notices({ live }: { live: LiveOut }) {
+  const unprotected = (live.positions ?? []).filter((p) => !p.stop_working);
+  const workerProblem = live.worker_stale || !live.worker.ok;
+  if (!workerProblem && unprotected.length === 0) return null;
   return (
-    <section className="card" aria-label="Candidates today">
-      <header className="card-head">
-        <h2 className="card-title">Candidates</h2>
-        <Link className="link-touch" to="/candidates">
-          View all
-        </Link>
-      </header>
-      <p className="small muted">{`${data.candidates_count} ranked today`}</p>
-      {top.length > 0 && (
-        <ol className="plain-list row small">
-          {top.map((c) => (
-            <li key={c.id} className={c.passed ? "chip" : "chip muted"}>
-              {`${c.rank ?? "–"}. ${c.ticker}`}
-            </li>
-          ))}
-        </ol>
+    <div className="live-notices" aria-label="Notices" role="group">
+      {workerProblem && (
+        <p className="live-notice status-bad">
+          <span>{live.worker_stale ? "The worker's heartbeat is stale." : "The worker reports a problem."}</span>{" "}
+          <Link className="link-touch" to="/control">
+            Check Control
+          </Link>
+        </p>
       )}
-    </section>
+      {unprotected.map((p) => (
+        <p key={p.id} className="live-notice status-bad" data-testid={`unprotected-${p.id}`}>
+          <span>{`${p.ticker}: no working stop order`}</span>
+          {p.unprotected_seconds > 0 && <span>{` (unprotected ${fmtDuration(p.unprotected_seconds)})`}</span>}{" "}
+          <Link className="link-touch" to={`/trades?position=${p.id}`}>
+            {`Open ${p.ticker}`}
+          </Link>
+        </p>
+      ))}
+    </div>
   );
 }
 
-function DashboardBody({ data, updatedAt, proposalId }: { data: DashboardOut; updatedAt: number; proposalId: number | null }) {
+function PendingApprovals({
+  live,
+  updatedAt,
+  proposalId,
+  onRetry,
+}: {
+  live: LiveOut;
+  updatedAt: number;
+  proposalId: number | null;
+  onRetry: () => void;
+}) {
   const [decisions, setDecisions] = useState<DecisionOut[]>([]);
-  const skew = updatedAt ? skewFrom(data.server_time, updatedAt) : 0;
-  const pendingIds = new Set(data.pending.map((p) => p.id));
-  const showPanel = proposalId !== null && !pendingIds.has(proposalId);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const pending = live.pending;
+  const skew = updatedAt ? skewFrom(live.server_time, updatedAt) : 0;
+  const pendingIds = new Set((pending ?? []).map((p) => p.id));
+  const showPanel = proposalId !== null && pending !== null && !pendingIds.has(proposalId);
 
-  function remember(result: DecisionOut) {
+  // A Telegram link to a decided proposal: bring its panel into view (a pending card scrolls itself).
+  useEffect(() => {
+    if (showPanel) panelRef.current?.scrollIntoView?.({ block: "start" });
+  }, [showPanel, proposalId]);
+
+  const shown = live.approval_mode === "manual" || pending === null || pending.length > 0 || decisions.length > 0 || showPanel;
+  if (!shown) return null;
+
+  const remember = (result: DecisionOut) =>
     setDecisions((prev) => [result, ...prev.filter((d) => d.proposal.id !== result.proposal.id)]);
-  }
+  const notices = decisions.filter((d) => !pendingIds.has(d.proposal.id));
 
   return (
-    <>
-      <HeaderRow data={data} />
-      <DecisionNotices
-        decisions={decisions.filter((d) => !pendingIds.has(d.proposal.id))}
-        onDismiss={(id) => setDecisions((prev) => prev.filter((d) => d.proposal.id !== id))}
-      />
-      {showPanel && <ProposalPanel id={proposalId} />}
-      <section className="stack" aria-label="Pending approvals">
-        <h2 className="section-title">Pending approvals</h2>
-        {data.pending.length === 0 ? (
-          <Empty>Nothing waiting for approval</Empty>
-        ) : (
-          data.pending.map((p) => (
-            <PendingProposal key={p.id} proposal={p} serverSkewMs={skew} highlighted={p.id === proposalId} onDecided={remember} />
-          ))
-        )}
-      </section>
-      <section className="stack" aria-label="Open positions">
-        <h2 className="section-title">Open positions</h2>
-        {data.positions.length === 0 ? (
-          <Empty>No open positions</Empty>
-        ) : (
-          <div className="grid">
-            {data.positions.map((p) => (
-              <PositionCard key={p.id} position={p} />
-            ))}
+    <div className="stack live-pending">
+      <DecisionNotices decisions={notices} onDismiss={(id) => setDecisions((prev) => prev.filter((d) => d.proposal.id !== id))} />
+      {showPanel && (
+        <div ref={panelRef}>
+          <ProposalPanel id={proposalId} />
+        </div>
+      )}
+      <Panel title="Pending approvals" error={pending === null ? (partError(live, "pending") ?? "Pending proposals not available") : null} onRetry={onRetry}>
+        {pending !== null && (
+          <div className="stack">
+            {!live.telegram_configured && <p className="live-notice status-warn">{TELEGRAM_OFF_NOTICE}</p>}
+            {pending.length === 0 ? (
+              <p className="panel-empty muted">{NOTHING_PENDING}</p>
+            ) : (
+              pending.map((p) => (
+                <PendingProposal key={p.id} proposal={p} serverSkewMs={skew} highlighted={p.id === proposalId} onDecided={remember} />
+              ))
+            )}
           </div>
         )}
-      </section>
-      <PnlTiles pnl={data.pnl} />
-      <div className="grid">
-        <KillSwitchLights switches={data.killswitches} />
-        <section className="card" aria-label="Today">
-          <h2 className="card-title">Today</h2>
-          <Timeline items={data.timeline} />
-        </section>
+      </Panel>
+    </div>
+  );
+}
+
+function LiveBody({
+  live,
+  updatedAt,
+  connected,
+  range,
+  expand,
+  proposalId,
+  onRange,
+  onExpand,
+  onRetry,
+}: {
+  live: LiveOut;
+  updatedAt: number;
+  connected: boolean;
+  range: LiveRange;
+  expand: number[];
+  proposalId: number | null;
+  onRange: (r: LiveRange) => void;
+  onExpand: (ids: number[]) => void;
+  onRetry: () => void;
+}) {
+  const err = (part: string) => partError(live, part);
+  return (
+    <>
+      <TopBar live={live} connected={connected} updatedAt={updatedAt} onRetry={onRetry} />
+      <Notices live={live} />
+      <div className="live-grid-2">
+        <EquityChart equity={live.equity} range={range} onRange={onRange} error={err("equity")} onRetry={onRetry} />
+        <RiskPanel risk={live.risk} error={err("risk")} onRetry={onRetry} />
       </div>
-      <CandidatesSummary data={data} />
-      <section className="card" aria-label="Latest events">
-        <h2 className="card-title">Latest events</h2>
-        <EventList events={data.events} />
-      </section>
+      <PositionsTable
+        positions={live.positions}
+        closedToday={live.closed_today}
+        staleAfterSeconds={live.marks_stale_seconds}
+        expanded={expand}
+        onExpand={onExpand}
+        error={err("positions")}
+        onRetry={onRetry}
+      />
+      <div className="live-grid-2">
+        <ActivityFeed items={live.activity} error={err("activity")} onRetry={onRetry} />
+        <RejectionsPanel rejections={live.rejections} error={err("rejections")} onRetry={onRetry} />
+      </div>
+      <TodayTimeline timeline={live.timeline} session={live.session} error={err("timeline")} onRetry={onRetry} />
+      <PendingApprovals live={live} updatedAt={updatedAt} proposalId={proposalId} onRetry={onRetry} />
     </>
   );
 }
 
 export default function DashboardPage() {
   const api = useApi();
-  const [params] = useSearchParams();
+  const { connected } = useLiveUpdates();
+  const [params, setParams] = useSearchParams();
   const proposalId = parseId(params.get("proposal"));
-  const q = useQuery({ queryKey: qk.dashboard(), queryFn: () => api.dashboard() });
+  const range = parseRange(params.get("range"));
+  const expand = parseExpand(params.get("expand"));
+  const q = liveQuery(range, expand);
+  // The previous answer stays on screen while a new range or expansion loads (no blank page).
+  const live = useQuery({ queryKey: qk.live(q), queryFn: () => api.live(q), placeholderData: keepPreviousData });
+  const retry = () => void live.refetch();
+
+  const setParam = (key: string, value: string | null) => {
+    const next = new URLSearchParams(params);
+    if (value === null) next.delete(key);
+    else next.set(key, value);
+    setParams(next, { replace: true });
+  };
+  const onRange = (r: LiveRange) => setParam("range", r === "run" ? "run" : null);
+  const onExpand = (ids: number[]) => {
+    const kept = parseExpand(ids.join(","));
+    setParam("expand", kept.length > 0 ? kept.join(",") : null);
+  };
 
   return (
-    <main className="page dashboard">
+    <main className="page live-page">
       <h1>Dashboard</h1>
-      {q.isError && <ErrorBox error={q.error} onRetry={() => void q.refetch()} />}
-      {q.data ? (
-        <DashboardBody data={q.data} updatedAt={q.dataUpdatedAt} proposalId={proposalId} />
+      {live.isError && <ErrorBox error={live.error} onRetry={retry} />}
+      {live.data ? (
+        <LiveBody
+          live={live.data}
+          updatedAt={live.dataUpdatedAt}
+          connected={connected}
+          range={range}
+          expand={expand}
+          proposalId={proposalId}
+          onRange={onRange}
+          onExpand={onExpand}
+          onRetry={retry}
+        />
       ) : (
-        q.isPending && <Loading />
+        live.isPending && <Loading />
       )}
     </main>
   );

@@ -1,17 +1,17 @@
-// The Settings page (P4-T15; SPEC §12 Settings): approval mode, kill switches, strategies, runtime settings,
-// Questrade token, Telegram test and account security, each section with an anchor (`/settings#killswitches`
-// is linked from the Dashboard's tripped kill-switch lights).
+// The Settings page (P4-T15; SPEC §12 Settings; live dashboard plan S12, DB-T11): strategies, runtime settings,
+// Questrade token, Telegram test and account security, each section with an anchor. The engine controls
+// (approval mode and kill switches) moved to the Control page (open question 6); a one-line card links there.
 import { useEffect } from "react";
-import { useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 import { Card } from "../components/ui";
-import { ApprovalMode } from "./settings/ApprovalMode";
-import { KillSwitchPanel } from "./settings/KillSwitchPanel";
 import { QuestradeToken } from "./settings/QuestradeToken";
 import { Security } from "./settings/Security";
 import { SettingsGroups } from "./settings/SettingsGroups";
 import { StrategyForms } from "./settings/StrategyForms";
 import { TelegramTest } from "./settings/TelegramTest";
+
+export const ENGINE_MOVED_TITLE = "Engine controls moved";
 
 export default function SettingsPage() {
   const { hash } = useLocation();
@@ -25,11 +25,13 @@ export default function SettingsPage() {
   return (
     <main className="page stack">
       <h1>Settings</h1>
-      <Card id="approval" title="Approval mode">
-        <ApprovalMode />
-      </Card>
-      <Card id="killswitches" title="Kill switches">
-        <KillSwitchPanel />
+      <Card id="engine" title={ENGINE_MOVED_TITLE}>
+        <p className="small">
+          Approval mode, pause and resume, and the kill switches are on the{" "}
+          <Link className="link-touch" to="/control">
+            Control page
+          </Link>
+        </p>
       </Card>
       <Card id="strategies" title="Strategies">
         <StrategyForms />

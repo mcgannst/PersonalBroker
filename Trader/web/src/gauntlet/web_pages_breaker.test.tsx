@@ -1,5 +1,8 @@
 // P4 web gauntlet, attempt 1 (Breaker): tests aimed at the weak points of the web pages (P4-T2, T13, T14, T15,
 // T16) and the web shell (P4-T12). FakeApiClient, fixtures and a mocked `fetch` only: no network.
+// DB-T11 (plan S13): the cases that rendered the old Dashboard/System pages, PnlTiles and PositionCard now render
+// the new Dashboard (GET /api/live) and Control (GET /api/control) pages and components, with the same tagged
+// fields, empty states, error boxes, `?proposal=` handling and 390 px checks; nav names follow S12.
 import type { QueryClient } from "@tanstack/react-query";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -16,14 +19,13 @@ import { qk } from "../api/queryKeys";
 import type {
   CandidateOut,
   CatalystOut,
-  DashboardOut,
+  ControlOut,
   DecisionOut,
   KillSwitchesOut,
-  PnlOut,
+  LiveOut,
   PositionDetailOut,
   SessionPhase,
   SettingOut,
-  SystemOut,
   TokenOut,
   WorkerOut,
 } from "../api/types";
@@ -31,12 +33,14 @@ import { ErrorBox } from "../components/ui";
 import { notifyUnauthorized } from "../layout/AuthContext";
 import { safeNext } from "../layout/safeNext";
 import { fmtDateTime, fmtMoney, fmtPct, fmtPrice, fmtR, fmtTime } from "../lib/format";
-import { DISCONNECTED_REFETCH_MS, LiveUpdatesProvider, REOPEN_DELAY_MS, type EventSourceLike } from "../live/useLiveUpdates";
+import { DISCONNECTED_REFETCH_MS, LIVE_THROTTLE_MS, LiveUpdatesProvider, REOPEN_DELAY_MS, type EventSourceLike } from "../live/useLiveUpdates";
 import CandidatesPage from "../pages/Candidates";
+import ControlPage from "../pages/Control";
 import DashboardPage from "../pages/Dashboard";
 import PendingProposal from "../pages/dashboard/PendingProposal";
-import PnlTiles from "../pages/dashboard/PnlTiles";
-import PositionCard from "../pages/dashboard/PositionCard";
+import { PositionRow } from "../pages/live/PositionRow";
+import { RiskPanel } from "../pages/live/RiskPanel";
+import { TopBar } from "../pages/live/TopBar";
 import JournalPage from "../pages/Journal";
 import PerformancePage from "../pages/Performance";
 import ReportsPage from "../pages/Reports";
@@ -45,10 +49,10 @@ import { ApprovalMode } from "../pages/settings/ApprovalMode";
 import { KillSwitchPanel } from "../pages/settings/KillSwitchPanel";
 import { QuestradeToken } from "../pages/settings/QuestradeToken";
 import { Security } from "../pages/settings/Security";
-import SystemPage from "../pages/System";
 import TradesPage from "../pages/Trades";
 import { FakeApiClient, type FakeResponses } from "../test/fakeApi";
 import * as fx from "../test/fixtures";
+import * as lfx from "../test/liveFixtures";
 import { createTestQueryClient, renderWithProviders } from "../test/render";
 
 // ---------------------------------------------------------------- helpers
@@ -180,23 +184,30 @@ afterEach(() => {
 // ================================================================ pages (P4-T13 to P4-T16)
 
 describe("XSS: every server string renders as text", () => {
-  it("Dashboard: reasons, strategy names, events, kill-switch text, timeline, decision messages and error boxes", async () => {
-    const dash: DashboardOut = {
-      ...fx.dashboardOut,
+  it("Dashboard: reasons, strategy names, activity (was: events), kill-switch text, timeline, rejections (was: candidates), decision messages and error boxes", async () => {
+    // DB-T11: the new Dashboard (GET /api/live); each old tagged field moved to its equivalent in LiveOut.
+    const base = lfx.liveOut;
+    const live: LiveOut = lfx.liveWith({
       telegram_configured: false,
-      session: { ...fx.dashboardOut.session, phase: tagged("phase") as SessionPhase },
+      session: { ...base.session, phase: tagged("phase") as SessionPhase },
       timeline: [{ ...fx.timeline[0]!, label: tagged("timeline"), detail: tagged("detail") }],
       pending: [{ ...fx.pendingProposal, reason: tagged("reason"), strategy_key: tagged("strategy"), order_type: tagged("ordertype") }],
-      positions: [{ ...fx.openPosition, ticker: tagged("ticker"), strategy_key: tagged("pos-strategy") }],
-      killswitches: [{ ...fx.killswitchDrawdownTripped, label: tagged("ks-label"), clears: tagged("clears") }],
-      events: [{ ...fx.events[0]!, level: tagged("level"), source: tagged("source"), message: tagged("event") }],
-      candidates_top: [{ ...fx.candidatesRanking[0]!, ticker: tagged("cand") }],
-    };
-    const api = new FakeApiClient({ dashboard: dash, approve: { ...fx.decisionOut, message: tagged("decision") } });
-    renderWithProviders(<DashboardPage />, { api, route: "/dashboard" });
+      positions: [{ ...lfx.livePosition, ticker: tagged("ticker"), strategy_key: tagged("pos-strategy") }],
+      risk: {
+        ...lfx.riskOut,
+        killswitches: [{ ...lfx.killswitchLights[1]!, tripped: true, tripped_at: fx.SERVER_TIME, label: tagged("ks-label"), clears: tagged("clears") }],
+      },
+      // an activity item is one plain-text line (the API folds an event's level and source into it)
+      activity: [{ ...lfx.activity[0]!, text: `${tagged("level")} ${tagged("source")}: ${tagged("event")}` }],
+      rejections: { ...lfx.rejections, rules: [{ ...lfx.rejections.rules[0]!, rule: tagged("rule"), tickers: [tagged("cand")] }] },
+    });
+    const api = new FakeApiClient({ live, approve: { ...fx.decisionOut, message: tagged("decision") } });
+    renderWithProviders(<DashboardPage />, { api, route: `/dashboard?expand=${lfx.livePosition.id}` });
     await screen.findByText(tagged("reason"));
-    for (const label of ["phase", "timeline", "detail", "strategy", "ordertype", "ticker", "pos-strategy", "ks-label", "clears", "level", "source", "event", "cand"]) {
-      expect(bodyText()).toContain(tagged(label));
+    // the rejection rule's tickers show on a tap
+    fireEvent.click(within(screen.getByRole("list", { name: "Rejection rules" })).getAllByRole("button")[0]!);
+    for (const label of ["phase", "timeline", "detail", "strategy", "ordertype", "ticker", "pos-strategy", "ks-label", "clears", "level", "source", "event", "rule", "cand"]) {
+      expect(bodyText(), label).toContain(tagged(label));
     }
     expectInert();
 
@@ -205,9 +216,17 @@ describe("XSS: every server string renders as text", () => {
     expectInert();
 
     cleanup();
-    const failing = new FakeApiClient().fail("dashboard", new ApiError(500, "internal", tagged("boom")));
+    const failing = new FakeApiClient().fail("live", new ApiError(500, "internal", tagged("boom")));
     renderWithProviders(<DashboardPage />, { api: failing, route: "/dashboard" });
     expect(await screen.findByRole("alert")).toHaveTextContent(tagged("boom"));
+    expectInert();
+
+    // and the fixtures' own XSS variant of every free-text field
+    cleanup();
+    const xss = lfx.withXssText().live;
+    renderWithProviders(<DashboardPage />, { api: new FakeApiClient({ live: xss }), route: "/dashboard" });
+    await screen.findByRole("region", { name: "Session" });
+    expect(bodyText()).toContain(lfx.XSS);
     expectInert();
   });
 
@@ -267,16 +286,20 @@ describe("XSS: every server string renders as text", () => {
       switches: [{ ...fx.killswitchDrawdownTripped, label: tagged("ks"), clears: tagged("ks-clears") }],
       history: [{ ...fx.killswitchEvents[0]!, reset_reason: tagged("reset-reason"), reset_by: tagged("reset-by") }],
     };
-    const system: SystemOut = {
-      ...fx.systemOut,
-      version: tagged("version"),
-      token: { ...fx.tokenOut, ok: false, error: tagged("token-error") },
-      worker: { ...fx.workerOut, phase: tagged("worker-phase"), host: tagged("host") },
-      rate_limit: { [tagged("rate")]: 3 },
-      last_runs: [{ ...fx.jobRuns[3]!, job: tagged("job"), error: tagged("job-error") }],
+    // DB-T11: the System page merged into Control; each old tagged field moved to its ControlOut equivalent
+    // (version -> engine, token/worker/rate limits/failed sends -> health, job runs -> the schedule, errors).
+    const control: ControlOut = lfx.controlWith({
+      engine: { ...lfx.engineOut, version: tagged("version") },
+      health: {
+        ...lfx.healthPanel,
+        token: { ...fx.tokenOut, ok: false, error: tagged("token-error") },
+        worker: { ...fx.workerOut, phase: tagged("worker-phase"), host: tagged("host") },
+        questrade: { ...lfx.healthPanel.questrade!, rate_limit: { [tagged("rate")]: 3 } },
+        notifications_failed: [{ ...fx.notificationsFailed[0]!, kind: tagged("kind"), error: tagged("send-error") }],
+      },
+      schedule: [{ ...lfx.schedule[1]!, status: "failed", label: tagged("job"), detail: tagged("job-error") }],
       errors: [{ ...fx.errorEvents[0]!, message: tagged("error-event") }],
-      notifications_failed: [{ ...fx.notificationsFailed[0]!, kind: tagged("kind"), error: tagged("send-error") }],
-    };
+    });
     const api = new FakeApiClient({
       position: detail,
       trades: { items: [{ ...fx.trade, ticker: tagged("trade-ticker"), exit_reason: tagged("trade-exit") }] },
@@ -286,7 +309,7 @@ describe("XSS: every server string renders as text", () => {
       killswitches,
       me: { ...fx.sessionOut, user: { username: tagged("user"), totp_enabled: false } },
       telegramTest: { sent: false, message: tagged("tg") },
-      system,
+      control,
       events: { items: [{ ...fx.events[0]!, message: tagged("log-event"), source: tagged("log-source") }] },
       watchlist: { ...fx.watchlistOut, filename: tagged("file"), uploaded_by: tagged("uploader"), tickers: [tagged("tick")] },
     });
@@ -296,16 +319,34 @@ describe("XSS: every server string renders as text", () => {
       [<TradesPage />, "/trades", ["trade-ticker", "trade-exit"]],
       [<JournalPage />, "/journal", ["note0", "via0", "note1"]],
       [<ReportsPage />, "/reports?week=2026-10-09", ["note0", "trade-exit"]],
-      [<SettingsPage />, "/settings", ["strategy-key", "strat-by", "ks", "ks-clears", "reset-reason", "reset-by", "user", "updated-by", "desc-risk_pct", "title-risk_pct"]],
-      [<SystemPage />, "/system", ["version", "token-error", "worker-phase", "host", "rate", "job", "job-error", "error-event", "kind", "send-error", "log-event", "log-source", "file", "uploader", "tick"]],
+      // DB-T11: the kill switches (ks, ks-clears, reset-reason, reset-by) moved from Settings to Control.
+      [<SettingsPage />, "/settings", ["strategy-key", "strat-by", "user", "updated-by", "desc-risk_pct", "title-risk_pct"]],
+      [
+        <ControlPage />,
+        "/control",
+        ["version", "token-error", "worker-phase", "host", "rate", "job", "job-error", "error-event", "kind", "send-error", "log-event", "log-source", "file", "uploader", "tick", "ks", "ks-clears", "reset-reason", "reset-by"],
+      ],
     ];
     for (const [ui, route, labels] of pages) {
       renderWithProviders(ui, { api, route });
       await settle();
+      // Control keeps the event log behind "Older events" (it was always open on System).
+      if (route === "/control") {
+        fireEvent.click(screen.getByRole("button", { name: "Older events" }));
+        await settle();
+        await screen.findByText(tagged("log-event"));
+      }
       for (const label of labels) expect(bodyText(), `${route} shows ${label}`).toContain(tagged(label));
       expectInert();
       cleanup();
     }
+
+    // Control with the fixtures' own XSS variant of every free-text field.
+    renderWithProviders(<ControlPage />, { api: new FakeApiClient({ control: lfx.withXssText().control }), route: "/control" });
+    await screen.findByRole("region", { name: "Health" });
+    expect(bodyText()).toContain(lfx.XSS);
+    expectInert();
+    cleanup();
 
     // The Telegram test message and a server error message (Settings) are text too.
     renderWithProviders(<SettingsPage />, { api, route: "/settings" });
@@ -419,10 +460,10 @@ describe("decisions", () => {
   it("an approval blocked by the kill switch keeps showing the reason after the dashboard refetches", async () => {
     const api = new FakeApiClient({ approve: fx.decisionBlocked });
     let reads = 0;
-    api.respond("dashboard", () => (reads++ === 0 ? fx.dashboardOut : { ...fx.dashboardOut, pending: [] }));
+    api.respond("live", () => lfx.liveWith({ pending: reads++ === 0 ? [fx.pendingProposal] : [] }));
     renderWithProviders(<DashboardPage />, { api, route: "/dashboard" });
     fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
-    await waitFor(() => expect(api.callsTo("dashboard").length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(api.callsTo("live").length).toBeGreaterThanOrEqual(2));
     await waitFor(() => expect(screen.queryByRole("article", { name: /proposal 12/i })).toBeNull());
     const notices = screen.getByRole("list", { name: "Decisions" });
     expect(notices).toHaveTextContent("AAA ENTRY: Entry blocked: kill switch manual_pause is tripped");
@@ -600,26 +641,26 @@ describe("money and times", () => {
     expect(fmtTime("2026-10-06T07:35:05-06:00")).toBe("07:35 MT");
     expect(fmtTime("not a time")).toBe("n/a");
 
-    render(
-      <PnlTiles
-        pnl={{
-          ...fx.pnlOut,
-          realized_today: "-98765432109876.5449",
-          equity: "12345678901234567.8950",
-          peak_equity: "12345678901234567.8950",
-          drawdown_pct: "0.00005",
-        } satisfies PnlOut}
-      />,
+    // DB-T11: the P&L tiles and position cards became the TopBar and the positions table (and the risk panel).
+    const periods = lfx.periods.map((p) =>
+      p.period === "today"
+        ? { ...p, pnl_after_fees: "-98765432109876.5449" }
+        : p.period === "run"
+          ? { ...p, pnl_after_fees: "12345678901234567.8950" }
+          : p,
     );
-    expect(screen.getByText("-$98,765,432,109,876.54")).toBeInTheDocument();
-    expect(screen.getByText("$12,345,678,901,234,567.90")).toBeInTheDocument();
-    expect(screen.getByText("0.01%")).toBeInTheDocument();
+    render(<TopBar live={lfx.liveWith({ periods })} connected updatedAt={Date.parse(fx.SERVER_TIME)} nowMs={Date.parse(fx.SERVER_TIME)} />);
+    expect(screen.getByTestId("topbar-period-today")).toHaveTextContent("-$98,765,432,109,876.54");
+    expect(screen.getByTestId("topbar-period-run")).toHaveTextContent("$12,345,678,901,234,567.90");
+    cleanup();
+    render(<RiskPanel risk={{ ...lfx.riskOut, open_risk: "12345678901234567.8950", open_risk_cap: null }} />);
+    expect(screen.getByTestId("open-risk")).toHaveTextContent("$12,345,678,901,234,567.90");
     cleanup();
 
-    renderWithProviders(<PositionCard position={{ ...fx.openPosition, entry: "123456789.1234", last: "0.0001", unrealized_pnl: "-0.0050" }} />);
-    expect(screen.getByText("Entry 123456789.1234")).toBeInTheDocument();
-    expect(screen.getByText("Last 0.0001")).toBeInTheDocument();
-    expect(screen.getByText("-$0.01")).toBeInTheDocument();
+    const p = { ...lfx.livePosition, entry: "123456789.1234", mark: "0.0001", unrealized: "-0.0050" };
+    renderWithProviders(<PositionRow p={p} expanded onToggle={() => undefined} />);
+    expect(screen.getByText("123456789.1234 → 0.0001")).toBeInTheDocument();
+    expect(screen.getAllByText("-$0.01").length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -648,20 +689,38 @@ describe("empty and null data", () => {
     };
     const nullCandidate: CandidateOut = { ...fx.candidatesRanking[2]!, rvol: null, rank: null, reject_reason: null, candle: null, data: null };
     const empties: Partial<FakeResponses> = {
-      dashboard: {
-        ...fx.dashboardOut,
-        session: { ...fx.dashboardOut.session, phase: "closed_day", is_session: false, open_at: null, close_at: null },
-        timeline: [],
-        pending: [],
-        positions: [],
-        killswitches: [],
-        events: [],
-        candidates_top: [],
-        candidates_count: 0,
-        pnl: { ...fx.pnlOut, unrealized: null },
-        token: nullToken,
+      // DB-T11: the Dashboard reads /api/live (the empty day, with null worker fields and no kill switches) and
+      // the System page's contents are on Control (every list empty, every optional part null).
+      live: lfx.liveWith({
+        ...lfx.liveEmptyDay,
         worker: nullWorker,
-      },
+        risk: { ...lfx.liveEmptyDay.risk!, killswitches: [], open_risk_cap: null },
+        periods: lfx.liveEmptyDay.periods!.map((p) => ({ ...p, unrealized: null, win_rate: null, expectancy_r: null })),
+        claude_today: null,
+        books: null,
+        equity: null,
+      }),
+      control: lfx.controlWith({
+        manual_jobs: [],
+        killswitches: [],
+        killswitch_history: [],
+        strategies: [],
+        schedule: [],
+        errors: [],
+        engine: { ...lfx.engineOut, alembic_revision: null },
+        health: {
+          ...lfx.healthPanel,
+          token: nullToken,
+          worker: nullWorker,
+          db_latency_ms: null,
+          questrade: null,
+          opening_bars: null,
+          marks: null,
+          notifications_failed: [],
+          tz_iana_version: null,
+        },
+        soak: null,
+      }),
       candidates: { session_date: fx.SESSION_DATE, brief: null, catalysts: [nullCatalyst], ranking: [nullCandidate] },
       trades: { items: [] },
       position: emptyDetail,
@@ -687,7 +746,8 @@ describe("empty and null data", () => {
       watchlist: null,
     };
     const pages: [ReactElement, string, string[]][] = [
-      [<DashboardPage />, "/dashboard", ["Nothing waiting for approval", "No open positions", "No events yet", "No schedule for this day"]],
+      [<DashboardPage />, "/dashboard", ["Nothing waiting for approval", "No open positions", "No activity yet today", "Market closed today; next session", "No rejections recorded today"]],
+      [<DashboardPage />, "/dashboard?range=run", ["Nothing waiting for approval", "No open positions"]],
       [<CandidatesPage />, "/candidates", ["No brief for this session", "Quality n/a", "Gap n/a"]],
       [<TradesPage />, "/trades", ["No trades yet"]],
       [<TradesPage />, "/trades?position=3", ["Chart unavailable", "No signal recorded.", "No proposals.", "No orders.", "No fills."]],
@@ -695,16 +755,31 @@ describe("empty and null data", () => {
       [<JournalPage />, "/journal", ["No session days yet."]],
       [<JournalPage />, "/journal?date=2026-10-06", ["Journal for 2026-10-06"]],
       [<ReportsPage />, "/reports?week=2026-10-09", ["No trades yet", "No trades this week."]],
-      [<SettingsPage />, "/settings", ["Approval mode", "Kill switches"]],
-      [<SystemPage />, "/system", ["not reported yet", "No job runs.", "No errors.", "No failed sends.", "No events.", "No uploaded watchlist"]],
+      [<SettingsPage />, "/settings", ["Engine controls moved", "Strategies"]],
+      [
+        <ControlPage />,
+        "/control",
+        ["Approval mode", "Kill switches", "Not reported by the worker today.", "Marks: not reported by the worker.", "Nothing scheduled.", "No warnings or errors", "No failed sends.", "No events.", "No uploaded watchlist", "No strategies configured."],
+      ],
     ];
     for (const [ui, route, texts] of pages) {
       renderWithProviders(ui, { api: new FakeApiClient(empties), route });
       await settle();
+      if (route === "/control") {
+        fireEvent.click(screen.getByRole("button", { name: "Older events" }));
+        await settle();
+        await screen.findByText("No events.");
+      }
       for (const t of texts) expect(bodyText(), `${route} shows "${t}"`).toContain(t);
       expect(bodyText(), `${route} shows no generic error`).not.toContain("Something went wrong");
       cleanup();
     }
+
+    // A session day with an empty schedule still says so (the old Dashboard's "No schedule for this day").
+    renderWithProviders(<DashboardPage />, { api: new FakeApiClient({ live: lfx.liveWith({ timeline: [], activity: [], positions: [] }) }), route: "/dashboard" });
+    await settle();
+    expect(bodyText()).toContain("No schedule for this day");
+    expect(bodyText()).not.toContain("Something went wrong");
   });
 });
 
@@ -716,15 +791,29 @@ describe("long lists and a 390 px phone", () => {
     const manyTimeline = Array.from({ length: 300 }, (_, i) => ({ ...fx.timeline[5]!, key: `k${i}`, label: `item ${i}` }));
     const manyRanking = Array.from({ length: 1000 }, (_, i) => ({ ...fx.candidatesRanking[1]!, id: 5000 + i, rank: 1000 - i, ticker: `T${1000 - i}` }));
     const fiftyTrades = Array.from({ length: 50 }, (_, i) => ({ ...fx.trade, id: 100 + i, position_id: 200 + i }));
+    // DB-T11: the Dashboard's long lists are the activity feed (the API sends at most 100), 20 positions (the
+    // D2 maximum) and the timeline; Control's are the schedule and the error log (200 rows).
+    const manyActivity = Array.from({ length: 100 }, (_, i) => ({ ...lfx.activity[0]!, id: `event_log:${i}`, text: `event ${i}` }));
     const api = new FakeApiClient({
-      dashboard: { ...fx.dashboardOut, events: manyEvents, timeline: manyTimeline, positions: [fx.openPosition, fx.unprotectedPosition] },
+      live: lfx.liveWith({
+        activity: manyActivity,
+        timeline: manyTimeline,
+        positions: lfx.positionsN(20, { staleMarks: true }),
+        pending: [fx.pendingProposal],
+        worker_stale: true,
+      }),
       candidates: { ...fx.candidatesOut, ranking: manyRanking },
       trades: { items: fiftyTrades },
       events: { items: manyEvents.slice(0, 200) },
-      system: { ...fx.systemOut, last_runs: Array.from({ length: 300 }, (_, i) => ({ ...fx.jobRuns[0]!, id: i + 1 })) },
+      control: lfx.controlWith({
+        schedule: Array.from({ length: 300 }, (_, i) => ({ ...lfx.schedule[0]!, key: `job${i}`, label: `job ${i}` })),
+        errors: Array.from({ length: 200 }, (_, i) => ({ ...fx.errorEvents[0]!, id: 20_000 + i, message: `error ${i}` })),
+      }),
     });
     const pages: [ReactElement, string][] = [
       [<DashboardPage />, "/dashboard"],
+      [<DashboardPage />, "/dashboard?range=run&expand=100,101,102&proposal=11"],
+      [<ControlPage />, "/control"],
       [<CandidatesPage />, "/candidates"],
       [<TradesPage />, "/trades"],
       [<TradesPage />, "/trades?position=3"],
@@ -732,7 +821,6 @@ describe("long lists and a 390 px phone", () => {
       [<JournalPage />, "/journal?date=2026-10-05"],
       [<ReportsPage />, "/reports?week=2026-10-09"],
       [<SettingsPage />, "/settings"],
-      [<SystemPage />, "/system"],
     ];
     for (const [ui, route] of pages) {
       renderWithProviders(ui, { api, route });
@@ -763,8 +851,12 @@ describe("long lists and a 390 px phone", () => {
         expect((a.textContent ?? "").trim() || a.getAttribute("aria-label"), `${route}: a link without a name`).toBeTruthy();
       }
       if (route === "/dashboard") {
-        expect(within(screen.getByRole("list", { name: "Events" })).getAllByRole("listitem")).toHaveLength(20);
+        expect(within(screen.getByRole("list", { name: "Activity items" })).getAllByRole("listitem")).toHaveLength(100);
         expect(within(screen.getByRole("list", { name: "Timeline" })).getAllByRole("listitem")).toHaveLength(300);
+        expect(within(screen.getByRole("list", { name: "Open positions" })).getAllByRole("listitem").filter((li) => li.classList.contains("pos-row"))).toHaveLength(20);
+      }
+      if (route === "/control") {
+        expect(within(screen.getByRole("list", { name: "Warnings and errors" })).getAllByRole("listitem")).toHaveLength(200);
       }
       if (route === "/candidates") {
         const rows = within(screen.getByRole("table", { name: "Ranking" })).getAllByRole("row").slice(1);
@@ -1012,13 +1104,14 @@ describe("login redirect and deep links (T12)", () => {
         return json({ ...fx.sessionOut, csrf_token: "csrf-after-login" });
       }
       if (path === "/api/meta") return json(fx.metaOut);
-      if (path === "/api/dashboard") {
+      if (path === "/api/live") {
+        // DB-T11: the Dashboard reads /api/live (was /api/dashboard)
         dashboardReads += 1;
         if (dashboardReads === 1) {
           loggedIn = false;
           return errorResponse(401, "unauthorized", "Please log in");
         }
-        return json(fx.dashboardOut);
+        return json(lfx.liveWith({ pending: [fx.pendingProposal] }));
       }
       if (path === "/api/proposals/12/approve") {
         return headerOf(init, "X-CSRF-Token") === "csrf-after-login" ? json(fx.decisionOut) : errorResponse(403, "csrf", "CSRF");
@@ -1071,9 +1164,14 @@ describe("login redirect and deep links (T12)", () => {
 });
 
 describe("live updates (T12)", () => {
+  // DB-T11: the Dashboard's query is `qk.live` (under the `dashboard` prefix); Control's is `qk.control`.
   function DashboardProbe() {
-    const q = useQuery({ queryKey: qk.dashboard(), queryFn: () => apiRef.current!.dashboard() });
+    const q = useQuery({ queryKey: qk.live({ range: "today" }), queryFn: () => apiRef.current!.live({ range: "today" }) });
     return createElement("p", null, q.data ? "loaded" : "loading");
+  }
+  function ControlProbe() {
+    const q = useQuery({ queryKey: qk.control(), queryFn: () => apiRef.current!.control() });
+    return createElement("p", null, q.data ? "control loaded" : "control loading");
   }
   const apiRef: { current: FakeApiClient | null } = { current: null };
 
@@ -1097,11 +1195,11 @@ describe("live updates (T12)", () => {
     const r = renderWithProviders(<AppRoutes />, { route: "/dashboard" });
     await screen.findByRole("heading", { name: "Dashboard" });
     const tabs = screen.getByRole("navigation", { name: "Tabs" });
-    for (const name of ["Candidates", "Trades", "Journal", "Dashboard"]) {
+    for (const name of ["Control", "Reports", "Dashboard"]) {
       fireEvent.click(within(tabs).getByRole("link", { name }));
       await screen.findByRole("heading", { level: 1, name });
     }
-    for (const name of ["Performance", "Reports", "Settings", "System"]) {
+    for (const name of ["Replay", "Settings", "Trades", "Candidates", "Performance", "Journal"]) {
       fireEvent.click(within(tabs).getByRole("button", { name: "More" }));
       fireEvent.click(screen.getByRole("menuitem", { name }));
       await screen.findByRole("heading", { level: 1, name });
@@ -1117,11 +1215,17 @@ describe("live updates (T12)", () => {
   });
 
   it("invalidates exactly the topic's queries and ignores unknown, prototype and malformed topics", () => {
+    // DB-T11: `dashboard` and `system` invalidations are throttled (one per LIVE_THROTTLE_MS), so each case
+    // starts after the previous case's window has closed; within a case the first one is immediate as before.
+    vi.useFakeTimers();
     const queryClient = createTestQueryClient();
     mount(new FakeApiClient(), queryClient);
     const es = FakeEventSource.instances[0]!;
     const keys = [qk.dashboard(), qk.killswitches(), qk.trades({}), qk.settings(), qk.events({}), qk.system(), qk.journal({}), qk.proposal(3)];
     const seed = () => {
+      act(() => {
+        vi.advanceTimersByTime(LIVE_THROTTLE_MS);
+      });
       for (const k of keys) queryClient.setQueryData(k, { seeded: true });
     };
     const invalidated = () =>
@@ -1150,45 +1254,59 @@ describe("live updates (T12)", () => {
     seed();
     act(() => es.emit("invalidate", { topics: ["journal", "bogus"] }));
     expect(invalidated()).toEqual(["journal"]);
+
+    // DB-T11: the new topics refresh the dashboard (and nothing else)
+    seed();
+    act(() => es.emit("invalidate", { topics: ["marks"] }));
+    expect(invalidated()).toEqual(["dashboard"]);
+    seed();
+    act(() => es.emit("invalidate", { topics: ["activity"] }));
+    expect(invalidated()).toEqual(["dashboard"]);
   });
 
-  it("while disconnected the dashboard polls every 15 s; hello stops it; losing the stream refetches once and polls again", async () => {
-    vi.useFakeTimers();
-    const api = new FakeApiClient();
-    const queryClient = createTestQueryClient();
-    mount(api, queryClient, vi.fn(), <DashboardProbe />);
-    const es = FakeEventSource.instances[0]!;
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(10);
-    });
-    const reads = () => api.callsTo("dashboard").length;
-    expect(reads()).toBe(1);
+  it.each([
+    ["dashboard (live)", "live", () => <DashboardProbe />],
+    ["control", "control", () => <ControlProbe />],
+  ] as const)(
+    "while disconnected the %s query polls every 15 s; hello stops it; losing the stream refetches once and polls again",
+    async (_name, method, probe) => {
+      vi.useFakeTimers();
+      const api = new FakeApiClient();
+      const queryClient = createTestQueryClient();
+      mount(api, queryClient, vi.fn(), probe());
+      const es = FakeEventSource.instances[0]!;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10);
+      });
+      const reads = () => api.callsTo(method).length;
+      expect(reads()).toBe(1);
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(DISCONNECTED_REFETCH_MS);
-    });
-    expect(reads()).toBe(2);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(DISCONNECTED_REFETCH_MS);
-    });
-    expect(reads()).toBe(3);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DISCONNECTED_REFETCH_MS);
+      });
+      expect(reads()).toBe(2);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DISCONNECTED_REFETCH_MS);
+      });
+      expect(reads()).toBe(3);
 
-    act(() => es.emit("hello", { server_time: fx.SERVER_TIME }));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(4 * DISCONNECTED_REFETCH_MS);
-    });
-    expect(reads()).toBe(3);
+      act(() => es.emit("hello", { server_time: fx.SERVER_TIME }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4 * DISCONNECTED_REFETCH_MS);
+      });
+      expect(reads()).toBe(3);
 
-    act(() => es.fail(0));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(10);
-    });
-    expect(reads()).toBe(4);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(DISCONNECTED_REFETCH_MS);
-    });
-    expect(reads()).toBe(5);
-  });
+      act(() => es.fail(0));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10);
+      });
+      expect(reads()).toBe(4);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DISCONNECTED_REFETCH_MS);
+      });
+      expect(reads()).toBe(5);
+    },
+  );
 
   it("errors: a reconnecting stream is left to the browser; a closed one asks /auth/me and reopens ONE stream, or logs out on 401", async () => {
     vi.useFakeTimers();
@@ -1228,36 +1346,43 @@ describe("live updates (T12)", () => {
 });
 
 describe("phone tab bar (T12)", () => {
-  it("five tabs (four pages and More), More reaches the other four and closes on navigation and Escape; the CSS makes it a fixed 5-column bar of 44 px targets below 720 px", async () => {
+  it("four tabs (three pages and More, S12), More reaches the other six and closes on navigation and Escape; the CSS makes it a fixed 4-column bar of 44 px targets below 720 px", async () => {
     const r = renderWithProviders(<AppRoutes />, { route: "/dashboard" });
     await screen.findByRole("heading", { name: "Dashboard" });
     const tabs = screen.getByRole("navigation", { name: "Tabs" });
     const items = Array.from(tabs.children).map((el) => (el.textContent ?? "").trim());
-    expect(items).toEqual(["Dashboard", "Candidates", "Trades", "Journal", "More"]);
+    expect(items).toEqual(["Dashboard", "Control", "Reports", "More"]);
 
     const more = within(tabs).getByRole("button", { name: "More" });
     expect(more).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(more);
     expect(more).toHaveAttribute("aria-expanded", "true");
-    expect(within(screen.getByRole("menu")).getAllByRole("menuitem").map((a) => a.textContent)).toEqual(["Performance", "Reports", "Replay", "Settings", "System"]); // Replay: P5-T1
+    expect(within(screen.getByRole("menu")).getAllByRole("menuitem").map((a) => a.textContent)).toEqual([
+      "Replay",
+      "Settings",
+      "Trades",
+      "Candidates",
+      "Performance",
+      "Journal",
+    ]);
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
 
     fireEvent.click(more);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Reports" }));
-    await screen.findByRole("heading", { level: 1, name: "Reports" });
-    expect(r.location().pathname).toBe("/reports");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }));
+    await screen.findByRole("heading", { level: 1, name: "Settings" });
+    expect(r.location().pathname).toBe("/settings");
     expect(screen.queryByRole("menu")).toBeNull();
     expect(within(tabs).getByRole("button", { name: "More" })).toHaveClass("is-active");
 
     // Vitest turns CSS imports into empty modules, so the stylesheets are read from disk.
     const layoutCss = readWebFile("src/layout/layout.css");
-    const stylesCss = readWebFile("src/styles.css");
+    const tokensCss = readWebFile("src/theme/tokens.css");
     const phone = /@media \(max-width: 719px\) \{([\s\S]*?)\n\}/.exec(layoutCss)?.[1] ?? "";
     expect(phone).toMatch(/\.side-nav\s*\{[^}]*display:\s*none/);
-    expect(phone).toMatch(/\.tab-bar\s*\{[^}]*position:\s*fixed[^}]*grid-template-columns:\s*repeat\(5,/);
+    expect(phone).toMatch(/\.tab-bar\s*\{[^}]*position:\s*fixed[^}]*grid-template-columns:\s*repeat\(4,/);
     expect(phone).toMatch(/\.shell-main\s*\{[^}]*padding-bottom:[^}]*var\(--touch\)/);
     expect(layoutCss).toMatch(/\.nav-link\s*\{[^}]*min-height:\s*var\(--touch\)/);
-    expect(stylesCss).toMatch(/--touch:\s*44px/);
+    expect(tokensCss).toMatch(/--touch:\s*44px/);
   });
 });

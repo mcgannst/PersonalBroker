@@ -1,14 +1,57 @@
-// The end-to-end smoke (P4-T19, SPEC §16). Two modes, chosen by SMOKE_MODE:
-// - local: the throwaway stack from docker/smoke.sh, seeded by tests.e2e.seed_smoke. Log in, the dashboard
-//   shows the pending AAA entry, tap Approve, the card reports "Approved" and leaves the pending list, open the
-//   seeded position's chain at /trades?position=<id>, /system renders, log out.
-// - live: trader-dev, READ-ONLY. Log in, the dashboard renders with its session phase, every page renders
-//   without an error box (the Replay page included, and a finished replay's comparison when SMOKE_REPLAY_ID
-//   names one), log out. It never clicks Approve, Reject, Save, Run, New replay or Cancel.
+// The end-to-end smoke (P4-T19, SPEC §16; live dashboard plan DB-T11). Two modes, chosen by SMOKE_MODE:
+// - local: the throwaway stack from docker/smoke.sh, seeded by tests.e2e.seed_smoke. Log in, the Dashboard's
+//   "Pending approvals" shows the pending AAA entry, tap Approve, the card reports "Approved" and leaves the
+//   pending list, open the seeded position's chain at /trades?position=<id>, /control renders (heading
+//   "Control"), /system redirects to /control, log out.
+// - live: trader-dev, READ-ONLY. Log in, the Dashboard renders with its session phase, every page renders
+//   without an error box (Control and the Replay page included, and a finished replay's comparison when
+//   SMOKE_REPLAY_ID names one); then GET /api/live once to warm up and 5 times more through the page's own
+//   (logged-in) request context, reading each response's `Server-Timing` `app;dur`: the median must be under
+//   300 ms (plan S14; the five values and the median are logged, nothing else of the requests); log out. It
+//   never clicks Approve, Reject, Save, Run, Pause, Resume, Reset, New replay or Cancel.
 // Both modes check at 390 px that no page scrolls sideways.
 // Credentials come only from the environment (never printed, never typed into a recorded trace in live mode):
 // SMOKE_USER/SMOKE_PASSWORD, else TRADER_WEB_USER/TRADER_WEB_PASSWORD, else ADMIN_USERNAME/ADMIN_PASSWORD_INITIAL.
 import { expect, test, type Page } from "@playwright/test";
+
+/** The performance budget of GET /api/live (plan S14): the median `app;dur` of 5 warm requests, in ms. */
+export const LIVE_BUDGET_MS = 300;
+const LIVE_SAMPLES = 5;
+
+/** The `app;dur=<ms>` entry of a `Server-Timing` header, or null. */
+export function appDuration(header: string | null | undefined): number | null {
+  if (!header) return null;
+  for (const entry of header.split(",")) {
+    const [name, ...params] = entry.trim().split(";");
+    if (name?.trim() !== "app") continue;
+    for (const p of params) {
+      const m = /^\s*dur=([0-9]+(?:\.[0-9]+)?)\s*$/.exec(p);
+      if (m) return Number(m[1]);
+    }
+  }
+  return null;
+}
+
+export function median(values: readonly number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+/** GET /api/live once to warm up, then `LIVE_SAMPLES` times; the `app;dur` values (the session's cookies). */
+async function liveTimings(page: Page): Promise<number[]> {
+  const warm = await page.request.get("/api/live");
+  expect(warm.status(), "GET /api/live (warm-up)").toBe(200);
+  const values: number[] = [];
+  for (let i = 0; i < LIVE_SAMPLES; i++) {
+    const res = await page.request.get("/api/live");
+    expect(res.status(), "GET /api/live").toBe(200);
+    const dur = appDuration(res.headers()["server-timing"]);
+    expect(dur, "GET /api/live sends Server-Timing app;dur").not.toBeNull();
+    values.push(dur!);
+  }
+  return values;
+}
 
 const MODE = process.env.SMOKE_MODE === "live" ? "live" : "local";
 
@@ -69,18 +112,20 @@ async function logout(page: Page): Promise<void> {
   await expect(page).toHaveURL(/\/login/);
   await expect(page.getByRole("heading", { level: 1, name: "Login" })).toBeVisible();
   // the session is gone: a protected page sends us back to the login
-  await page.goto("/system");
+  await page.goto("/control");
   await expect(page).toHaveURL(/\/login/);
 }
 
 test.describe("smoke", () => {
   test.skip(MODE !== "local", "local mode only (it approves a seeded proposal)");
 
-  test("local: login, approve the seeded proposal, the position chain, system, logout", async ({ page }) => {
+  test("local: login, approve the seeded proposal, the position chain, control, logout", async ({ page }) => {
     await login(page);
     await rendered(page, "Dashboard");
 
-    const card = page.getByRole("article", { name: /^Proposal \d+: ENTRY AAA$/ });
+    const pending = page.getByRole("region", { name: "Pending approvals" });
+    await expect(pending).toBeVisible();
+    const card = pending.getByRole("article", { name: /^Proposal \d+: ENTRY AAA$/ });
     await expect(card).toHaveCount(1);
     await card.getByRole("button", { name: "Approve" }).click();
     // The card reports the outcome, then leaves the pending list when the dashboard refetches; the
@@ -108,8 +153,13 @@ test.describe("smoke", () => {
     await expect(page.getByRole("status", { name: "Loading" })).toHaveCount(0, { timeout: 20_000 });
     await noSideScroll(page);
 
-    await page.goto("/system");
-    await rendered(page, "System");
+    await page.goto("/control");
+    await rendered(page, "Control");
+
+    // The System page merged into Control: its Telegram link (/system) lands there, query kept.
+    await page.goto("/system?from=telegram");
+    await expect(page).toHaveURL(/\/control\?from=telegram$/);
+    await rendered(page, "Control");
 
     await logout(page);
   });
@@ -118,20 +168,20 @@ test.describe("smoke", () => {
 test.describe("smoke (live, read-only)", () => {
   test.skip(MODE !== "live", "live mode only");
 
-  test("live: login, every page renders without an error, logout", async ({ page }) => {
+  test("live: login, every page renders without an error, the /api/live budget, logout", async ({ page }) => {
     await login(page);
     await rendered(page, "Dashboard");
-    await expect(page.getByRole("region", { name: "Session" })).toContainText(
+    await expect(page.getByRole("region", { name: "Session" }).first()).toContainText(
       /Open|Pre-market|After close|Market closed today/,
     );
 
     const pages: Array<[string, string]> = [
+      ["/control", "Control"],
       ["/candidates", "Candidates"],
       ["/trades", "Trades"],
       ["/performance", "Performance"],
       ["/journal", "Journal"],
       ["/settings", "Settings"],
-      ["/system", "System"],
       [`/reports?week=${thisFriday()}`, "Reports"],
       ["/replay", "Replay"],
     ];
@@ -149,6 +199,13 @@ test.describe("smoke (live, read-only)", () => {
       await expect(page.getByRole("region", { name: `Replay ${replayId}` })).toBeVisible();
       await expect(page.getByText("Compared with live")).toBeVisible();
     }
+
+    // Plan S14 (DB-T12 LIVE 5): the route's own timing, median of 5 after a warm-up. Only the numbers are
+    // logged, never a header other than Server-Timing, a cookie or a credential.
+    const timings = await liveTimings(page);
+    const mid = median(timings);
+    console.log(`smoke: GET /api/live Server-Timing app;dur ms: ${timings.map((t) => t.toFixed(1)).join(", ")}; median ${mid.toFixed(1)}`);
+    expect(mid, `GET /api/live median app;dur ${mid} ms (budget ${LIVE_BUDGET_MS} ms)`).toBeLessThan(LIVE_BUDGET_MS);
 
     await logout(page);
   });

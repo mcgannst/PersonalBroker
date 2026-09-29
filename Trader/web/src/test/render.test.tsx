@@ -6,13 +6,13 @@ import { describe, expect, it } from "vitest";
 import { useApi } from "../api/client";
 import { qk } from "../api/queryKeys";
 import Candidates from "../pages/Candidates";
+import Control from "../pages/Control";
 import Dashboard from "../pages/Dashboard";
 import Journal from "../pages/Journal";
 import Login from "../pages/Login";
 import Performance from "../pages/Performance";
 import Reports from "../pages/Reports";
 import Settings from "../pages/Settings";
-import System from "../pages/System";
 import Trades from "../pages/Trades";
 import { FakeApiClient } from "./fakeApi";
 import { renderWithProviders } from "./render";
@@ -40,7 +40,7 @@ describe("renderWithProviders (acceptance test 6)", () => {
   });
 
   it("renders every page stub", () => {
-    const pages = { Login, Dashboard, Candidates, Trades, Performance, Journal, Reports, Settings, System };
+    const pages = { Login, Dashboard, Control, Candidates, Trades, Performance, Journal, Reports, Settings };
     for (const [name, Page] of Object.entries(pages)) {
       const { unmount } = renderWithProviders(<Page />);
       expect(screen.getByRole("heading", { name })).toBeInTheDocument();

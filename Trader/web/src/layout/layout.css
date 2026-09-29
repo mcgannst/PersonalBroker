@@ -1,5 +1,5 @@
-/* The app frame (P4-T12): header, side list on wide screens, bottom tab bar on phones. Colours and
-   spacing come from the variables in src/styles.css. */
+/* The app frame (P4-T12, DB-T11): header, side list on wide screens, bottom tab bar on phones. Colours and
+   spacing come from the variables in src/theme/tokens.css. */
 
 .shell {
   min-height: 100vh;
@@ -75,6 +75,27 @@
   border-right: 1px solid var(--border);
 }
 
+.side-nav-heading {
+  margin: var(--space-3) 0 0;
+  padding: 0 var(--space-3);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.side-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.theme-select {
+  padding: 0 var(--space-2);
+  font-size: 0.9rem;
+}
+
 .tab-bar {
   display: none;
 }
@@ -102,6 +123,12 @@
 @media (max-width: 719px) {
   .shell-header {
     padding: var(--space-1) var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .shell-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   .side-nav {
@@ -120,7 +147,7 @@
     bottom: 0;
     z-index: 20;
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     padding: var(--space-1) var(--space-1) calc(var(--space-1) + env(safe-area-inset-bottom, 0px));
     background: var(--surface);
     border-top: 1px solid var(--border);

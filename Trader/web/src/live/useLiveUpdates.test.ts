@@ -9,7 +9,7 @@ import { ApiError, ApiProvider } from "../api/client";
 import { qk } from "../api/queryKeys";
 import { FakeApiClient } from "../test/fakeApi";
 import { createTestQueryClient } from "../test/render";
-import { DISCONNECTED_REFETCH_MS, LiveUpdatesProvider, useLiveUpdates, type EventSourceLike } from "./useLiveUpdates";
+import { DISCONNECTED_REFETCH_MS, LIVE_THROTTLE_MS, LiveUpdatesProvider, useLiveUpdates, type EventSourceLike } from "./useLiveUpdates";
 
 type Listener = (ev: MessageEvent) => void;
 
@@ -240,6 +240,126 @@ describe("useLiveUpdates (test 6)", () => {
     const { result } = renderHook(() => useLiveUpdates());
     expect(result.current.connected).toBe(false);
     expect(FakeEventSource.instances).toHaveLength(0);
+  });
+});
+
+describe("live-update throttle (DB-T11 tests 3-4)", () => {
+  /** Mounts the hook with a `live` and a `candidates` query (like the pages), connected, after the first fetch. */
+  async function mountConnected() {
+    vi.useFakeTimers();
+    renderHook(
+      () => {
+        useQuery({ queryKey: qk.live({}), queryFn: () => api.live({}) });
+        useQuery({ queryKey: qk.control(), queryFn: () => api.control() });
+        useQuery({ queryKey: qk.candidates(), queryFn: () => api.candidates() });
+        return useLiveUpdates();
+      },
+      { wrapper },
+    );
+    await act(async () => {
+      latest().emit("hello", { server_time: "2026-10-06T13:35:00Z" });
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(api.callsTo("live")).toHaveLength(1);
+    expect(api.callsTo("control")).toHaveLength(1);
+  }
+
+  async function at(ms: number, fn: () => void): Promise<void> {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+      fn();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  it("10 marks messages within 1 s: one immediate refetch and one trailing refetch at 2 s; a later message refetches again", async () => {
+    await mountConnected();
+    expect(LIVE_THROTTLE_MS).toBe(2000);
+    await at(0, () => latest().emit("invalidate", { topics: ["marks"] }));
+    expect(api.callsTo("live")).toHaveLength(2); // leading, immediately
+    for (let i = 1; i < 10; i++) await at(100, () => latest().emit("invalidate", { topics: ["marks"] }));
+    // 0.9 s: nine more messages, no more refetches yet
+    expect(api.callsTo("live")).toHaveLength(2);
+    await at(1_099, () => undefined); // 1.999 s
+    expect(api.callsTo("live")).toHaveLength(2);
+    await at(1, () => undefined); // 2.0 s: the trailing refetch
+    expect(api.callsTo("live")).toHaveLength(3);
+    await at(3_000, () => undefined); // 5 s: nothing pending, nothing more
+    expect(api.callsTo("live")).toHaveLength(3);
+    await at(0, () => latest().emit("invalidate", { topics: ["activity"] }));
+    expect(api.callsTo("live")).toHaveLength(4); // after the window: immediate again
+  });
+
+  it("the trailing refetch is never dropped: a burst ending at 1.9 s still refetches at 2 s", async () => {
+    await mountConnected();
+    await at(0, () => latest().emit("invalidate", { topics: ["activity"] }));
+    expect(api.callsTo("live")).toHaveLength(2);
+    await at(1_900, () => latest().emit("invalidate", { topics: ["marks"] }));
+    expect(api.callsTo("live")).toHaveLength(2);
+    await at(99, () => undefined);
+    expect(api.callsTo("live")).toHaveLength(2);
+    await at(1, () => undefined);
+    expect(api.callsTo("live")).toHaveLength(3);
+  });
+
+  it("the system prefix (Control) is throttled the same way", async () => {
+    await mountConnected();
+    for (let i = 0; i < 5; i++) await at(i === 0 ? 0 : 50, () => latest().emit("invalidate", { topics: ["system"] }));
+    expect(api.callsTo("control")).toHaveLength(2);
+    await at(LIVE_THROTTLE_MS, () => undefined);
+    expect(api.callsTo("control")).toHaveLength(3);
+  });
+
+  it("other prefixes (candidates) are not throttled", async () => {
+    await mountConnected();
+    const before = api.callsTo("candidates").length;
+    for (let i = 0; i < 3; i++) await at(100, () => latest().emit("invalidate", { topics: ["candidates"] }));
+    expect(api.callsTo("candidates")).toHaveLength(before + 3);
+  });
+});
+
+describe("polling fallback for the dashboard and control queries (DB-T11 test 5)", () => {
+  it("while disconnected both refetch every 15 s; hello stops it; losing the stream refetches both once", async () => {
+    vi.useFakeTimers();
+    renderHook(
+      () => {
+        useQuery({ queryKey: qk.live({ range: "today" }), queryFn: () => api.live({ range: "today" }) });
+        useQuery({ queryKey: qk.control(), queryFn: () => api.control() });
+        return useLiveUpdates();
+      },
+      { wrapper },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    const reads = () => [api.callsTo("live").length, api.callsTo("control").length];
+    expect(reads()).toEqual([1, 1]);
+    expect(queryClient.getQueryDefaults(qk.control()).refetchInterval).toBe(DISCONNECTED_REFETCH_MS);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DISCONNECTED_REFETCH_MS);
+    });
+    expect(reads()).toEqual([2, 2]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DISCONNECTED_REFETCH_MS);
+    });
+    expect(reads()).toEqual([3, 3]);
+
+    act(() => latest().emit("hello", { server_time: "2026-10-06T13:35:00Z" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4 * DISCONNECTED_REFETCH_MS);
+    });
+    expect(reads()).toEqual([3, 3]);
+    expect(queryClient.getQueryDefaults(qk.control()).refetchInterval).toBe(false);
+
+    await act(async () => {
+      latest().fail(FakeEventSource.CONNECTING);
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(reads()).toEqual([4, 4]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DISCONNECTED_REFETCH_MS);
+    });
+    expect(reads()).toEqual([5, 5]);
   });
 });
 

@@ -97,6 +97,44 @@ describe("Reports Day view", () => {
     );
   });
 
+  it("DB-T11: the dashboard's rejection link opens the day with stage, outcome and ticker applied", async () => {
+    const r = renderWithProviders(<ReportsPage />, { route: "/reports?day=2026-10-06&stage=scan&outcome=rejected&ticker=AAPL" });
+    await screen.findByRole("heading", { name: "Decisions by day" });
+    await waitFor(() =>
+      expect(r.api.callsTo("decisionDay")).toEqual([
+        [{ date: "2026-10-06", stage: "scan", outcome: "rejected", ticker: "AAPL", limit: DAY_PAGE_SIZE, offset: 0 }],
+      ]),
+    );
+    expect(await screen.findByRole("combobox", { name: "Stage" })).toHaveValue("scan");
+    expect(screen.getByRole("combobox", { name: "Outcome" })).toHaveValue("rejected");
+    expect(screen.getByRole("searchbox", { name: "Ticker" })).toHaveValue("AAPL");
+  });
+
+  it.each([
+    ["stage=bogus&outcome=nope&ticker=%3Cscript%3E"],
+    ["stage=&outcome=REJECTED&ticker=aapl"],
+    ["stage=__proto__&outcome=toString&ticker=TOOLONGTICKER"],
+    ["ticker=AA%20PL"],
+  ])("DB-T11: ignores invalid filters in the URL (%s)", async (query) => {
+    const r = renderWithProviders(<ReportsPage />, { route: `/reports?day=2026-10-06&${query}` });
+    await screen.findByRole("table", { name: "Decisions" });
+    expect(r.api.callsTo("decisionDay")).toEqual([[{ date: "2026-10-06", limit: DAY_PAGE_SIZE, offset: 0 }]]);
+    expect(screen.getByRole("combobox", { name: "Stage" })).toHaveValue("");
+    expect(screen.getByRole("searchbox", { name: "Ticker" })).toHaveValue("");
+  });
+
+  it("DB-T11: changing a filter updates the URL (and clearing it removes the parameter)", async () => {
+    const r = renderWithProviders(<ReportsPage />, { route: "/reports?day=2026-10-06" });
+    await screen.findByRole("table", { name: "Decisions" });
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Stage" }), "scan");
+    expect(r.location().search).toBe("?day=2026-10-06&stage=scan");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Outcome" }), "rejected");
+    await userEvent.type(screen.getByRole("searchbox", { name: "Ticker" }), "amd");
+    expect(r.location().search).toBe("?day=2026-10-06&stage=scan&outcome=rejected&ticker=AMD");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Stage" }), "");
+    expect(r.location().search).toBe("?day=2026-10-06&outcome=rejected&ticker=AMD");
+  });
+
   it("a filter that matches nothing says so and keeps the summary", async () => {
     const api = new FakeApiClient();
     api.respond("decisionDay", (q) => (q.stage ? { ...fx.decisionDayOut, rows: [], total: 0 } : fx.decisionDayOut));

@@ -1,84 +1,7 @@
 /* Trader web app: plain CSS, no framework. Phone first (390 px wide, no horizontal page scroll,
-   touch targets at least 44 px), a single column below 720 px, light and dark themes. */
-
-:root {
-  color-scheme: light dark;
-
-  --bg: #f6f7f9;
-  --surface: #ffffff;
-  --surface-2: #eef0f3;
-  --text: #1b1f24;
-  --text-muted: #5b6470;
-  --border: #d9dde3;
-  --accent: #1f6feb;
-  --accent-text: #ffffff;
-
-  --ok: #1a7f37;
-  --ok-bg: #dafbe1;
-  --warn: #9a6700;
-  --warn-bg: #fff8c5;
-  --bad: #cf222e;
-  --bad-bg: #ffebe9;
-  --info: #0969da;
-  --info-bg: #ddf4ff;
-  --muted: #6e7781;
-  --muted-bg: #eaeef2;
-
-  /* Charts (Recharts SVG attributes take these as var(...)). */
-  --chart-grid: #e5e7eb;
-  --chart-line: #1f2937;
-  --chart-range: #93c5fd;
-  --chart-entry: #2563eb;
-  --chart-stop: #dc2626;
-  --chart-stop-fill: #fecaca;
-  --chart-exit: #16a34a;
-  --chart-bar: #6366f1;
-
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-
-  --radius: 10px;
-  --touch: 44px;
-  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0d1117;
-    --surface: #161b22;
-    --surface-2: #21262d;
-    --text: #e6edf3;
-    --text-muted: #9198a1;
-    --border: #30363d;
-    --accent: #2f81f7;
-    --accent-text: #ffffff;
-
-    --ok: #3fb950;
-    --ok-bg: #12261e;
-    --warn: #d29922;
-    --warn-bg: #2b2111;
-    --bad: #f85149;
-    --bad-bg: #301a1f;
-    --info: #58a6ff;
-    --info-bg: #121d2f;
-    --muted: #8b949e;
-    --muted-bg: #21262d;
-
-    --chart-grid: #30363d;
-    --chart-line: #e6edf3;
-    --chart-range: #1f4e8c;
-    --chart-entry: #58a6ff;
-    --chart-stop: #f85149;
-    --chart-stop-fill: #5a1e22;
-    --chart-exit: #3fb950;
-    --chart-bar: #a5a8ff;
-  }
-}
+   touch targets at least 44 px), a single column below 720 px, light and dark themes. Every variable
+   (colours, spacing, --touch, the money and status families) is defined in src/theme/tokens.css, which
+   main.tsx imports before this file (live dashboard plan S11, DB-T11). */
 
 *,
 *::before,
@@ -419,4 +342,82 @@ label.check-row,
   color: var(--text-muted);
   padding: var(--space-3) 0;
   margin: 0;
+}
+
+/* ---------------------------------------------------------------- the live Dashboard (DB-T11) */
+
+/* Phone: one column in the design's order. Tablet and wider: sections 2 (equity | risk) and 4 (activity |
+   rejections) side by side. */
+.live-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.live-grid-2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+@media (min-width: 720px) {
+  .live-grid-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.live-notices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.live-notice {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: var(--panel-border);
+  border-left: 3px solid var(--tone);
+  border-radius: var(--panel-radius);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* Design D9: green and red only on money. Lights, badges, notices and the error box of the reused pieces
+   (pending proposals, the timeline) draw in the status colours on this page. */
+.live-page .status-ok,
+.live-page .tone-ok {
+  --tone: var(--status-ok);
+  --tone-bg: transparent;
+}
+
+.live-page .status-warn,
+.live-page .tone-warn {
+  --tone: var(--status-warn);
+  --tone-bg: transparent;
+}
+
+.live-page .status-bad,
+.live-page .tone-bad {
+  --tone: var(--status-bad);
+  --tone-bg: transparent;
+}
+
+.live-page .status-muted,
+.live-page .tone-muted {
+  --tone: var(--status-muted);
+  --tone-bg: transparent;
+}
+
+.live-page .live-notice {
+  color: var(--tone);
+}
+
+.live-page .error-box {
+  border-color: var(--status-bad);
+  background: transparent;
+  color: var(--status-bad);
 }

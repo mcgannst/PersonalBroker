@@ -1,14 +1,15 @@
-// The app (P4-T12): providers, routes and deep links.
+// The app (P4-T12; live dashboard plan S12, DB-T11): providers, routes and deep links.
 //   /                      -> /dashboard
-//   /dashboard, /candidates, /trades, /performance, /journal, /reports, /replay, /settings, /system
+//   /dashboard, /control, /candidates, /trades, /performance, /journal, /reports, /replay, /settings
 //                          -> behind RequireAuth, inside the Layout
+//   /system                -> /control, keeping the query string (the System page merged into Control)
 //   /login                 -> the login page
 //   anything else          -> Not found
 // Query strings survive the login redirect, so the Telegram links (/dashboard?proposal=12,
 // /trades?position=3, /journal?date=2026-10-06, /reports?week=2026-10-09, /system) open the right thing.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { ApiProvider, isApiError, type ApiClient } from "./api/client";
 import { createHttpClient } from "./api/http";
@@ -18,6 +19,7 @@ import { NotFound } from "./layout/NotFound";
 import { RequireAuth } from "./layout/RequireAuth";
 import { ROUTER_FUTURE } from "./layout/routerFuture";
 import CandidatesPage from "./pages/Candidates";
+import ControlPage from "./pages/Control";
 import DashboardPage from "./pages/Dashboard";
 import JournalPage from "./pages/Journal";
 import LoginPage from "./pages/Login";
@@ -25,8 +27,13 @@ import PerformancePage from "./pages/Performance";
 import ReplayPage from "./pages/Replay";
 import ReportsPage from "./pages/Reports";
 import SettingsPage from "./pages/Settings";
-import SystemPage from "./pages/System";
 import TradesPage from "./pages/Trades";
+
+/** `/system` (a Telegram link) lands on `/control` with the same query string and hash. */
+function SystemRedirect() {
+  const { search, hash } = useLocation();
+  return <Navigate to={`/control${search}${hash}`} replace />;
+}
 
 /** The routes, with the auth provider (the router and the other providers come from the caller). */
 export function AppRoutes() {
@@ -38,6 +45,7 @@ export function AppRoutes() {
           <Route element={<Layout />}>
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/control" element={<ControlPage />} />
             <Route path="/candidates" element={<CandidatesPage />} />
             <Route path="/trades" element={<TradesPage />} />
             <Route path="/performance" element={<PerformancePage />} />
@@ -45,7 +53,7 @@ export function AppRoutes() {
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/replay" element={<ReplayPage />} />
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/system" element={<SystemPage />} />
+            <Route path="/system" element={<SystemRedirect />} />
           </Route>
         </Route>
         <Route path="*" element={<NotFound />} />

@@ -31,7 +31,7 @@ vi.mock("./pages/Journal", () => pageMock("Journal"));
 vi.mock("./pages/Reports", () => pageMock("Reports"));
 vi.mock("./pages/Replay", () => pageMock("Replay"));
 vi.mock("./pages/Settings", () => pageMock("Settings"));
-vi.mock("./pages/System", () => pageMock("System"));
+vi.mock("./pages/Control", () => pageMock("Control"));
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -147,7 +147,7 @@ describe("routes and deep links (tests 3-4)", () => {
     ["/trades?position=3", "Trades page"],
     ["/journal?date=2026-10-06", "Journal page"],
     ["/reports?week=2026-10-09", "Reports page"],
-    ["/system", "System page"],
+    ["/control", "Control page"],
     ["/dashboard?proposal=12", "Dashboard page"],
     ["/candidates", "Candidates page"],
     ["/performance", "Performance page"],
@@ -156,6 +156,29 @@ describe("routes and deep links (tests 3-4)", () => {
     const r = renderWithProviders(<AppRoutes />, { route });
     expect(await page()).toBe(name);
     expect(`${r.location().pathname}${r.location().search}`).toBe(route);
+  });
+
+  it.each([
+    ["/system", "/control"],
+    ["/system?x=1", "/control?x=1"],
+    ["/system?x=1#health", "/control?x=1#health"],
+  ])("DB-T11 test 7: %s (a Telegram link) lands on %s", async (route, target) => {
+    const r = renderWithProviders(<AppRoutes />, { route });
+    expect(await page()).toBe("Control page");
+    expect(`${r.location().pathname}${r.location().search}${r.location().hash}`).toBe(target);
+  });
+
+  it("DB-T11 test 7: a logged-out /system?x=1 goes to login and then lands on /control?x=1", async () => {
+    const api = loggedOutApi();
+    const user = userEvent.setup();
+    const r = renderWithProviders(<AppRoutes />, { api, route: "/system?x=1" });
+    await screen.findByRole("heading", { name: "Login" });
+    expect(r.location().search).toBe("?next=%2Fsystem%3Fx%3D1");
+    await user.type(screen.getByLabelText(/username/i), "stephen");
+    await user.type(screen.getByLabelText(/^password/i), "correct horse");
+    await user.click(screen.getByRole("button", { name: /log in/i }));
+    expect(await page()).toBe("Control page");
+    expect(`${r.location().pathname}${r.location().search}`).toBe("/control?x=1");
   });
 
   it("/ goes to the dashboard", async () => {
@@ -180,9 +203,9 @@ describe("routes and deep links (tests 3-4)", () => {
   });
 
   it("visiting /login while logged in goes to next", async () => {
-    const r = renderWithProviders(<AppRoutes />, { route: "/login?next=%2Fsystem" });
-    expect(await page()).toBe("System page");
-    expect(r.location().pathname).toBe("/system");
+    const r = renderWithProviders(<AppRoutes />, { route: "/login?next=%2Fcontrol" });
+    expect(await page()).toBe("Control page");
+    expect(r.location().pathname).toBe("/control");
   });
 
   it("an unreachable server shows the error with Retry", async () => {
@@ -266,28 +289,134 @@ describe("layout (tests 7 and 9)", () => {
     expect(screen.getByRole("status", { name: /reconnecting/i })).toBeInTheDocument();
   });
 
-  it("navigation: every page is at most two taps away on a phone", async () => {
+  it("navigation (S12 order): every page is at most two taps away on a phone", async () => {
     const user = userEvent.setup();
     const r = renderWithProviders(<AppRoutes />, { route: "/dashboard" });
     await page();
     const tabs = screen.getByRole("navigation", { name: /tabs/i });
-    for (const name of ["Dashboard", "Candidates", "Trades", "Journal"]) {
+    expect(Array.from(tabs.children).map((el) => (el.textContent ?? "").trim())).toEqual(["Dashboard", "Control", "Reports", "More"]);
+    for (const name of ["Dashboard", "Control", "Reports"]) {
       expect(within(tabs).getByRole("link", { name })).toBeInTheDocument();
     }
     await user.click(within(tabs).getByRole("button", { name: /more/i }));
     const more = screen.getByRole("menu");
-    for (const name of ["Performance", "Settings", "System", "Reports", "Replay"]) {
-      expect(within(more).getByRole("menuitem", { name })).toBeInTheDocument();
-    }
-    await user.click(within(more).getByRole("menuitem", { name: "System" }));
-    expect(await page()).toBe("System page");
-    expect(r.location().pathname).toBe("/system");
+    expect(within(more).getAllByRole("menuitem").map((a) => a.textContent)).toEqual([
+      "Replay",
+      "Settings",
+      "Trades",
+      "Candidates",
+      "Performance",
+      "Journal",
+    ]);
+    await user.click(within(more).getByRole("menuitem", { name: "Journal" }));
+    expect(await page()).toBe("Journal page");
+    expect(r.location().pathname).toBe("/journal");
     expect(screen.queryByRole("menu")).toBeNull();
+    expect(within(tabs).getByRole("button", { name: /more/i })).toHaveClass("is-active");
 
     const side = screen.getByRole("navigation", { name: /main/i });
-    for (const name of ["Dashboard", "Candidates", "Trades", "Performance", "Journal", "Reports", "Replay", "Settings", "System"]) {
-      expect(within(side).getByRole("link", { name })).toBeInTheDocument();
+    expect(within(side).getAllByRole("link").map((a) => a.textContent)).toEqual([
+      "Dashboard",
+      "Control",
+      "Reports",
+      "Replay",
+      "Settings",
+      "Trades",
+      "Candidates",
+      "Performance",
+      "Journal",
+    ]);
+    const moreGroup = within(side).getByRole("group", { name: "More" });
+    expect(within(moreGroup).getAllByRole("link").map((a) => a.textContent)).toEqual(["Trades", "Candidates", "Performance", "Journal"]);
+    expect(within(side).queryByRole("link", { name: "System" })).toBeNull();
+  });
+
+  it("the Telegram deep links behind More still open their pages", async () => {
+    for (const [route, name] of [
+      ["/trades?position=3", "Trades page"],
+      ["/journal?date=2026-10-06", "Journal page"],
+      ["/candidates", "Candidates page"],
+      ["/performance", "Performance page"],
+    ] as const) {
+      const r = renderWithProviders(<AppRoutes />, { route });
+      expect(await page()).toBe(name);
+      expect(`${r.location().pathname}${r.location().search}`).toBe(route);
+      r.unmount();
     }
+  });
+});
+
+describe("theme control (DB-T11 test 7, open question 1)", () => {
+  function stubStorage(initial: Record<string, string> = {}) {
+    const data = new Map(Object.entries(initial));
+    const storage = {
+      getItem: vi.fn((k: string) => data.get(k) ?? null),
+      setItem: vi.fn((k: string, v: string) => void data.set(k, v)),
+      removeItem: vi.fn((k: string) => void data.delete(k)),
+      clear: vi.fn(() => data.clear()),
+      key: vi.fn(() => null),
+      get length() {
+        return data.size;
+      },
+    };
+    vi.stubGlobal("localStorage", storage);
+    return { data, storage };
+  }
+
+  afterEach(() => {
+    document.documentElement.removeAttribute("data-theme");
+  });
+
+  it("defaults to dark, switches data-theme on <html> and remembers the choice", async () => {
+    const { data, storage } = stubStorage();
+    const user = userEvent.setup();
+    renderWithProviders(<AppRoutes />, { route: "/dashboard" });
+    await page();
+    const select = within(screen.getByRole("banner")).getByRole("combobox", { name: "Theme" });
+    expect(select).toHaveValue("dark");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["Auto", "Dark", "Light"]);
+
+    await user.selectOptions(select, "light");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    expect(storage.setItem).toHaveBeenCalledWith("trader.theme", "light");
+    expect(data.get("trader.theme")).toBe("light");
+
+    await user.selectOptions(select, "auto");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("auto");
+    expect(data.get("trader.theme")).toBe("auto");
+  });
+
+  it("a remembered choice is applied on load; a garbage value falls back to dark", async () => {
+    stubStorage({ "trader.theme": "light" });
+    const { unmount } = renderWithProviders(<AppRoutes />, { route: "/dashboard" });
+    await page();
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    expect(within(screen.getByRole("banner")).getByRole("combobox", { name: "Theme" })).toHaveValue("light");
+    unmount();
+
+    stubStorage({ "trader.theme": "<script>" });
+    renderWithProviders(<AppRoutes />, { route: "/dashboard" });
+    await page();
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+  });
+
+  it("blocked storage still switches the theme for the page", async () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<AppRoutes />, { route: "/dashboard" });
+    await page();
+    const select = within(screen.getByRole("banner")).getByRole("combobox", { name: "Theme" });
+    expect(select).toHaveValue("dark");
+    await user.selectOptions(select, "light");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
   });
 });
 

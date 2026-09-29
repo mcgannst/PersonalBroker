@@ -1,0 +1,234 @@
+/* The Control page (live dashboard plan DB-T9, design D9). Theme tokens only (src/theme/tokens.css): flat
+   panels with 1 px borders, no shadows, gradients or glow; status chips in the status colours (accent, amber,
+   orange, slate), never the money green or red; tabular numbers. Phone first: one column, sections in the
+   design's order; two columns from tablet width. Nothing has a fixed width, so nothing scrolls sideways. */
+
+.control-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.control-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (min-width: 900px) {
+  .control-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .control-wide {
+    grid-column: 1 / -1;
+  }
+}
+
+.control-cell {
+  min-width: 0;
+}
+
+/* Reused System/Settings components render a .card; inside a panel it is flat and borderless. */
+.control-page .panel .card,
+.control-cell > .card {
+  box-shadow: none;
+  background: transparent;
+}
+
+.control-page .panel .card {
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+.control-cell > .card {
+  border: var(--panel-border);
+  border-radius: var(--panel-radius);
+  background: var(--surface);
+}
+
+.ctl-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ctl-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ctl-spread {
+  justify-content: space-between;
+}
+
+.ctl-shrink {
+  flex: 1 1 12rem;
+}
+
+.ctl-select {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ctl-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ctl-list > li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+
+.ctl-list > li:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.ctl-sub {
+  margin: var(--space-2) 0 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+.ctl-facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ctl-fact {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  min-width: 0;
+}
+
+.ctl-fact dt {
+  color: var(--text-muted);
+}
+
+.ctl-fact dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+.ctl-health {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+@media (min-width: 700px) {
+  .ctl-health {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ctl-health-wide {
+    grid-column: 1 / -1;
+  }
+}
+
+.ctl-health-part {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ctl-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--space-2);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  background: transparent;
+}
+
+.ctl-chip-ok {
+  color: var(--status-ok);
+}
+
+.ctl-chip-warn {
+  color: var(--status-warn);
+}
+
+.ctl-chip-bad {
+  color: var(--status-bad);
+}
+
+.ctl-chip-muted {
+  color: var(--status-muted);
+}
+
+.ctl-ok {
+  color: var(--status-ok);
+}
+
+.ctl-warn {
+  color: var(--status-warn);
+}
+
+.ctl-bad {
+  color: var(--status-bad);
+}
+
+.ctl-muted {
+  color: var(--text-muted);
+}
+
+.ctl-small {
+  font-size: 0.85rem;
+}
+
+.ctl-strong {
+  font-weight: 600;
+}
+
+.ctl-big {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+.ctl-text {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.ctl-part-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.ctl-part-error p,
+.ctl-stack p {
+  margin: 0;
+}

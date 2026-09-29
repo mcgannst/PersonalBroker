@@ -733,16 +733,16 @@ export function ErrorLog(props: { errors: EventOut[] | null }): JSX.Element
 - Mutations invalidate `["dashboard"]` and `["system"]` (the existing components already do; new ones in this task do too).
 
 **Acceptance tests:**
-- [ ] 1. ControlPage renders every section from `controlOut` with heading "Control".
-- [ ] 2. Pause: tapping Pause opens the confirm dialog; confirming calls `api.pause()` once and refetches; cancelling calls nothing; Resume likewise when paused.
-- [ ] 3. Approval mode and kill-switch reset go through the reused components (the fake records `putSetting("approval_mode", ...)` after confirm, `resetKillSwitch(switch, {reason})` only with a valid typed reason).
-- [ ] 4. Strategy toggle calls `putStrategy(key, {enabled: false})` only after confirm.
-- [ ] 5. Jobs: Re-run on the premarket item opens `RunJob` for `premarket`; items without `rerun` have no button; durations and summaries shown; MT times.
-- [ ] 6. Health: stale worker badge (`controlStaleWorker`), opening-bar text complete and incomplete, "not fetched by the worker today" when null, Questrade counts, marks failing flag.
-- [ ] 7. Soak card with a summary and with `soak` null plus a part error (error and Retry, the rest renders).
-- [ ] 8. Error log: filters by level and source; XSS text literal; empty state "No warnings or errors".
-- [ ] 9. Carried over from `SystemPage.test.tsx` (each still applies): the worker-down text `WORKER_DOWN_TEXT` when the worker is not ok, `TELEGRAM_OFF_TEXT` when Telegram is not configured, failed sends listed, the watchlist upload present.
-- [ ] 10. Touch targets ≥ 44 px; no horizontal overflow at 390 px; gate and commit `DB-T9: Control page`.
+- [x] 1. ControlPage renders every section from `controlOut` with heading "Control".
+- [x] 2. Pause: tapping Pause opens the confirm dialog; confirming calls `api.pause()` once and refetches; cancelling calls nothing; Resume likewise when paused.
+- [x] 3. Approval mode and kill-switch reset go through the reused components (the fake records `putSetting("approval_mode", ...)` after confirm, `resetKillSwitch(switch, {reason})` only with a valid typed reason).
+- [x] 4. Strategy toggle calls `putStrategy(key, {enabled: false})` only after confirm.
+- [x] 5. Jobs: Re-run on the premarket item opens `RunJob` for `premarket`; items without `rerun` have no button; durations and summaries shown; MT times.
+- [x] 6. Health: stale worker badge (`controlStaleWorker`), opening-bar text complete and incomplete, "not fetched by the worker today" when null, Questrade counts, marks failing flag.
+- [x] 7. Soak card with a summary and with `soak` null plus a part error (error and Retry, the rest renders).
+- [x] 8. Error log: filters by level and source; XSS text literal; empty state "No warnings or errors".
+- [x] 9. Carried over from `SystemPage.test.tsx` (each still applies): the worker-down text `WORKER_DOWN_TEXT` when the worker is not ok, `TELEGRAM_OFF_TEXT` when Telegram is not configured, failed sends listed, the watchlist upload present.
+- [x] 10. Touch targets ≥ 44 px; no horizontal overflow at 390 px; gate and commit `DB-T9: Control page`.
 
 **LIVE steps:** none.
 

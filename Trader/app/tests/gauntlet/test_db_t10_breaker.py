@@ -430,13 +430,6 @@ def test_a_pass_bounded_by_its_statement_timeout_delays_exit_only_by_that_bound(
     assert took is not None and took < 5.0  # well inside stopwaitsecs
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="F2 (should-fix, carried from DB-T2 N3): MarkPublisher.close() is shutdown(wait=False), but the "
-    "executor's worker thread is non-daemon and interpreter exit joins it, so a pass stuck past its "
-    "server-side statement_timeout (dead TCP connection, no client keepalive) keeps the worker process "
-    "alive until supervisord's SIGKILL at stopwaitsecs=60 s.",
-)
 def test_a_pass_stuck_for_good_never_holds_process_exit() -> None:
     took = _exit_after_return(-1, timeout=8)
     assert took is not None and took < STOPWAITSECS / 2

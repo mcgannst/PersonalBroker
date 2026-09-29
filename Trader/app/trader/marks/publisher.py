@@ -21,12 +21,15 @@ nothing on the decision path reads its tables (bars built from quotes are never 
 """
 
 import asyncio
+import threading
+import weakref
 from collections.abc import Awaitable, Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import thread as futures_thread
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from sqlalchemy import delete, func, select, text, union
@@ -67,6 +70,36 @@ LOCK_SYMBOLS = "SELECT id FROM trader.symbols WHERE id = ANY(:sids) ORDER BY id 
 LOCK_NOT_AVAILABLE = "55P03"  # SQLSTATE lock_not_available (NOWAIT)
 # A carried-over busy pass keeps at most this many observations (the tap's own bound).
 MAX_CARRY = MAX_OBSERVATIONS_PER_SYMBOL * MAX_TAP_SYMBOLS
+
+
+class _DaemonExecutor(ThreadPoolExecutor):
+    """A `ThreadPoolExecutor` whose worker thread is a daemon and is not joined at interpreter exit.
+
+    A plain pool's threads are joined when the interpreter exits (`concurrent.futures.thread._python_exit`
+    and `threading._shutdown`), so a pass stuck on a dead TCP connection (no server-side statement timeout
+    can end it) would keep the stopped worker process alive until supervisord's SIGKILL. This thread is left
+    behind instead; the database rolls the abandoned transaction back when the connection closes. Everything
+    else (one thread, its name, `shutdown`, `cancel_futures`) is the standard pool's (DB-T10 gauntlet F2)."""
+
+    def _adjust_thread_count(self) -> None:
+        if self._idle_semaphore.acquire(timeout=0):
+            return
+
+        def wake(_: object, q: Any = self._work_queue) -> None:
+            q.put(None)
+
+        num_threads = len(self._threads)
+        if num_threads < self._max_workers:
+            t = threading.Thread(
+                name=f"{self._thread_name_prefix or self}_{num_threads}",
+                target=futures_thread._worker,
+                args=(weakref.ref(self, wake), self._work_queue, self._initializer, self._initargs),
+                daemon=True,
+            )
+            t.start()
+            cast(set[threading.Thread], self._threads).add(
+                t
+            )  # not in futures_thread._threads_queues: interpreter exit never joins it
 
 
 class _Busy(Exception):
@@ -112,8 +145,9 @@ class MarkPublisher:
         self.deps = deps
         self._interval_s = interval_s
         self._sleep = sleep
-        # Its own single thread: never the loop's default executor (the Questrade token fetch's).
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=THREAD_PREFIX)
+        # Its own single daemon thread: never the loop's default executor (the Questrade token fetch's), and
+        # never joined at interpreter exit.
+        self._executor = _DaemonExecutor(max_workers=1, thread_name_prefix=THREAD_PREFIX)
         # The state below is written only in the executor's thread (the health read only reads it).
         self._symbol_ids: dict[int, int] = {}  # Questrade id -> symbols.id
         self._failures = 0

@@ -428,6 +428,8 @@ Timestamps are `timestamptz` in UTC. Money is `numeric(14,4)`. Primary keys are 
 | `users` | id, username, password_hash, totp_secret_enc | Single user |
 | `audit_log` | id, ts, actor, action, before jsonb, after jsonb | Settings and approval changes |
 | `decision_log` | id, run_id, session_date, seq, stage, strategy_key, symbol_id, ticker, outcome, rule, reason, ts, ref jsonb, data jsonb, recorded_at, final; unique (run_id, session_date, seq) | The decision log (Phase 6, migration 0007): every trading decision of a run's session with its reason, one row per decision, ordered by stage (`universe`, `premarket`, `scan`, `signal`, `risk`, `proposal`, `approval`, `order`, `fill`, `exit`, `overlay`, `kill_switch`, then one `day` row holding the day's summary). A **derived journal**: built by the recorder from the rows above (catalysts, job details, universe snapshots, candidates, signals, proposals, orders, fills, trades, kill-switch and overlay events) and the stored opening bars, never from Questrade; the 9:35 scan rows carry every filter's value and threshold, taken from the strategy revision in effect at 9:35. Rebuilt while the session runs, frozen (`final`) by the post-close, so a later config edit never rewrites a finished day. Replays record under their own `run_id`. Logging only: no decision-path code reads it. Kept 400 days (live) and 30 days (replays), §13 |
+| `quote_marks` | run_id, symbol_id (pk together), bid, ask, last, quote_time, observed_at, written_at, is_halted | Live dashboard (migration 0008): the latest quote the worker observed per run and symbol, upserted (an older observation never overwrites a newer row). Written only by the worker's mark publisher, from quotes the worker already fetched (never an extra Questrade call), for symbols the live run holds or has working orders in; read only by the API (`/api/live`). Logging only: nothing on the decision path reads it |
+| `mark_bars` | run_id, symbol_id, minute_start (pk together), open, high, low, close, samples, updated_at | Live dashboard (migration 0008): 1-minute bars built from those observed quotes, for the positions' sparklines and the intraday equity line while 1-minute candles are not stored yet (they are archived after the close). Written only by the mark publisher, kept 10 days per run, read only by the API; stored candles win where both exist. Never a candle: no strategy, report, replay or decision-log code can read it |
 
 **Views:** `v_daily_pnl`, `v_trade_metrics` (per run: count, win rate, average win/loss R, expectancy, profit factor, max drawdown, average slippage, adherence %).
 
@@ -439,7 +441,9 @@ All endpoints need a session cookie, except `/api/auth/login` and `/api/health`.
 |---|---|
 | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me` | Session auth (with optional TOTP) |
 | `GET /health` | Liveness: DB, token age, worker heartbeat |
-| `GET /dashboard?run=live` | Today: session phase, next events, candidates, pending proposals, positions, P&L, kill-switch state |
+| `GET /live?range=today\|run&expand=<up to 3 position ids>` | The Dashboard (live monitor), read-only, from the active live run only: header (session, approval mode, trading state, worker), P&L per period (today, week, since start: realised, open, fees, Claude spend, net after AI, win rate, expectancy), today's Claude spend against its cap, the books check, the equity series (≤ 500 points), the risk panel and kill-switch lights, open positions with marks, sparklines and (expanded) 1-minute bars, the activity feed (≤ 100 items), rejections by rule, the day's timeline, pending proposals. Prices come only from `quote_marks`/`mark_bars` and stored candles, never Questrade. Each part is isolated (a failing part is `null` plus a `part_errors` entry; the rest still answers 200). Header `Server-Timing: app;dur=<ms>` then one entry per part; budget under 300 ms on a normal day |
+| `GET /control` | The Control page, read-only: engine card (approval mode, trading state, run, version, alembic revision), kill switches with values and history, strategies, today's schedule with job runs and re-run mapping, health (heartbeat, token, database, Telegram, Questrade counts today, the 9:35 opening-bar fetch, marks), the soak summary (cached 60 s) and the latest 200 warning-or-higher events. Every action on the page uses the existing routes below |
+| `GET /dashboard?run=live` | Today: session phase, next events, candidates, pending proposals, positions, P&L, kill-switch state (kept; no page uses it since the live dashboard) |
 | `GET /proposals?status=pending` · `POST /proposals/{id}/approve` · `POST /proposals/{id}/reject` | Approvals |
 | `GET /candidates?date=` | Ranked list with the reason each name was rejected |
 | `GET /orders`, `GET /fills`, `GET /positions`, `GET /trades?run=&from=&to=` | Trading history |
@@ -451,7 +455,7 @@ All endpoints need a session cookie, except `/api/auth/login` and `/api/health`.
 | `POST /replays` · `GET /replays` · `GET /replays/{id}` | Replay runs |
 | `GET /jobs` · `POST /jobs/{job}/run` | Job history, manual trigger |
 | `GET /events?since=` | Event timeline |
-| `GET /stream` | Server-Sent Events for live dashboard updates |
+| `GET /stream` | Server-Sent Events for live dashboard updates (topics include `marks`, the newest `quote_marks.written_at` of live runs, and `activity`, the newest live `decision_log` id; the web throttles Dashboard and Control refetches to one per 2 s) |
 | `POST /credentials/questrade` | Paste the initial refresh token |
 | `GET /export/trades.csv` | CSV export |
 | `GET /decisions/days?limit=&run_id=` | The recorded days of the decision log, newest first, with each day's summary line (Phase 6) |
@@ -464,18 +468,20 @@ Without `run_id` the decision routes serve only a live run; a replay's decisions
 
 | Page | Contents |
 |---|---|
-| **Dashboard** | Session timeline (pre-market → close) showing completed and next steps in MT; the approval-mode badge; pending approvals with countdowns and Approve/Reject buttons; open position (price, P&L, stop, unprotected time); today's P&L; kill-switch lights; latest events |
+| **Dashboard** | The read-only live monitor (`/dashboard`, from `GET /api/live`): top bar (session and phase, P&L after fees today / this week / since start with realised and open, fees, Claude spend against the daily cap, net after AI, win rate, trades, expectancy, the engine chip, a live indicator that shows "Degraded: polling every 15 s" while the stream is down, a stale-heartbeat badge, and the books check "cash + positions at cost = starting cash + realised − fees, to the cent ✓/✗"); equity chart (today or whole run) beside the risk panel (kill-switch lights with value vs threshold, open risk vs cap, slots); open positions (entry → mark, stop, unrealised $ and R, time held, sparkline; a "prices stale" badge when a mark is older than 30 s; tap for a 1-minute chart, `?expand=`); the activity feed with filter chips; "Rejected today, and why" by rule with tickers linking to the Day view; today's timeline; pending approvals with the one-tap Approve/Reject flow (`?proposal=<id>` highlights one). Each panel shows its own error and Retry when its part failed |
+| **Control** | Everything that changes the engine (`/control`, from `GET /api/control`): approval mode, Pause/Resume, kill switches (lights, reset with a typed reason, history), strategies on/off, today's schedule and jobs with Re-run and manual runs, health (heartbeat, token, database, Telegram with the test button, Questrade counts today, the opening-bar fetch "n of n bars in s", marks, time-zone check, failed sends), the soak summary, the error log (level and source filters, older events) and the manual watchlist upload. `/system` redirects here keeping its query string |
 | **Candidates** | Pre-market watchlist with catalyst cards; the 9:35 relative-volume ranking table (passed and rejected, with reasons) |
 | **Trades** | Trade list with details: signal evidence → proposal → decision → order → fill quote; a 5-min chart with entry, stop and exit marked |
 | **Performance** | Equity curve, drawdown, R-multiple histogram, metrics tiles (expectancy, win rate, profit factor, slippage, adherence), and a filter by run or date range |
 | **Journal** | Daily rules-followed record and notes |
 | **Replay** | Start a replay (date range, settings), see progress, see results, compare with live |
 | **Reports** | The weekly report (`/reports?week=YYYY-MM-DD`) and (Phase 6) the **Day** view of the decision log (`/reports?day=YYYY-MM-DD[&run=<id>]`, linked from the daily Telegram summary): a date picker (default the latest recorded day), the day's summary (text and counts), filters by stage, outcome and ticker, a table (MT time, stage, ticker, outcome, rule, reason) whose rows expand to the checks (name, value, op, threshold, pass/fail) and the data, and a Download CSV link |
-| **Settings** | Approval mode toggle; capital/currency/markets; fill model and slippage; TTLs; kill-switch thresholds; strategy plug-in settings (form generated from the JSON Schema); Claude budget; Telegram test button |
-| **System** | Job runs, API token status and last refresh, worker heartbeat, error log, rate-limit usage |
+| **Settings** | Capital/currency/markets; fill model and slippage; TTLs; kill-switch thresholds; strategy plug-in settings (form generated from the JSON Schema); Claude budget; Telegram test button; the Questrade token paste. Approval mode and kill switches moved to Control (a card links there) |
 
+- Navigation: Dashboard, Control, Reports, Replay, Settings; Trades, Candidates, Performance and Journal under "More" (phone tabs: Dashboard, Control, Reports, More). Their routes and Telegram deep links keep working; `/reports?day=<D>` accepts `stage`, `outcome` and `ticker` filters.
 - The layout works on a phone (for approving away from home). Times are shown in **America/Edmonton**.
-- Live updates use SSE.
+- Live updates use SSE; while the stream is down the Dashboard and Control poll every 15 s.
+- Theme: one tokens file (`web/src/theme/tokens.css`), dark slate by default with a light theme (header control Auto / Dark / Light, remembered per browser). Green and red appear only on money values; lights and badges use status colours.
 
 ## 13. Configuration and secrets
 

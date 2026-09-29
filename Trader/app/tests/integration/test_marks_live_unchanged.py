@@ -10,11 +10,15 @@ arguments) runs in fresh databases:
 - "off": `live_marks` monkeypatched to `(client, None)`: exactly the trunk composition (no tap, no publisher);
 - "failing": as "on", with the publisher's database step raising on every pass.
 
-Trading rows (`test_decisions_day.trading_rows`), the whole Telegram chat and the Questrade call log are
-identical in all three. Only "on" has marks (the traded symbol's last observed quote and a bar for every
+Trading rows (`test_decisions_day.trading_rows`), the whole Telegram chat, the Questrade call log and the
+event-loop iterations of every worker step (the tap adds no scheduling point of its own, so an extra yield or
+a quote delayed by a few milliseconds shows) are identical in all three, and right after every publisher
+pass no other backend holds a lock in the `trader` schema (a pass leaves nothing a trading transaction
+could wait on). Only "on" has marks (the traded symbol's last observed quote and a bar for every
 minute it was observed while held or working); "failing" has exactly one `marks` warning event and no marks.
 """
 
+import asyncio
 from collections.abc import Iterator, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -51,6 +55,16 @@ from trader.worker import StepReport
 pytestmark = pytest.mark.db
 
 DAY = wd.DAY
+# Locks on `trader` tables that other backends of THIS database hold (pg_locks is cluster-wide).
+FOREIGN_LOCKS = text(
+    """
+    SELECT count(*) FROM pg_locks l
+    JOIN pg_class c ON c.oid = l.relation
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'trader' AND l.pid <> pg_backend_pid() AND l.granted
+      AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+    """
+)
 
 
 class LoggingQuestrade(FakeQuestrade):
@@ -106,6 +120,8 @@ class Day:
         self.steps: list[PublishStep] = []
         self.passes: list[tuple[list[ObservedQuote], PublishStep]] = []
         self.tapped: list[bool] = []
+        self.iterations: list[int] = []  # event-loop iterations of each worker step (step, beat, relay pump)
+        self.foreign_locks: list[int] = []  # trader-schema locks of other backends right after each pass
 
     @property
     def chat(self) -> list[tuple[str, Any]]:
@@ -150,9 +166,20 @@ async def manual_day(w: wd.World, mode: str) -> Day:
 
     w.monkeypatch.setattr(MarkPublisher, "_pass", recording_pass)
     original = wd.Driver.at
+    selector: Any = asyncio.get_running_loop()._selector  # type: ignore[attr-defined]
+    real_select = selector.select
+    selects = [0]
+
+    def counting_select(timeout: float | None = None) -> Any:
+        selects[0] += 1
+        return real_select(timeout)
+
+    w.monkeypatch.setattr(selector, "select", counting_select)
 
     async def at(self: wd.Driver, when: Any) -> StepReport:
+        before = selects[0]
         report = await original(self, when)
+        day.iterations.append(selects[0] - before)
         publisher = self.worker.deps.marks
         engines = self.worker.deps.engine_for.__self__  # type: ignore[attr-defined]
         day.tapped.append(isinstance(engines._client, QuoteTap))
@@ -161,6 +188,8 @@ async def manual_day(w: wd.World, mode: str) -> Day:
         else:
             assert publisher is not None
             day.steps.append(await publisher.run_once())
+            with w.core.factory() as s:
+                day.foreign_locks.append(int(s.execute(FOREIGN_LOCKS).scalar_one()))
         return report
 
     w.monkeypatch.setattr(wd.Driver, "at", at)
@@ -258,6 +287,11 @@ async def test_1_2_a_worker_day_is_identical_with_the_marks_on_and_off(
     assert on.calls == off.calls
     assert any(c[0] == "candles_many" and c[2] is not None for c in on.calls[1])  # the 9:35 batch, tapped
     assert on.tapped and all(on.tapped) and not any(off.tapped)
+    # the tap adds no event-loop iteration to any worker step (the 9:35 batch included), and a pass leaves
+    # no lock behind
+    assert len(on.iterations) == len(off.iterations) > 100
+    assert on.iterations == off.iterations
+    assert on.foreign_locks and set(on.foreign_locks) == {0}
 
     # 2: "on" has the traded symbol's marks, "off" has none; no marks warning in either
     quotes, bars = marks_rows(on_factory)
@@ -311,6 +345,8 @@ async def test_3_a_publisher_failing_all_day_changes_nothing_either(
     assert failing.chat == off.chat and failing.replies == off.replies
     assert failing.calls == off.calls
     assert failing.tapped and all(failing.tapped)
+    assert failing.iterations == off.iterations
+    assert failing.foreign_locks and set(failing.foreign_locks) == {0}
 
     errors = [s for s in failing.steps if s.skipped == "error"]
     assert len(errors) >= 10  # it really failed on every pass with observations

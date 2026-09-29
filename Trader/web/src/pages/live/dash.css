@@ -1,0 +1,748 @@
+/* The dense Dashboard layout (DB-DENSE): a stat strip of compact tiles, a main column (equity hero card with a
+   tall chart, positions as cards) beside a full-height sidebar (approvals, kill-switch bars, the activity stream,
+   rejections), and the day's timeline as one row of chips. 8 px gaps, small-caps labels, big tabular values.
+   Design D9 still holds: theme tokens only, green/red only through the `.money` classes, status colours for
+   lights and chips, flat 1 px borders (no shadows or gradients), 44 px touch targets.
+   Widths: wide >= 1024 px (iPad landscape and up) has the two columns; below that the main column and the
+   sidebar stack in that order; a phone (< 720 px) keeps the same order with smaller type. */
+
+/* ---------------------------------------------------------------- page frame */
+
+.dash-page.page {
+  max-width: 1680px;
+  padding: var(--space-2);
+  gap: var(--space-2);
+}
+
+.dash-page.live-page {
+  gap: var(--space-2);
+}
+
+/* The nav already names the page: the heading stays for screen readers only. */
+.dash-h1 {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  margin: 0;
+}
+
+.dash-page .live-notices {
+  gap: var(--space-1);
+}
+
+.dash-page .live-notice {
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.9rem;
+}
+
+/* ---------------------------------------------------------------- 1. stat strip */
+
+.dash-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: stretch;
+  min-width: 0;
+}
+
+/* Every tile (plain ones and the Costs and Books panels) is a small card that grows to fill its row. */
+.dash-strip .st {
+  flex: 1 1 110px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2);
+  background: var(--surface);
+  border: var(--panel-border);
+  border-radius: var(--panel-radius);
+}
+
+.dash-strip .st-costs {
+  flex-basis: 290px;
+}
+
+.dash-strip .st-run {
+  flex-basis: 160px;
+}
+
+.dash-strip .st-engine {
+  flex-basis: 140px;
+}
+
+.dash-strip .st-books {
+  flex-basis: 125px;
+  position: relative;
+}
+
+.dash-strip .st-live {
+  flex-basis: 120px;
+}
+
+.dash-strip .st-periods-error {
+  flex-basis: 340px;
+}
+
+.dash-strip .st-label,
+.dash-strip .lva-label {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1.3;
+}
+
+.dash-strip .st-title {
+  overflow-wrap: normal;
+}
+
+.dash-strip .st-value,
+.dash-strip .lva-headline {
+  font-size: 1.35rem;
+  font-weight: 650;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dash-strip .st-value .lva-chip {
+  font-size: 0.72rem;
+}
+
+.dash-strip .st-sub,
+.dash-strip .lva-sub {
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.dash-strip .lva-meter {
+  height: 4px;
+  margin-top: 2px;
+}
+
+/* Run stats: three small numbers side by side. */
+.dash-strip .st-run {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  justify-content: center;
+  gap: 2px;
+}
+
+.dash-strip .st-run .lva-stat {
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.dash-strip .st-run .st-value {
+  font-size: 1.05rem;
+}
+
+.dash-strip .st-run .st-label {
+  white-space: nowrap;
+}
+
+/* Costs: Claude today with its bar, then fees / Claude / net after AI per period as a small table. Only the
+   first row shows the column names; the other rows keep them for screen readers. */
+.dash-strip .st-costs .panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dash-strip .lva-claude {
+  margin: 0;
+}
+
+.dash-strip .lva-claude .lva-row {
+  gap: 0 var(--space-2);
+  font-size: 0.8rem;
+}
+
+.dash-strip .lva-claude .lva-spent {
+  font-size: 1.1rem;
+  font-weight: 650;
+}
+
+.dash-strip .lva-costs {
+  gap: 0;
+}
+
+.dash-strip .lva-cost-row {
+  grid-template-columns: minmax(4.5em, auto) repeat(3, minmax(0, 1fr));
+  gap: 0 var(--space-2);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.dash-strip .lva-cost-row .lva-label {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+
+.dash-strip .lva-cost-row .lva-k {
+  white-space: nowrap;
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dash-strip .lva-cost-row + .lva-cost-row .lva-k {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Books: the glyph and one word; the identity is for screen readers; the breakdown opens the tile to a full row. */
+.dash-strip .lva-books {
+  gap: 2px;
+}
+
+.dash-strip .lva-books-head {
+  align-items: baseline;
+  gap: var(--space-1);
+}
+
+.dash-strip .lva-glyph {
+  font-size: 1.35rem;
+}
+
+.dash-strip .lva-books-short {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.dash-strip .lva-books-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.dash-strip .lva-link-button.btn {
+  padding: 0 var(--space-2);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.dash-strip .st-books:has(.lva-books.is-open) {
+  flex-basis: 100%;
+}
+
+.dash-strip .lva-books.is-open .lva-breakdown {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr));
+  gap: 2px var(--space-4);
+  font-size: 0.85rem;
+}
+
+.dash-strip .st-live .lva-chip {
+  white-space: normal;
+  font-size: 0.68rem;
+  border-radius: var(--radius);
+}
+
+/* ---------------------------------------------------------------- 2 + 3. main column and sidebar */
+
+.dash-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: stretch;
+  min-width: 0;
+}
+
+.dash-main,
+.dash-side-inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.dash-side {
+  min-width: 0;
+}
+
+@media (min-width: 1024px) {
+  .dash-grid {
+    grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
+  }
+
+  /* With a chart, the sidebar takes the row's full height without adding to it: its content lives in an inner
+     box that fills it and scrolls; the activity stream takes what the other panels leave. Without one (a closed
+     day) both columns keep their natural height, so nothing stretches into an empty panel. */
+  .dash-grid.has-chart .dash-side {
+    position: relative;
+    min-height: max(520px, calc(100vh - 250px));
+  }
+
+  .dash-grid.has-chart .dash-side-inner {
+    position: absolute;
+    inset: 0;
+    overflow-y: auto;
+  }
+
+  .dash-grid:not(.has-chart) .dash-side .activity-panel > .panel-body {
+    max-height: 480px;
+  }
+
+  .dash-grid.has-chart .dash-side .activity-panel {
+    min-height: 200px;
+  }
+
+  .dash-side .activity-panel {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dash-side .activity-panel > .panel-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .dash-side .rej-panel {
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: 34%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dash-side .rej-panel > .panel-body {
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  /* The equity card grows to the column's free height and the chart fills it. */
+  .dash-main .lva-equity.is-tall {
+    flex: 1 1 auto;
+  }
+}
+
+/* The equity hero card: a flex column down to the chart, which takes the free height. */
+.dash-main .lva-equity.is-tall {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.dash-main .lva-equity.is-tall > .panel-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.dash-main .lva-figure.is-tall {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.dash-main .lva-figure.is-tall .lva-plot {
+  flex: 1 1 auto;
+  min-height: clamp(220px, 34vh, 520px);
+}
+
+.dash-main .lva-chart-note {
+  margin-top: var(--space-1);
+  font-size: 0.75rem;
+  gap: 0 var(--space-3);
+}
+
+.lva-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  margin-bottom: var(--space-1);
+}
+
+.lva-hero-now {
+  font-size: 2rem;
+  font-weight: 650;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The current equity is a balance: the text colour, not the money grey. */
+.lva-hero-now .money.flat {
+  color: var(--text);
+}
+
+.lva-hero-change {
+  font-size: 1.1rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.lva-hero-change .lva-label {
+  margin-left: var(--space-1);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dash-page .lva-toggle .btn {
+  padding: 0 var(--space-3);
+  font-size: 0.85rem;
+}
+
+/* ---------------------------------------------------------------- positions */
+
+.dash-page .pos-panel .live-head-badges {
+  gap: var(--space-1) var(--space-2);
+}
+
+.pos-panel .panel-head .live-chips {
+  margin: 0;
+  gap: var(--space-1);
+}
+
+.dash-page .live-chips .live-chip {
+  padding: 0 var(--space-2);
+  font-size: 0.8rem;
+}
+
+/* Flat: one slim line beside the title. */
+.pos-panel.is-flat {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-3);
+}
+
+.pos-flat {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-2);
+  font-size: 0.9rem;
+}
+
+.pos-flat-tag {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--status-muted);
+}
+
+.pos-flat-sep {
+  color: var(--text-muted);
+}
+
+/* Cards: 2-3 per row; an expanded card spans the row with its details and chart. */
+.pos-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+  gap: var(--space-2);
+}
+
+.pos-row.pos-card {
+  border: var(--panel-border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--panel-radius);
+  background: var(--surface-2);
+}
+
+.pos-row.pos-card:last-child {
+  border-bottom: var(--panel-border);
+}
+
+.pos-row.pos-card.near-stop {
+  border-color: var(--status-warn);
+  border-left-color: var(--status-warn);
+}
+
+.pos-row.pos-card.is-expanded {
+  grid-column: 1 / -1;
+}
+
+.pos-summary.pos-card-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: var(--space-2);
+  background: transparent;
+}
+
+.pos-card-summary:hover,
+.pos-row.pos-card.is-expanded .pos-card-summary {
+  background: var(--surface);
+}
+
+.pc-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-2);
+  min-width: 0;
+}
+
+.pc-top .pos-ticker {
+  font-size: 1.05rem;
+}
+
+.pc-held {
+  margin-left: auto;
+}
+
+.pc-pnl {
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.pc-pnl .money {
+  font-size: 1.5rem;
+  font-weight: 650;
+  line-height: 1.15;
+}
+
+.pc-facts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0 var(--space-2);
+  color: var(--text);
+}
+
+.pc-spark {
+  display: block;
+  margin-top: 2px;
+}
+
+.sparkline.is-stretched {
+  width: 100%;
+  height: 40px;
+}
+
+.pos-card .pos-expanded {
+  border-top: var(--panel-border);
+}
+
+.dash-page .pos-summary {
+  padding: var(--space-1) var(--space-2);
+}
+
+.dash-page .pos-card .pos-summary {
+  padding: var(--space-2);
+}
+
+/* ---------------------------------------------------------------- sidebar panels */
+
+.dash-page .lva-switches {
+  margin: 0 0 var(--space-1);
+}
+
+.dash-page .lva-switch {
+  padding: var(--space-1) 0;
+  font-size: 0.85rem;
+}
+
+.dash-page .lva-switch .lva-meter {
+  height: 4px;
+  margin: 2px 0 0 calc(10px + var(--space-2));
+}
+
+.dash-page .lva-risk-facts {
+  gap: var(--space-1);
+  font-size: 0.85rem;
+}
+
+.dash-page .lva-risk .lva-label {
+  font-size: 0.75rem;
+}
+
+.dash-page .activity-panel .panel-head .live-chips {
+  margin: 0;
+  gap: var(--space-1);
+}
+
+.dash-page .activity-item {
+  gap: var(--space-1) var(--space-2);
+  padding: 0 var(--space-1);
+  font-size: 0.85rem;
+}
+
+.dash-page .activity-text .link-touch {
+  min-height: var(--touch);
+}
+
+.dash-page .rej-toggle {
+  font-size: 0.85rem;
+}
+
+.dash-page .rej-note {
+  margin: 0 0 var(--space-1);
+}
+
+.dash-page .live-pending .card {
+  padding: var(--space-2);
+}
+
+/* Pending approvals: the title and a one-line empty state share a line; cards wrap below at full width. */
+.dash-page .live-pending > .panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-3);
+}
+
+.dash-page .live-pending > .panel > .panel-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dash-page .live-pending .panel-empty {
+  font-size: 0.9rem;
+}
+
+/* ---------------------------------------------------------------- 4. the day's timeline as chips */
+
+.dash-page .today-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+}
+
+.dash-page .today-panel > .panel-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dash-page .today-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+}
+
+.dash-page .today-timeline .panel-empty {
+  margin: 0;
+}
+
+.dash-page .today-timeline .timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.dash-page .today-timeline .timeline-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: var(--panel-border);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.dash-page .today-timeline .timeline-item:last-child {
+  border-bottom: var(--panel-border);
+}
+
+.dash-page .today-timeline .timeline-status {
+  order: -1;
+}
+
+.dash-page .today-timeline .timeline-item.status-upcoming .timeline-status {
+  display: none;
+}
+
+.dash-page .today-timeline .timeline-item.status-done .timeline-status {
+  color: var(--status-ok);
+}
+
+.dash-page .today-timeline .timeline-item.tone-bad {
+  border-color: var(--status-bad);
+}
+
+.dash-page .today-timeline .timeline-item.is-next {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+
+.dash-page .today-timeline .timeline-label .small {
+  font-size: 0.75rem;
+}
+
+/* ---------------------------------------------------------------- phone */
+
+@media (max-width: 719px) {
+  .dash-strip .st {
+    flex-basis: calc(50% - var(--space-2));
+  }
+
+  .dash-strip .st-period {
+    flex-basis: calc(33% - var(--space-2));
+  }
+
+  .dash-strip .st-costs,
+  .dash-strip .st-run,
+  .dash-strip .st-periods-error {
+    flex-basis: 100%;
+  }
+
+  .dash-strip .st-value,
+  .dash-strip .lva-headline {
+    font-size: 1.1rem;
+  }
+
+  .dash-strip .lva-cost-row {
+    grid-template-columns: minmax(4.5em, auto) repeat(3, minmax(0, 1fr));
+  }
+
+  .dash-strip .lva-cost-row > .lva-label {
+    grid-column: auto;
+  }
+
+  .lva-hero-now {
+    font-size: 1.6rem;
+  }
+
+  .dash-main .lva-figure.is-tall .lva-plot {
+    min-height: 220px;
+  }
+
+  .dash-side .activity-panel > .panel-body {
+    max-height: 420px;
+    overflow-y: auto;
+  }
+
+  .dash-side .rej-panel > .panel-body {
+    max-height: 320px;
+    overflow-y: auto;
+  }
+}
+
+/* Tablet portrait (720-1023 px): the sidebar sits under the main column; its stream scrolls in a bounded box. */
+@media (min-width: 720px) and (max-width: 1023px) {
+  .dash-side .activity-panel > .panel-body {
+    max-height: 480px;
+    overflow-y: auto;
+  }
+}

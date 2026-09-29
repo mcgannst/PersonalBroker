@@ -42,9 +42,76 @@ function Detail({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+/** An expanded position: every detail and its 1-minute chart. */
+function Expansion({ p, id }: { p: LivePositionOut; id: string }) {
+  return (
+    <div className="pos-expanded" id={id}>
+      <dl className="pos-dl" role="group" aria-label={`${p.ticker} details`}>
+        <Detail label="Side">{`${p.side} ${p.qty}`}</Detail>
+        <Detail label="Entry">{price(p.entry)}</Detail>
+        <Detail label="Mark">{price(p.mark)}</Detail>
+        <Detail label="Stop">{price(p.stop)}</Detail>
+        <Detail label="Target">{price(p.target)}</Detail>
+        <Detail label="Unrealised">
+          <Money value={p.unrealized} />
+        </Detail>
+        <Detail label="R">{p.unrealized_r === null ? DASH : fmtR(p.unrealized_r)}</Detail>
+        <Detail label="To stop">{p.distance_to_stop_r === null ? DASH : fmtR(p.distance_to_stop_r).replace(/^\+/, "")}</Detail>
+        <Detail label="Held">{fmtDuration(p.held_seconds)}</Detail>
+        <Detail label="Strategy">{p.strategy_key}</Detail>
+      </dl>
+      <PositionChart p={p} />
+    </div>
+  );
+}
+
+function rowClasses(base: string, p: LivePositionOut, expanded: boolean): string {
+  const stale = p.mark_state !== "live";
+  return [base, p.near_stop ? "near-stop" : "", stale ? "is-stale" : "", expanded ? "is-expanded" : ""].filter(Boolean).join(" ");
+}
+
+/**
+ * DB-DENSE: one open position as a card (the Dashboard shows cards for up to `CARDS_MAX` positions): ticker,
+ * side and qty, time held, the unrealised $ large with R, entry → mark, stop / target and a wide sparkline with
+ * the entry and stop lines. The same near-stop highlight, stale badge and tap-to-expand as a row; an expanded
+ * card spans the whole row of the grid.
+ */
+export function PositionCard({ p, expanded, onToggle }: { p: LivePositionOut; expanded: boolean; onToggle: () => void }) {
+  const stale = p.mark_state !== "live";
+  const panelId = `pos-${p.id}-details`;
+  return (
+    <li className={rowClasses("pos-row pos-card", p, expanded)} data-ticker={p.ticker} data-id={p.id}>
+      <button type="button" className="pos-summary pos-card-summary" aria-expanded={expanded} aria-controls={expanded ? panelId : undefined} onClick={onToggle} style={{ minHeight: MIN_TOUCH_PX }}>
+        <span className="pc-top">
+          <span className="pos-ticker">{p.ticker}</span>{" "}
+          <span className="pc-side small muted">{`${p.side} ${p.qty}`}</span>{" "}
+          {p.near_stop && <span className="live-sr-only">near stop</span>}{" "}
+          {stale && <StaleBadge />}{" "}
+          <span className="pc-held num small muted">{fmtDuration(p.held_seconds)}</span>
+        </span>{" "}
+        <span className="pc-pnl pos-pnl">
+          <Money value={p.unrealized} />{" "}
+          <span className="num small muted">{p.unrealized_r === null ? DASH : fmtR(p.unrealized_r)}</span>
+        </span>{" "}
+        <span className="pc-facts num small">
+          <span className="pc-fact">{`${price(p.entry)} → ${price(p.mark)}`}</span>{" "}
+          <span className="pc-fact">
+            <span className="muted">stop / tgt </span>
+            {`${price(p.stop)} / ${price(p.target)}`}
+          </span>
+        </span>{" "}
+        <span className="pc-spark">
+          <Sparkline points={p.spark} entry={p.entry} stop={p.stop} width={240} height={40} stretch label={`${p.ticker} since entry`} />
+        </span>
+      </button>
+      {expanded && <Expansion p={p} id={panelId} />}
+    </li>
+  );
+}
+
 export function PositionRow({ p, expanded, onToggle }: { p: LivePositionOut; expanded: boolean; onToggle: () => void }) {
   const stale = p.mark_state !== "live";
-  const classes = ["pos-row", p.near_stop ? "near-stop" : "", stale ? "is-stale" : "", expanded ? "is-expanded" : ""].filter(Boolean).join(" ");
+  const classes = rowClasses("pos-row", p, expanded);
   const panelId = `pos-${p.id}-details`;
   return (
     <li className={classes} data-ticker={p.ticker} data-id={p.id}>
@@ -66,25 +133,7 @@ export function PositionRow({ p, expanded, onToggle }: { p: LivePositionOut; exp
           <Sparkline points={p.spark} entry={p.entry} stop={p.stop} label={`${p.ticker} since entry`} />
         </span>
       </button>
-      {expanded && (
-        <div className="pos-expanded" id={panelId}>
-          <dl className="pos-dl" role="group" aria-label={`${p.ticker} details`}>
-            <Detail label="Side">{`${p.side} ${p.qty}`}</Detail>
-            <Detail label="Entry">{price(p.entry)}</Detail>
-            <Detail label="Mark">{price(p.mark)}</Detail>
-            <Detail label="Stop">{price(p.stop)}</Detail>
-            <Detail label="Target">{price(p.target)}</Detail>
-            <Detail label="Unrealised">
-              <Money value={p.unrealized} />
-            </Detail>
-            <Detail label="R">{p.unrealized_r === null ? DASH : fmtR(p.unrealized_r)}</Detail>
-            <Detail label="To stop">{p.distance_to_stop_r === null ? DASH : fmtR(p.distance_to_stop_r).replace(/^\+/, "")}</Detail>
-            <Detail label="Held">{fmtDuration(p.held_seconds)}</Detail>
-            <Detail label="Strategy">{p.strategy_key}</Detail>
-          </dl>
-          <PositionChart p={p} />
-        </div>
-      )}
+      {expanded && <Expansion p={p} id={panelId} />}
     </li>
   );
 }

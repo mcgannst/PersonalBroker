@@ -22,12 +22,18 @@ const CHIPS: { key: ActivityFilter; label: string }[] = [
   { key: "scan", label: "Scan" },
 ];
 
+/** DB-DENSE: the small kind chip on each row (a status look, never a money colour). */
+const CHIP_SHORT: Record<ActivityChip, string> = { trades: "trade", proposals: "prop", alerts: "alert", scan: "scan" };
+
 function ActivityRow({ item }: { item: ActivityItemOut }) {
   const showAmount = item.kind === "exit" && item.amount !== null;
   const tone = item.tone === "warn" ? "tone-warn" : "";
   return (
     <li className={["activity-item", tone].filter(Boolean).join(" ")} data-id={item.id} data-kind={item.kind}>
       <span className="activity-time num small muted">{fmtTime(item.ts)}</span>
+      <span className="activity-kind" aria-hidden="true">
+        {CHIP_SHORT[item.chip] ?? item.chip}
+      </span>
       <span className="activity-text">
         {item.link ? (
           <SafeLink className="link-touch" to={item.link}>
@@ -46,7 +52,7 @@ export function ActivityFeed({ items, error, onRetry }: { items: ActivityItemOut
   const [filter, setFilter] = useState<ActivityFilter>("all");
 
   if (items === null) {
-    return <Panel title="Activity" error={error ?? "Activity not available"} onRetry={onRetry} />;
+    return <Panel title="Activity" className="activity-panel" error={error ?? "Activity not available"} onRetry={onRetry} />;
   }
 
   const shown = filter === "all" ? items : items.filter((i) => i.chip === filter);
@@ -55,15 +61,18 @@ export function ActivityFeed({ items, error, onRetry }: { items: ActivityItemOut
   if (items.length === 0) empty = "No activity yet today";
   else if (shown.length === 0) empty = `Nothing in ${label} today`;
 
+  const chips = (
+    <div className="live-chips" role="group" aria-label="Filter activity">
+      {CHIPS.map((c) => (
+        <Button key={c.key} className="live-chip" aria-pressed={filter === c.key} onClick={() => setFilter(c.key)}>
+          {c.label}
+        </Button>
+      ))}
+    </div>
+  );
+
   return (
-    <Panel title="Activity">
-      <div className="live-chips" role="group" aria-label="Filter activity">
-        {CHIPS.map((c) => (
-          <Button key={c.key} className="live-chip" aria-pressed={filter === c.key} onClick={() => setFilter(c.key)}>
-            {c.label}
-          </Button>
-        ))}
-      </div>
+    <Panel title="Activity" className="activity-panel" badge={chips}>
       {empty !== null ? (
         <p className="panel-empty muted">{empty}</p>
       ) : (

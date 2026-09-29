@@ -11,9 +11,27 @@ export const FALLBACK_CHART_WIDTH = 340;
  * Renders a Recharts chart at the container's width (`ResponsiveContainer`), or at a fixed `width` when one is
  * given or the browser has no `ResizeObserver`.
  */
-export function ChartFrame({ height, width, children }: { height: number; width?: number; children: ReactElement }) {
+export function ChartFrame({
+  height,
+  width,
+  fill = false,
+  children,
+}: {
+  height: number;
+  width?: number;
+  /** Fill the parent's height (at least `height`): the parent must give the chart a height (CSS). */
+  fill?: boolean;
+  children: ReactElement;
+}) {
   const fixed = width ?? (typeof ResizeObserver === "undefined" ? FALLBACK_CHART_WIDTH : undefined);
   if (fixed !== undefined) return cloneElement(children, { width: fixed, height });
+  if (fill) {
+    return (
+      <ResponsiveContainer width="100%" height="100%" minHeight={height}>
+        {children}
+      </ResponsiveContainer>
+    );
+  }
   return (
     <ResponsiveContainer width="100%" height={height}>
       {children}

@@ -204,7 +204,7 @@
 
 .activity-item {
   display: grid;
-  grid-template-columns: 5.5em minmax(0, 1fr) auto;
+  grid-template-columns: 5.5em auto minmax(0, 1fr) auto;
   gap: var(--space-2);
   align-items: center;
   min-height: var(--touch);
@@ -219,6 +219,24 @@
 
 .activity-item.tone-warn {
   border-left-color: var(--status-warn);
+}
+
+/* DB-DENSE: the row's small kind chip (trade, prop, alert, scan): a status look, never a money colour. */
+.activity-kind {
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.activity-item.tone-warn .activity-kind {
+  border-color: var(--status-warn);
+  color: var(--status-warn);
 }
 
 .activity-text {
@@ -380,6 +398,6 @@
   }
 
   .activity-item {
-    grid-template-columns: 4.5em minmax(0, 1fr) auto;
+    grid-template-columns: 4.5em auto minmax(0, 1fr) auto;
   }
 }

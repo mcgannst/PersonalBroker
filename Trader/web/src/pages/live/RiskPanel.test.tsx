@@ -79,7 +79,21 @@ describe("RiskPanel (acceptance test 6)", () => {
   it("with no cap: the open risk as text only", () => {
     renderRisk({ ...riskOut, open_risk_cap: null });
     expect(screen.getByTestId("open-risk")).toHaveTextContent("$17.40 (no cap)");
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    // DB-DENSE: the percent switches have bars of their own; the open risk has none without a cap
+    expect(screen.queryByRole("progressbar", { name: "Open risk against the cap" })).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("open-risk")).queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("DB-DENSE: each percent switch is a compact bar of its value against its limit (amber from 80 %, full when tripped)", () => {
+    renderRisk(tripDrawdown());
+    const daily = screen.getByRole("progressbar", { name: "Daily loss against its limit" });
+    expect(daily).toHaveAttribute("aria-valuenow", "0");
+    const drawdown = screen.getByRole("progressbar", { name: "Max drawdown against its limit" });
+    expect(drawdown).toHaveAttribute("aria-valuenow", "100"); // 21.5 % of a 20 % limit: capped at full
+    expect(drawdown.querySelector(".lva-meter-fill")).toHaveClass("status-warn");
+    expect(within(screen.getByTestId("killswitch-max_drawdown_pct")).getByRole("progressbar")).toBe(drawdown);
+    // R and pause switches have no percent limit: no bar
+    for (const k of ["expectancy", "manual_pause"]) expect(within(screen.getByTestId(`killswitch-${k}`)).queryByRole("progressbar")).toBeNull();
   });
 
   it("shows its error with Retry", async () => {

@@ -1,12 +1,14 @@
 // The equity chart (design §3 item 2, plan S6, DB-T7): the live run's equity for today or the whole run, the
 // day's start line, fill markers (buy ▲, sell ▼) and a Today ⇄ Whole run toggle. Colours come from the theme
 // tokens through `readToken`, so both themes work; no green or red here (money colours are for money values).
+// DB-DENSE: on the Dashboard it is the hero card: the current equity in large type with today's change ($ and %)
+// above a tall chart that fills the height it is given.
 import type { SVGProps } from "react";
 import { CartesianGrid, Line, LineChart, ReferenceDot, ReferenceLine, Tooltip, XAxis, YAxis } from "recharts";
 
 import type { EquitySeriesOut, FillMarkerOut, LiveRange } from "../../api/types";
 import { Button } from "../../components/ui";
-import { fmtDateTime, fmtMoney } from "../../lib/format";
+import { fmtDateTime, fmtMoney, fmtPct } from "../../lib/format";
 import { TOKENS, readToken } from "../../theme/tokens";
 import { ChartFrame, plotNumber, plotTime, tickClock, tickDay } from "../performance/ChartFrame";
 import { Money } from "./PeriodPnl";
@@ -15,6 +17,33 @@ import "./liveA.css";
 
 export const EQUITY_CHART_HEIGHT = 220;
 export const EMPTY_EQUITY = "No equity data for this range";
+
+/** Today's change as a percentage of the equity at the day's start (`now - change`), or null. For display only. */
+export function changePct(now: string | null | undefined, change: string | null | undefined): string | null {
+  const n = plotNumber(now);
+  const c = plotNumber(change);
+  if (n === null || c === null) return null;
+  const base = n - c;
+  if (!(base > 0)) return null;
+  return fmtPct((c / base).toFixed(8));
+}
+
+/** The current equity, large, with today's change in $ (green/red by sign, flat at zero) and %. */
+function EquityHero({ now, change }: { now: string | null; change: string | null }) {
+  const pct = changePct(now, change);
+  return (
+    <div className="lva-hero" data-testid="equity-hero">
+      <span className="lva-hero-now">
+        <Money value={now} tone="flat" />
+      </span>
+      <span className="lva-hero-change">
+        <Money value={change} signed />
+        {pct !== null && <span className="num lva-sub">{` (${pct})`}</span>}
+        <span className="lva-label"> today</span>
+      </span>
+    </div>
+  );
+}
 
 /** A token's current value, or the CSS variable itself when it cannot be read (tests, no stylesheet). */
 function colour(name: keyof typeof TOKENS): string {
@@ -65,7 +94,7 @@ function FillMark({ cx, cy, side, fill }: { cx?: number; cy?: number; side: "buy
   return <path className={`lva-fill lva-fill-${side}`} d={d} fill={fill} stroke={colour("surface")} strokeWidth={1} />;
 }
 
-function Plot({ equity, range }: { equity: EquitySeriesOut; range: LiveRange }) {
+function Plot({ equity, range, tall }: { equity: EquitySeriesOut; range: LiveRange; tall: boolean }) {
   const points = equity.points
     .map((p) => ({ t: plotTime(p.ts), equity: plotNumber(p.equity) }))
     .filter((p): p is Point => p.t !== null && p.equity !== null)
@@ -79,8 +108,9 @@ function Plot({ equity, range }: { equity: EquitySeriesOut; range: LiveRange }) 
   const domain: [number, number] = [points[0]!.t, points[points.length - 1]!.t];
   const last = equity.points[equity.points.length - 1];
   return (
-    <figure className="lva-figure" aria-label={range === "today" ? "Equity today" : "Equity over the whole run"}>
-      <ChartFrame height={EQUITY_CHART_HEIGHT}>
+    <figure className={tall ? "lva-figure is-tall" : "lva-figure"} aria-label={range === "today" ? "Equity today" : "Equity over the whole run"}>
+      <div className="lva-plot">
+      <ChartFrame height={EQUITY_CHART_HEIGHT} fill={tall}>
         <LineChart data={points} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid stroke={colour("chartGrid")} strokeDasharray="3 3" vertical={false} />
           <XAxis
@@ -118,6 +148,7 @@ function Plot({ equity, range }: { equity: EquitySeriesOut; range: LiveRange }) 
           })}
         </LineChart>
       </ChartFrame>
+      </div>
       <figcaption className="lva-chart-note" data-testid="equity-legend">
         {start !== null && (
           <span>
@@ -142,12 +173,21 @@ export function EquityChart({
   onRange,
   error,
   onRetry,
+  now,
+  changeToday = null,
+  tall = false,
 }: {
   equity: EquitySeriesOut | null;
   range: LiveRange;
   onRange: (r: LiveRange) => void;
   error?: string | null;
   onRetry?: () => void;
+  /** DB-DENSE: the current equity; when given (even null), the hero line shows above the chart. */
+  now?: string | null;
+  /** Today's P&L after fees, shown beside the current equity. */
+  changeToday?: string | null;
+  /** The chart fills the height the page gives it (the Dashboard's hero card). */
+  tall?: boolean;
 }) {
   const toggle = (
     <div className="lva-toggle" role="group" aria-label="Equity range">
@@ -160,9 +200,17 @@ export function EquityChart({
     </div>
   );
   const hasPoints = equity !== null && equity.points.length > 0;
+  if (now === undefined) {
+    return (
+      <Panel title="Equity" className="lva-equity" badge={toggle} error={equity ? null : error} onRetry={onRetry} empty={hasPoints ? null : EMPTY_EQUITY}>
+        {hasPoints && <Plot equity={equity} range={range} tall={tall} />}
+      </Panel>
+    );
+  }
   return (
-    <Panel title="Equity" badge={toggle} error={equity ? null : error} onRetry={onRetry} empty={hasPoints ? null : EMPTY_EQUITY}>
-      {hasPoints && <Plot equity={equity} range={range} />}
+    <Panel title="Equity" className={tall && hasPoints ? "lva-equity is-tall" : "lva-equity"} badge={toggle} error={equity ? null : error} onRetry={onRetry}>
+      <EquityHero now={now} change={changeToday} />
+      {hasPoints ? <Plot equity={equity} range={range} tall={tall} /> : <p className="panel-empty lva-muted">{EMPTY_EQUITY}</p>}
     </Panel>
   );
 }

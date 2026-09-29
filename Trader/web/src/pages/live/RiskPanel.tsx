@@ -61,7 +61,20 @@ function lightTone(k: KillSwitchLightOut): string {
   return k.automatic ? "status-bad" : "status-warn";
 }
 
+/**
+ * DB-DENSE: how far a percent switch is toward its limit (value / threshold, for the bar only), or null when it
+ * has no percent limit.
+ */
+export function switchFraction(k: KillSwitchLightOut): number | null {
+  if (k.unit !== "pct") return null;
+  const value = plotNumber(k.tripped && k.trip_value !== null ? k.trip_value : k.value);
+  const threshold = plotNumber(k.tripped && k.trip_threshold !== null ? k.trip_threshold : k.threshold);
+  if (value === null || threshold === null || threshold <= 0) return null;
+  return Math.max(0, value) / threshold;
+}
+
 function SwitchLight({ k }: { k: KillSwitchLightOut }) {
+  const fraction = switchFraction(k);
   return (
     <li className={k.tripped ? "lva-switch is-tripped" : "lva-switch"} data-testid={`killswitch-${k.switch}`}>
       <div className="lva-switch-head">
@@ -69,6 +82,7 @@ function SwitchLight({ k }: { k: KillSwitchLightOut }) {
         <span className="lva-switch-label">{k.label}</span>
         <span className="num lva-switch-value">{switchValue(k)}</span>
       </div>
+      {fraction !== null && <Meter fraction={fraction} label={`${k.label} against its limit`} />}
       {k.count_min !== null && (
         <div className="lva-sub">
           {k.count ?? 0} of {k.count_min} trades
@@ -134,7 +148,7 @@ function RiskBody({ risk }: { risk: RiskOut }) {
 
 export function RiskPanel({ risk, error, onRetry }: { risk: RiskOut | null; error?: string | null; onRetry?: () => void }) {
   return (
-    <Panel title="Risk" error={risk ? null : error} onRetry={onRetry} empty={risk ? null : "No risk data"}>
+    <Panel title="Risk" className="lva-risk" error={risk ? null : error} onRetry={onRetry} empty={risk ? null : "No risk data"}>
       {risk && <RiskBody risk={risk} />}
     </Panel>
   );

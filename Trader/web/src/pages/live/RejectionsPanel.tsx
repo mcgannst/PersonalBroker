@@ -63,11 +63,11 @@ export function RejectionsPanel({ rejections, error, onRetry }: { rejections: Re
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
 
   if (rejections === null) {
-    return <Panel title={TITLE} error={error ?? "Rejections not available"} onRetry={onRetry} />;
+    return <Panel title={TITLE} className="rej-panel" error={error ?? "Rejections not available"} onRetry={onRetry} />;
   }
 
   if (rejections.rules.length === 0) {
-    return <Panel title={TITLE} empty="No rejections recorded today" />;
+    return <Panel title={TITLE} className="rej-panel" empty="No rejections recorded today" />;
   }
 
   // Largest count first; ties keep the server's order (Array.prototype.sort is stable).
@@ -82,7 +82,7 @@ export function RejectionsPanel({ rejections, error, onRetry }: { rejections: Re
   const badge = <span className="small muted num">{`${rejections.total} rejected`}</span>;
 
   return (
-    <Panel title={TITLE} badge={badge}>
+    <Panel title={TITLE} className="rej-panel" badge={badge}>
       {rejections.source === "candidates" && <p className="muted small rej-note">from candidates, decision log not recorded yet</p>}
       <ul className="rej-list" aria-label="Rejection rules">
         {rules.map((r) => (

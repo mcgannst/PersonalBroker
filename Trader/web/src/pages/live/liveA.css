@@ -178,37 +178,8 @@
   height: 100%;
 }
 
-/* ---------------------------------------------------------------- top bar */
-
-.lva-topbar .panel-title {
-  font-size: 1rem;
-}
-
-.lva-status-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-/* Panels nested in the top bar read as tiles: the second surface, no border of their own. */
-.lva-topbar .panel-body .panel {
-  --surface: var(--surface-2);
-  --panel-border: 1px solid transparent;
-}
-
-.lva-top-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  gap: var(--space-3);
-  align-items: start;
-}
-
-.lva-top-periods {
-  grid-column: 1;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-3);
-}
+/* ---------------------------------------------------------------- top bar
+   The stat strip's layout (tiles in a wrapping row) is in dash.css (DB-DENSE); these are the tiles' own bits. */
 
 .lva-tile {
   display: flex;
@@ -218,7 +189,6 @@
 }
 
 .lva-stats {
-  grid-column: 1;
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-5);
@@ -227,15 +197,6 @@
 .lva-stat {
   display: flex;
   flex-direction: column;
-}
-
-.lva-top-side {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
 }
 
 /* ---------------------------------------------------------------- periods */
@@ -431,16 +392,6 @@
 /* ---------------------------------------------------------------- phone: sections and columns stack */
 
 @media (max-width: 720px) {
-  .lva-top-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .lva-top-side {
-    grid-column: 1;
-    grid-row: auto;
-  }
-
-  .lva-top-periods,
   .lva-periods {
     grid-template-columns: 1fr;
   }

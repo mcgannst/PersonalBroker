@@ -61,10 +61,13 @@ function BooksBody({ books }: { books: BooksCheckOut }) {
   const [open, setOpen] = useState(false);
   const id = useId();
   return (
-    <div className="lva-books">
+    <div className={open ? "lva-books is-open" : "lva-books"}>
       <div className="lva-books-head">
         <span className={`lva-glyph ${books.ok ? "status-ok" : "status-bad"}`} aria-hidden="true">
           {books.ok ? "✓" : "✗"}
+        </span>
+        <span className="lva-books-short" aria-hidden="true">
+          {books.ok ? "balanced" : "off"}
         </span>
         <span className="lva-books-text">
           <span className="lva-sr">{books.ok ? "Books balance: " : "Books do not balance: "}</span>
@@ -81,7 +84,7 @@ function BooksBody({ books }: { books: BooksCheckOut }) {
 
 export function BooksCheck({ books, error, onRetry }: { books: BooksCheckOut | null; error?: string | null; onRetry?: () => void }) {
   return (
-    <Panel title="Books" error={books ? null : error} onRetry={onRetry} empty={books ? null : "No books check yet"}>
+    <Panel title="Books" className="st st-books" error={books ? null : error} onRetry={onRetry} empty={books ? null : "No books check yet"}>
       {books && <BooksBody books={books} />}
     </Panel>
   );

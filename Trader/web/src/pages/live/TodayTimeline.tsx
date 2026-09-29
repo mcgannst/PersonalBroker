@@ -20,10 +20,10 @@ export function TodayTimeline({
   onRetry?: () => void;
 }) {
   if (timeline === null) {
-    return <Panel title="Today" error={error ?? "Timeline not available"} onRetry={onRetry} />;
+    return <Panel title="Today" className="today-panel" error={error ?? "Timeline not available"} onRetry={onRetry} />;
   }
   return (
-    <Panel title="Today">
+    <Panel title="Today" className="today-panel">
       <div className="today-timeline">
         {!session.is_session && <p className="panel-empty muted">{`Market closed today; next session ${fmtDate(session.date)}`}</p>}
         {(session.is_session || timeline.length > 0) && <Timeline items={timeline} />}

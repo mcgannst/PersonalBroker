@@ -1,12 +1,12 @@
 // The Dashboard (live dashboard design §3, plan DB-T11; D1-D5, D9): a read-only live monitor fed by
 // `GET /api/live` (query `qk.live`, under the `dashboard` prefix, so every mutation and SSE topic that refreshes
-// the dashboard refreshes it; the provider throttles the 2 s `marks` topic, plan S9). Layout (phone: this order;
-// tablet and wider: sections 2 and 4 in two columns):
-//   1. TopBar (session, P&L by period, costs, books check, engine chip, live indicator)
-//   2. EquityChart | RiskPanel
-//   3. PositionsTable
-//   4. ActivityFeed | RejectionsPanel
-//   5. TodayTimeline, and "Pending approvals" (the one-tap flow) when the mode is manual or a proposal waits.
+// the dashboard refreshes it; the provider throttles the 2 s `marks` topic, plan S9). Dense layout (DB-DENSE,
+// panels in the "dense" density; phone and tablet portrait: this order, stacked):
+//   1. TopBar: the stat strip (P&L by period, costs, run stats, open risk, engine, books, live indicator)
+//   2. main column (~2/3): the equity hero card (tall chart), then the positions (cards up to 6, else rows)
+//   3. sidebar (~1/3, full height): "Pending approvals" (the one-tap flow, when the mode is manual or a proposal
+//      waits), Risk (kill-switch bars), Activity (fills the rest, scrolls), Rejected today
+//   4. TodayTimeline as one row of chips.
 // `?range=run` and `?expand=12,15` live in the URL beside `?proposal=` (the Telegram deep link: a pending
 // proposal is highlighted, a decided one opens its panel). Each part fails on its own (plan S15): its panel shows
 // the error with Retry; a whole-request failure keeps the frame and the last good data under the error box.
@@ -25,12 +25,14 @@ import { fmtDuration } from "../lib/format";
 import { parseId } from "../lib/params";
 import { useLiveUpdates } from "../live/useLiveUpdates";
 import "./dashboard/dashboard.css";
+import "./live/dash.css";
 import { proposalHeadline } from "./dashboard/labels";
 import PendingProposal from "./dashboard/PendingProposal";
 import ProposalPanel from "./dashboard/ProposalPanel";
 import { ActivityFeed } from "./live/ActivityFeed";
 import { EquityChart } from "./live/EquityChart";
-import { Panel } from "./live/Panel";
+import { Panel, PanelDensity } from "./live/Panel";
+import { orderedPeriods } from "./live/PeriodPnl";
 import { PositionsTable } from "./live/PositionsTable";
 import { RejectionsPanel } from "./live/RejectionsPanel";
 import { RiskPanel } from "./live/RiskPanel";
@@ -191,30 +193,48 @@ function LiveBody({
   onRetry: () => void;
 }) {
   const err = (part: string) => partError(live, part);
+  const today = orderedPeriods(live.periods).find((p) => p.period === "today");
+  const lastPoint = live.equity?.points[live.equity.points.length - 1];
+  const now = live.risk?.equity ?? lastPoint?.equity ?? null;
   return (
-    <>
+    <PanelDensity.Provider value="dense">
       <TopBar live={live} connected={connected} updatedAt={updatedAt} onRetry={onRetry} />
       <Notices live={live} />
-      <div className="live-grid-2">
-        <EquityChart equity={live.equity} range={range} onRange={onRange} error={err("equity")} onRetry={onRetry} />
-        <RiskPanel risk={live.risk} error={err("risk")} onRetry={onRetry} />
-      </div>
-      <PositionsTable
-        positions={live.positions}
-        closedToday={live.closed_today}
-        staleAfterSeconds={live.marks_stale_seconds}
-        expanded={expand}
-        onExpand={onExpand}
-        error={err("positions")}
-        onRetry={onRetry}
-      />
-      <div className="live-grid-2">
-        <ActivityFeed items={live.activity} error={err("activity")} onRetry={onRetry} />
-        <RejectionsPanel rejections={live.rejections} error={err("rejections")} onRetry={onRetry} />
+      <div className={live.equity !== null && live.equity.points.length > 0 ? "dash-grid has-chart" : "dash-grid"}>
+        <div className="dash-main">
+          <EquityChart
+            equity={live.equity}
+            range={range}
+            onRange={onRange}
+            error={err("equity")}
+            onRetry={onRetry}
+            now={now}
+            changeToday={today?.pnl_after_fees ?? null}
+            tall
+          />
+          <PositionsTable
+            positions={live.positions}
+            closedToday={live.closed_today}
+            staleAfterSeconds={live.marks_stale_seconds}
+            expanded={expand}
+            onExpand={onExpand}
+            error={err("positions")}
+            onRetry={onRetry}
+            session={live.session}
+            timeline={live.timeline}
+          />
+        </div>
+        <aside className="dash-side" aria-label="Approvals, risk and activity">
+          <div className="dash-side-inner">
+            <PendingApprovals live={live} updatedAt={updatedAt} proposalId={proposalId} onRetry={onRetry} />
+            <RiskPanel risk={live.risk} error={err("risk")} onRetry={onRetry} />
+            <ActivityFeed items={live.activity} error={err("activity")} onRetry={onRetry} />
+            <RejectionsPanel rejections={live.rejections} error={err("rejections")} onRetry={onRetry} />
+          </div>
+        </aside>
       </div>
       <TodayTimeline timeline={live.timeline} session={live.session} error={err("timeline")} onRetry={onRetry} />
-      <PendingApprovals live={live} updatedAt={updatedAt} proposalId={proposalId} onRetry={onRetry} />
-    </>
+    </PanelDensity.Provider>
   );
 }
 
@@ -243,8 +263,8 @@ export default function DashboardPage() {
   };
 
   return (
-    <main className="page live-page">
-      <h1>Dashboard</h1>
+    <main className="page live-page dash-page">
+      <h1 className="dash-h1">Dashboard</h1>
       {live.isError && <ErrorBox error={live.error} onRetry={retry} />}
       {live.data ? (
         <LiveBody

@@ -109,7 +109,7 @@ export function CostBar({
   const claudeError = claude === null && error ? error : null;
   const nothing = claude === null && rows.length === 0 && claudeError === null;
   return (
-    <Panel title="Costs" empty={nothing ? "No cost data" : null}>
+    <Panel title="Costs" className="st st-costs" empty={nothing ? "No cost data" : null}>
       {claude && <ClaudeToday claude={claude} />}
       {claudeError !== null && <InlinePartError message={claudeError} onRetry={onRetry} />}
       {rows.length > 0 && (

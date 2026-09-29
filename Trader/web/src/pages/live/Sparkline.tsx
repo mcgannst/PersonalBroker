@@ -15,6 +15,8 @@ export interface SparklineProps {
   height?: number;
   /** The accessible name, e.g. "AAA since entry". */
   label: string;
+  /** DB-DENSE: stretch to the box CSS gives it (position cards), strokes keeping their width. */
+  stretch?: boolean;
 }
 
 /** Inner padding, so a line at the edge of the range is not clipped. */
@@ -24,20 +26,22 @@ function round2(n: number): string {
   return String(Math.round(n * 100) / 100);
 }
 
-export function Sparkline({ points, entry, stop, width = 96, height = 28, label }: SparklineProps) {
+export function Sparkline({ points, entry, stop, width = 96, height = 28, label, stretch = false }: SparklineProps) {
   const plotted: { t: number; y: number }[] = [];
   for (const p of points) {
     const t = plotTime(p.ts);
     const y = plotNumber(p.price);
     if (t !== null && y !== null) plotted.push({ t, y });
   }
-  const box = { width, height, viewBox: `0 0 ${width} ${height}` };
+  const box = stretch ? { width, height, viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none" } : { width, height, viewBox: `0 0 ${width} ${height}` };
+  const cls = stretch ? "sparkline is-stretched" : "sparkline";
+  const keep = stretch ? { vectorEffect: "non-scaling-stroke" as const } : {};
 
   if (plotted.length < 2) {
     const mid = round2(height / 2);
     return (
-      <svg className="sparkline sparkline-empty" role="img" aria-label={`${label}: no data`} {...box}>
-        <line className="spark-empty" x1={PAD} x2={width - PAD} y1={mid} y2={mid} stroke="var(--status-muted)" strokeDasharray="2 3" strokeWidth={1} />
+      <svg className={`${cls} sparkline-empty`} role="img" aria-label={`${label}: no data`} {...box}>
+        <line className="spark-empty" x1={PAD} x2={width - PAD} y1={mid} y2={mid} stroke="var(--status-muted)" strokeDasharray="2 3" strokeWidth={1} {...keep} />
       </svg>
     );
   }
@@ -63,14 +67,14 @@ export function Sparkline({ points, entry, stop, width = 96, height = 28, label 
   const coords = plotted.map((p, i) => `${round2(xOf(p.t, i))},${round2(yOf(p.y))}`).join(" ");
 
   return (
-    <svg className="sparkline" role="img" aria-label={label} {...box}>
+    <svg className={cls} role="img" aria-label={label} {...box}>
       {entryY !== null && (
-        <line className="spark-entry" x1={PAD} x2={width - PAD} y1={round2(yOf(entryY))} y2={round2(yOf(entryY))} stroke="var(--chart-entry)" strokeDasharray="3 2" strokeWidth={1} />
+        <line className="spark-entry" x1={PAD} x2={width - PAD} y1={round2(yOf(entryY))} y2={round2(yOf(entryY))} stroke="var(--chart-entry)" strokeDasharray="3 2" strokeWidth={1} {...keep} />
       )}
       {stopY !== null && (
-        <line className="spark-stop" x1={PAD} x2={width - PAD} y1={round2(yOf(stopY))} y2={round2(yOf(stopY))} stroke="var(--status-bad)" strokeWidth={1} />
+        <line className="spark-stop" x1={PAD} x2={width - PAD} y1={round2(yOf(stopY))} y2={round2(yOf(stopY))} stroke="var(--status-bad)" strokeWidth={1} {...keep} />
       )}
-      <polyline points={coords} fill="none" stroke="var(--chart-line)" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+      <polyline points={coords} fill="none" stroke="var(--chart-line)" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" {...keep} />
     </svg>
   );
 }

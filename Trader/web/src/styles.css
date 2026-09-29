@@ -368,24 +368,11 @@ label.check-row,
 
 /* ---------------------------------------------------------------- the live Dashboard (DB-T11) */
 
-/* Phone: one column in the design's order. Tablet and wider: sections 2 (equity | risk) and 4 (activity |
-   rejections) side by side. */
+/* The dense layout (stat strip, main column and sidebar, timeline chips) is in pages/live/dash.css (DB-DENSE). */
 .live-page {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-}
-
-.live-grid-2 {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-3);
-}
-
-@media (min-width: 720px) {
-  .live-grid-2 {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 .live-notices {

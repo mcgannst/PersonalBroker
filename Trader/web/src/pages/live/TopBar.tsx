@@ -1,18 +1,20 @@
-// The dashboard's top bar (design §3 item 1, D3/D4/D9, plan DB-T7): the region labelled "Session". Session
-// date and phase; the three periods' trading P&L after fees with realised and open in small text; the costs
-// (fees, Claude spend against its cap, net after AI); win rate, trades and expectancy of the run; the engine
-// chip; the live indicator; the heartbeat badge when the worker is stale; and the books check. Money values
+// The dashboard's stat strip (design §3 item 1, D3/D4/D9, plan DB-T7; dense layout DB-DENSE): the region
+// labelled "Session", one row of compact tiles (wrapping on narrower screens): the three periods' trading P&L
+// after fees with realised and open in small text; the costs (fees, Claude spend against its cap, net after AI);
+// win rate, trades and expectancy of the run; open risk and slots; the engine chip under the session date and
+// phase; the books check; the live indicator with the last update time and the heartbeat badge when the worker
+// is stale. A failed part (periods, Claude spend, books) shows its message in its tile with Retry. Money values
 // are `.money` spans (the only green and red); chips and lights use status tokens.
 import { QueryClientContext } from "@tanstack/react-query";
 import { useContext, useEffect, useState } from "react";
 
-import type { LiveOut, PeriodPnlOut, TradingState } from "../../api/types";
-import { fmtDate, fmtR, fmtRate } from "../../lib/format";
+import type { LiveOut, PeriodPnlOut, RiskOut, TradingState } from "../../api/types";
+import { fmtDate, fmtR, fmtRate, fmtTime } from "../../lib/format";
+import { plotNumber } from "../performance/ChartFrame";
 import { phaseLabel } from "../dashboard/labels";
 import { BooksCheck } from "./BooksCheck";
-import { CostBar, InlinePartError } from "./CostBar";
+import { CostBar, InlinePartError, Meter } from "./CostBar";
 import { DASH, Money, orderedPeriods, periodLabel } from "./PeriodPnl";
-import { Panel } from "./Panel";
 import "./liveA.css";
 
 /** Data at most this old, with the stream connected, is "Live". */
@@ -53,12 +55,12 @@ function title(live: LiveOut): string {
 
 function PeriodTile({ p }: { p: PeriodPnlOut }) {
   return (
-    <div className="lva-tile" data-testid={`topbar-period-${p.period}`}>
-      <div className="lva-label">{periodLabel(p.period)}</div>
-      <div className="lva-headline">
+    <div className="st st-period lva-tile" data-testid={`topbar-period-${p.period}`}>
+      <div className="st-label lva-label">{periodLabel(p.period)}</div>
+      <div className="st-value lva-headline">
         <Money value={p.pnl_after_fees} signed />
       </div>
-      <div className="lva-sub">
+      <div className="st-sub lva-sub">
         realised <Money value={p.realized} signed /> · open{" "}
         {p.unrealized === null ? <span className="num lva-dash">{DASH}</span> : <Money value={p.unrealized} signed />}
         {p.unrealized !== null && p.unrealized_partial && <span className="lva-partial"> partial</span>}
@@ -69,19 +71,42 @@ function PeriodTile({ p }: { p: PeriodPnlOut }) {
 
 function RunStats({ run }: { run: PeriodPnlOut }) {
   return (
-    <div className="lva-stats" data-testid="topbar-run-stats">
+    <div className="st st-run lva-stats" data-testid="topbar-run-stats">
       <div className="lva-stat">
-        <span className="lva-label">Win rate</span>
-        <span className="num">{run.win_rate === null ? DASH : fmtRate(run.win_rate)}</span>
+        <span className="st-label lva-label">Win rate</span>
+        <span className="st-value num">{run.win_rate === null ? DASH : fmtRate(run.win_rate)}</span>
       </div>
       <div className="lva-stat">
-        <span className="lva-label">Trades</span>
-        <span className="num">{run.trades}</span>
+        <span className="st-label lva-label">Trades</span>
+        <span className="st-value num">{run.trades}</span>
       </div>
       <div className="lva-stat">
-        <span className="lva-label">Expectancy</span>
-        <span className="num">{run.expectancy_r === null ? DASH : fmtR(run.expectancy_r)}</span>
+        <span className="st-label lva-label">Expectancy</span>
+        <span className="st-value num">{run.expectancy_r === null ? DASH : fmtR(run.expectancy_r)}</span>
       </div>
+    </div>
+  );
+}
+
+/** Open risk against its cap and the slots in use. A failed risk part shows a dash here (its error is on Risk). */
+function RiskTile({ risk }: { risk: RiskOut | null }) {
+  const cap = risk ? plotNumber(risk.open_risk_cap) : null;
+  const used = risk ? (plotNumber(risk.open_risk) ?? 0) : 0;
+  return (
+    <div className="st st-risk" data-testid="strip-risk">
+      <div className="st-label lva-label">Open risk</div>
+      <div className="st-value">{risk ? <Money value={risk.open_risk} tone="flat" /> : <span className="num lva-dash">{DASH}</span>}</div>
+      {risk && (
+        <div className="st-sub lva-sub">
+          {cap !== null && cap > 0 ? (
+            <>
+              of <Money value={risk.open_risk_cap} tone="flat" /> ·{" "}
+            </>
+          ) : null}
+          <span className="num">{`slots ${risk.slots_used}/${risk.slots_max}`}</span>
+        </div>
+      )}
+      {risk && cap !== null && cap > 0 && <Meter fraction={used / cap} label="Open risk used of its cap" />}
     </div>
   );
 }
@@ -118,41 +143,42 @@ export function TopBar({
   const periods = orderedPeriods(live.periods);
   const run = periods.find((p) => p.period === "run");
   const age = live.worker.age_seconds;
-  const status = (
-    <div className="lva-status-row">
-      <span className={`lva-chip ${TRADING_TONE[live.trading] ?? "status-muted"}`} data-testid="engine-chip">
-        {`${live.approval_mode.toUpperCase()} · ${live.trading.toUpperCase()}`}
-      </span>
-      <span className={`lva-chip ${indicator.tone}`} data-testid="live-indicator" role="status">
-        {indicator.text}
-      </span>
-      {live.worker_stale && (
-        <span className="lva-chip status-bad" data-testid="heartbeat-badge">
-          {age === null ? "Worker heartbeat stale" : `Worker heartbeat ${Math.round(age)} s old`}
-        </span>
-      )}
-    </div>
-  );
   return (
-    <div className="lva-topbar">
-      <Panel title={title(live)} ariaLabel="Session" badge={status}>
-        <div className="lva-top-grid">
-          {periods.length > 0 ? (
-            <div className="lva-top-periods">
-              {periods.map((p) => (
-                <PeriodTile key={p.period} p={p} />
-              ))}
-            </div>
-          ) : (
-            <InlinePartError message={partError(live, "periods") ?? "P&L unavailable"} onRetry={retry} />
-          )}
-          {run && <RunStats run={run} />}
-          <div className="lva-top-side">
-            <CostBar claude={live.claude_today} periods={live.periods} error={partError(live, "claude_today") ?? "Claude spend unavailable"} onRetry={retry} />
-            <BooksCheck books={live.books} error={partError(live, "books") ?? "Books check unavailable"} onRetry={retry} />
-          </div>
+    <section className="dash-strip lva-topbar" aria-label="Session">
+      {periods.length > 0 ? (
+        periods.map((p) => <PeriodTile key={p.period} p={p} />)
+      ) : (
+        <div className="st st-periods-error">
+          <div className="st-label lva-label">Trading P&amp;L</div>
+          <InlinePartError message={partError(live, "periods") ?? "P&L unavailable"} onRetry={retry} />
         </div>
-      </Panel>
-    </div>
+      )}
+      <CostBar claude={live.claude_today} periods={live.periods} error={partError(live, "claude_today") ?? "Claude spend unavailable"} onRetry={retry} />
+      {run && <RunStats run={run} />}
+      <RiskTile risk={live.risk} />
+      <div className="st st-engine">
+        <h2 className="st-label st-title">{title(live)}</h2>
+        <div className="st-value">
+          <span className={`lva-chip ${TRADING_TONE[live.trading] ?? "status-muted"}`} data-testid="engine-chip">
+            {`${live.approval_mode.toUpperCase()} · ${live.trading.toUpperCase()}`}
+          </span>
+        </div>
+      </div>
+      <BooksCheck books={live.books} error={partError(live, "books") ?? "Books check unavailable"} onRetry={retry} />
+      <div className="st st-live">
+        <div className="st-label lva-label">Feed</div>
+        <div className="st-value">
+          <span className={`lva-chip ${indicator.tone}`} data-testid="live-indicator" role="status">
+            {indicator.text}
+          </span>
+        </div>
+        {updatedAt > 0 && <div className="st-sub lva-sub num">{`last update ${fmtTime(new Date(updatedAt).toISOString())}`}</div>}
+        {live.worker_stale && (
+          <span className="lva-chip status-bad" data-testid="heartbeat-badge">
+            {age === null ? "Worker heartbeat stale" : `Worker heartbeat ${Math.round(age)} s old`}
+          </span>
+        )}
+      </div>
+    </section>
   );
 }

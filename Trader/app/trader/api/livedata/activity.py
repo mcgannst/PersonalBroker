@@ -10,7 +10,8 @@ the scan summary's counts when the scan was recorded as a summary only, and the 
 decision log has no scan rows yet (it refreshes every 60 s and pauses around 9:35).
 
 Read-only; every free-form stored text (reasons, errors, event messages) passes `redact_text`; times in texts
-are Mountain Time (the web shows MT, never UTC).
+are in the configured display zone (`EnvSettings.tz_display`, Mountain Time: the web shows MT, never
+UTC), which the route passes as `tz`.
 """
 
 from collections.abc import Iterable, Mapping
@@ -36,12 +37,14 @@ from trader.api.schemas import (
     RejectionSource,
     RejectionsOut,
 )
+from trader.config import EnvSettings
 from trader.db import models as m
 from trader.engine.proposals import AUTO_FLATTEN_ACTOR
 from trader.logging_setup import redact_text
 from trader.notify.messages import fmt_price
 
-DISPLAY_TZ = ZoneInfo("America/Edmonton")  # times inside texts are MT, like everything the web shows
+# The zone when the caller passes none: `tz_display`'s default (the route passes the configured one).
+DEFAULT_DISPLAY_TZ = ZoneInfo(str(EnvSettings.model_fields["tz_display"].default))
 JOB_ERROR_CHARS = 120
 ALERT_CHARS = 160
 REASON_CHARS = 160
@@ -121,8 +124,8 @@ def _clean(text: str | None, chars: int = REASON_CHARS) -> str:
     return redact_text(text or "").strip()[:chars]
 
 
-def _mt(ts: datetime) -> str:
-    return ts.astimezone(DISPLAY_TZ).strftime("%H:%M")
+def _mt(ts: datetime, tz: ZoneInfo) -> str:
+    return ts.astimezone(tz).strftime("%H:%M")
 
 
 def _signed(value: Decimal) -> str:
@@ -203,7 +206,7 @@ def _exits(s: Session, run_id: int, start: datetime, end: datetime) -> Iterable[
         yield _Item(t.closed_at, "exit", t.id, text, ticker, t.pnl, tone, _position_link(t.position_id))
 
 
-def _proposals(s: Session, run_id: int, start: datetime, end: datetime) -> Iterable[_Item]:
+def _proposals(s: Session, run_id: int, start: datetime, end: datetime, tz: ZoneInfo) -> Iterable[_Item]:
     def within(col: Any) -> Any:
         return and_(col >= start, col < end)
 
@@ -226,7 +229,7 @@ def _proposals(s: Session, run_id: int, start: datetime, end: datetime) -> Itera
             and not auto_flatten
             and start <= prop.decided_at < end
         ):
-            at = f"via {_clean(prop.decided_via)} at {_mt(prop.decided_at)} MT"
+            at = f"via {_clean(prop.decided_via)} at {_mt(prop.decided_at, tz)} MT"
             error = _clean(prop.error)
             kind: ActivityKind
             tone: ActivityTone
@@ -309,7 +312,7 @@ def _alerts(s: Session, start: datetime, end: datetime, limit: int) -> Iterable[
         yield _Item(ev.ts, "alert", ev.id, text, tone="warn", link="/control")
 
 
-def _scan(s: Session, run_id: int, day: date) -> Iterable[_Item]:
+def _scan(s: Session, run_id: int, day: date, tz: ZoneInfo) -> Iterable[_Item]:
     c = m.Candidate
     of_day = (c.run_id == run_id, c.session_date == day)
     total, passed, first_at, first_id = s.execute(
@@ -327,27 +330,32 @@ def _scan(s: Session, run_id: int, day: date) -> Iterable[_Item]:
         .order_by(c.rank.asc().nulls_last(), c.id)
         .limit(SCAN_TOP)
     ).scalars()
-    text = f"{_mt(first_at)} MT scan: {total} → {passed} passed"
+    text = f"{_mt(first_at, tz)} MT scan: {total} → {passed} passed"
     names = ", ".join(top)
     text += f" → {names}" if names else ""
     yield _Item(first_at, "scan", int(first_id), text, link=f"/reports?day={day.isoformat()}")
 
 
 def activity_feed(
-    factory: sessionmaker[Session], run_id: int, day: date, *, limit: int = ACTIVITY_LIMIT
+    factory: sessionmaker[Session],
+    run_id: int,
+    day: date,
+    *,
+    limit: int = ACTIVITY_LIMIT,
+    tz: ZoneInfo = DEFAULT_DISPLAY_TZ,
 ) -> list[ActivityItemOut]:
-    """Newest first, at most `limit` items whose time falls in the ET day of `day`."""
+    """Newest first, at most `limit` items whose time falls in the ET day of `day`; times in texts in `tz`."""
     start, end = periods.et_day_bounds(day)
     with factory() as s:
         items = [
             *_orders(s, run_id, start, end),
             *_fills(s, run_id, start, end),
             *_exits(s, run_id, start, end),
-            *_proposals(s, run_id, start, end),
+            *_proposals(s, run_id, start, end, tz),
             *_kill_switches(s, run_id, start, end),
             *_job_failures(s, start, end, limit),
             *_alerts(s, start, end, limit),
-            *_scan(s, run_id, day),
+            *_scan(s, run_id, day, tz),
         ]
     items.sort(key=lambda i: (i.ts, _STEP[i.kind], i.row_id), reverse=True)
     return [i.out() for i in items[: max(limit, 0)]]

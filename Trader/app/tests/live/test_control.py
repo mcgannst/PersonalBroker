@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from tests.factories import add_run, add_strategy_config, add_symbol
 from tests.fakes_api import make_services, test_core
 from trader.api.deps import ApiServices
-from trader.api.livedata import control, risk
+from trader.api.livedata import control, readonly, risk
 from trader.api.schemas import OpeningBarsOut
 from trader.db import models as m
 from trader.db.session import session_scope
@@ -24,6 +24,7 @@ from trader.strategies.spy_overlay import SpyOverlay
 CAL = SessionCalendar()
 TUE = date(2026, 10, 6)  # a session
 SAT, MON = date(2026, 10, 10), date(2026, 10, 12)
+REAL_DAY_PLAN = readonly.day_plan  # before the autouse fixture replaces it
 
 
 def et(d: date, hh: int, mm: int, ss: int = 0) -> datetime:
@@ -141,6 +142,13 @@ def _services(factory: sessionmaker[Session], now: datetime, **over: Any) -> Api
     return make_services(test_core(factory, FixedClock(now)), **{"plan": plan_for, **over})
 
 
+@pytest.fixture(autouse=True)
+def _plan_from_services(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The schedule builds its plan with `readonly.day_plan` (fix round 1); these tests pin the schedule
+    with the services' fake plan instead (`test_the_schedule_uses_the_readonly_plan` covers the real one)."""
+    monkeypatch.setattr(readonly, "day_plan", lambda services, day, settings: services.plan(day))
+
+
 def heartbeat_detail() -> dict[str, Any]:
     return {
         "candle_batches": [
@@ -234,6 +242,30 @@ def test_the_plan_failing_leaves_the_jobs(db_factory: sessionmaker[Session]) -> 
     now = et(TUE, 12, 0)
     items = control.schedule(_services(db_factory, now, plan=broken), now, None)
     assert {i.kind for i in items} == {"job"} and len(items) == 6
+
+
+@pytest.mark.db
+def test_the_schedule_uses_the_readonly_plan(
+    db_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fix round 1 (DB-GDATA F2): the real plan comes from `readonly.day_plan` (the active live run's enabled
+    strategies), never `services.plan` (`runtime.plan_builder`), and building it writes nothing."""
+    monkeypatch.setattr(readonly, "day_plan", REAL_DAY_PLAN)
+
+    def plan_builder(d: date) -> DayPlan:
+        raise AssertionError("the schedule used services.plan")
+
+    now = et(TUE, 12, 0)
+    with session_scope(db_factory) as s:
+        add_run(s)
+        add_strategy_config(s, "orb_sip")
+    with db_factory() as s:
+        before = (s.query(m.Run).count(), s.query(m.EventLog).count(), s.query(m.StrategyConfig).count())
+    items = control.schedule(_services(db_factory, now, plan=plan_builder), now, None)
+    assert "orb_open" in {i.key for i in items if i.kind == "event"}
+    with db_factory() as s:
+        after = (s.query(m.Run).count(), s.query(m.EventLog).count(), s.query(m.StrategyConfig).count())
+    assert after == before
 
 
 # --- 4. engine and strategies (db) ---

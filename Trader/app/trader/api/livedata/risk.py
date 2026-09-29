@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from trader.api.livedata.periods import session_day
 from trader.api.livedata.types import LivePositions
 from trader.api.schemas import KillSwitchLightOut, KillSwitchUnit, RiskOut, TradingState
 from trader.api.views import killswitch_states
@@ -36,12 +37,6 @@ CENTS = Decimal("0.01")
 DEFAULT_MAX_POSITIONS = 1  # an entry strategy without a `max_positions` param holds one position a day
 
 
-def _session_day(calendar: SessionCalendar, now: datetime) -> date:
-    """Plan S5's session day (the same rule as `periods.session_day`)."""
-    today = et_date(now)
-    return today if calendar.is_session(today) else calendar.previous_session(today)
-
-
 def killswitch_lights(
     killswitches: KillSwitches,
     factory: sessionmaker[Session],
@@ -53,7 +48,7 @@ def killswitch_lights(
 ) -> list[KillSwitchLightOut]:
     """The four switches in `SWITCHES` order: tripped or not (with the open trip's value and threshold) and
     the live value against the threshold, from `KillSwitches.inputs` with an account at `equity`."""
-    day = _session_day(calendar, now)
+    day = session_day(calendar, now)
     states = killswitch_states(killswitches, factory, run_id, day)
     with factory() as s:
         balances = Ledger(calendar).balances(s, run_id, et_date(now))
@@ -151,7 +146,7 @@ def risk_panel(
 ) -> RiskOut:
     """Open risk (Σ of max(0, (entry - stop) x qty) over positions with a stop: a stop trailed above the entry
     risks nothing), the slots, the equity at marks and the kill-switch lights."""
-    day = _session_day(calendar, now)
+    day = session_day(calendar, now)
     equity = positions.equity_at_marks
     lights = killswitch_lights(killswitches, factory, calendar, settings, run_id, now, equity)
     open_risk = sum(

@@ -520,6 +520,8 @@ Web (`Trader/web/src/`):
 
 ---
 
+**Fix round 1 (DB-GDATA, attempt 2):** `equity._minute_points` keeps `opened_at < end` for whether a minute gets a point (a position open DURING it) and `opened_at <= end` for the value at its end (a position opened exactly at the end, whose cash move is counted); the two answer different questions, now commented. No other T3 change.
+
 ## DB-T4: Live data B: positions with marks, sparklines and bars, risk panel
 
 **Goal:** Implement the positions part (≤ 20 rows with marks, R, distance to stop, sparklines, expanded bars) and the risk panel with live kill-switch values, in `positions.py` and `risk.py`. D2, D8, design §3 items 2–3, §5.1–5.2.
@@ -560,6 +562,8 @@ Web (`Trader/web/src/`):
 
 ---
 
+**Fix round 1 (DB-GDATA, attempt 2):** `risk.py`'s private `_session_day` is gone: it imports `periods.session_day` (bound at import, so a failing `periods.session_day` part does not also fail the risk panel). No other T4 change.
+
 ## DB-T5: Live data C and the `/api/live` route
 
 **Goal:** Implement the activity feed (S7), the rejections panel (S8) and the `GET /api/live` aggregate with part isolation (S15), the `Server-Timing` header (S14) and the `?range=`/`?expand=` parameters. D5, D7, design §3 items 1–5, §5.1.
@@ -592,6 +596,8 @@ Web (`Trader/web/src/`):
 **LIVE steps:** none.
 
 ---
+
+**Fix round 1 (DB-GDATA, attempt 2):** the route is read-only in production wiring. The live run comes from `livedata.readonly.live_run` (a SELECT of the active live run; `get_live_run` only on a fresh database with none). The timeline's day plan is `livedata.readonly.day_plan` = `soak.readonly_plan` with a quiet registry over the API registry's plug-in classes (no run creation, no `ensure_defaults`, no plan-problem or plug-in `error` event, no advisory lock); `services.plan` (`runtime.plan_builder`) is left for `/api/dashboard`. Pending proposals: one outer-joined SELECT (proposal, signal, config, cancelled order) plus one symbol SELECT, loaded into the identity map so `proposal_view` reads nothing more: two statements for any number pending. The header's `trading` and the fallback `session_day` use plan S5's session day (a weekend shows the last session, like the risk panel's lights). `activity_feed` takes `tz` (keyword, default `tz_display`'s default); the route passes `ZoneInfo(env.tz_display)`. Measured (breaker B11, serial, test DB): 74 statements per request (was 80), median 90 ms today and 82 ms run+expand.
 
 ## DB-T6: Control API
 
@@ -628,6 +634,8 @@ Web (`Trader/web/src/`):
 **LIVE steps:** none.
 
 ---
+
+**Fix round 1 (DB-GDATA, attempt 2):** `schedule` builds its plan with `livedata.readonly.day_plan` (never `services.plan`); `engine_card`'s trading state uses plan S5's session day, the same day as the kill-switch lights (a weekend shows the last session); `strategy_cards` reads who changed each config and which strategies own an open position or working order in two batched statements for all strategies (was two per strategy); the router's part failures log at `warning` (the API's log mirror copies `error` lines into `event_log`); `_live_run` delegates to `readonly.live_run`.
 
 ## DB-T7: Web components A: top bar, periods, costs, books, equity chart, risk
 

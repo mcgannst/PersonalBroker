@@ -2,11 +2,13 @@
 
 Read-only: every action keeps using the existing mutation routes (approval mode, kill switches, strategies,
 jobs, Telegram test, watchlist). Never calls Questrade (D8): Questrade numbers come from the worker's
-heartbeat. The live run is looked up without writing (it is created only when none exists yet, as every
-process does). The database work runs in one worker thread; each part (`engine`, `killswitches`,
-`strategies`, `schedule`, `health`, `soak`, `errors`) is computed on its own: one that raises becomes null
-plus a `PartErrorOut` (the exception type and a masked, 120-character text), and the page still answers 200.
-The live run or the session info failing is a real error (500), since nothing else can be computed.
+heartbeat. The live run is looked up without writing (`readonly.live_run`: it is created only when none
+exists yet, as every process does). The database work runs in one worker thread; each part (`engine`,
+`killswitches`, `strategies`, `schedule`, `health`, `soak`, `errors`) is computed on its own: one that raises
+becomes null plus a `PartErrorOut` (the exception type and a masked, 120-character text), and the page still
+answers 200. The live run or the session info failing is a real error (500), since nothing else can be
+computed. A failed part logs at `warning` (fix round 1): the API's log mirror copies every `error` line into
+`event_log`, which would write a row per page load.
 """
 
 from collections.abc import Callable
@@ -18,9 +20,9 @@ import structlog
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
-from trader.api.deps import ApiServices, Services, _settings, current_user, live_run_id
+from trader.api.deps import ApiServices, Services, _settings, current_user
 from trader.api.launcher import CLI_ARGS
-from trader.api.livedata import control, health, positions, risk
+from trader.api.livedata import control, health, positions, readonly, risk
 from trader.api.livedata.types import PART_MESSAGE_CHARS
 from trader.api.schemas import (
     ControlOut,
@@ -44,11 +46,7 @@ KILLSWITCH_HISTORY = 20
 def _live_run(services: ApiServices) -> int:
     """The active live run's id, read without writing; created (as every process does) only when none
     exists yet."""
-    with services.core.factory() as s:
-        run_id: int | None = s.execute(
-            select(m.Run.id).where(m.Run.mode == "live", m.Run.status == "active")
-        ).scalar_one_or_none()
-    return run_id if run_id is not None else live_run_id(services)
+    return readonly.live_run(services).id
 
 
 def _session(services: ApiServices, now: datetime) -> SessionInfoOut:
@@ -114,7 +112,7 @@ def _build(services: ApiServices, now: datetime) -> ControlOut:
         try:
             return fn()
         except Exception as exc:
-            log.error("api.control_part_failed", part=name, error_type=type(exc).__name__)
+            log.warning("api.control_part_failed", part=name, error_type=type(exc).__name__)
             errors.append(PartErrorOut(part=name, message=_part_message(exc)))
             return None
 

@@ -1,12 +1,15 @@
 """The Control page's engine, strategies, schedule and error-log parts (live dashboard design §4, plan DB-T6).
 
-- `engine_card`: approval mode, trading state (`risk.trading_state`), when the manual pause began, the live
+- `engine_card`: approval mode, trading state (`risk.trading_state` on the session day of plan S5, the same
+  day as the kill-switch lights: a weekend shows the last session), when the manual pause began, the live
   run, the version and the Alembic revision.
 - `strategy_cards`: each plug-in with a current live config: kind, enabled, revision, who changed it, whether
-  it owns an open position or working order (`routers.strategies._owns_open_positions`), `max_positions`.
+  it owns an open position or working order (any revision of it, as `routers.strategies._owns_open_positions`
+  decides), `max_positions`. Who changed it and the ownership are two batched statements for all strategies.
 - `schedule`: `dashboard.build_timeline` for `current_session` (today on a session day, else the next
-  session), each item enriched from that session's `job_runs`: the latest row's times and duration, the
-  number of attempts, a one-line summary (`job_summary`) and the manual job that re-runs it (day jobs only).
+  session) on the read-only day plan (`readonly.day_plan`, never `runtime.plan_builder`), each item enriched
+  from that session's `job_runs`: the latest row's times and duration, the number of attempts, a one-line
+  summary (`job_summary`) and the manual job that re-runs it (day jobs only).
 - `error_log`: the newest warning-and-above `event_log` rows (live or unscoped, `log.*` included), masked.
 
 All read-only (the kill-switch helpers used are `KillSwitches.active`); none calls Questrade.
@@ -18,16 +21,16 @@ from datetime import datetime
 from typing import Any, cast, get_args
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from trader.api import views
 from trader.api.deps import ApiServices, _settings
 from trader.api.feed import live_or_unscoped
-from trader.api.livedata import health, risk
+from trader.api.livedata import health, readonly, risk
+from trader.api.livedata.periods import session_day
 from trader.api.livedata.types import ERRORS_SHOWN
 from trader.api.routers.dashboard import DAY_JOBS, RunRow, build_timeline
-from trader.api.routers.strategies import _owns_open_positions
 from trader.api.routers.system import _alembic_revision
 from trader.api.schemas import (
     EngineOut,
@@ -60,7 +63,7 @@ RERUN_JOBS: frozenset[str] = frozenset(j for j in get_args(ManualJob) if j in {d
 
 def engine_card(services: ApiServices, run_id: int, now: datetime) -> EngineOut:
     core = services.core
-    day = current_session(core.calendar, now)
+    day = session_day(core.calendar, now)
     trading = risk.trading_state(services.killswitches, run_id, day)
     pause = next((a for a in services.killswitches.active(run_id, day) if a.switch == "manual_pause"), None)
     with core.factory() as s:
@@ -82,18 +85,42 @@ def engine_card(services: ApiServices, run_id: int, now: datetime) -> EngineOut:
 # --- strategies ---------------------------------------------------------------------------------------------
 
 
+def _owning_keys(s: Session, run_id: int) -> set[str]:
+    """The strategies (any revision) that own an open position or a working order of the run."""
+    open_positions = select(m.Position.strategy_config_id).where(
+        m.Position.run_id == run_id, m.Position.closed_at.is_(None)
+    )
+    working_orders = select(m.Order.strategy_config_id).where(
+        m.Order.run_id == run_id, m.Order.status == "working"
+    )
+    return set(
+        s.execute(
+            select(m.StrategyConfig.strategy_key)
+            .where(or_(m.StrategyConfig.id.in_(open_positions), m.StrategyConfig.id.in_(working_orders)))
+            .distinct()
+        ).scalars()
+    )
+
+
 def strategy_cards(services: ApiServices, run_id: int) -> list[StrategyCardOut]:
     registry = services.registry
-    cards: list[StrategyCardOut] = []
+    current: list[tuple[str, Any]] = []
     for key in registry.keys():
         try:
-            cfg = registry.current(key)
+            current.append((key, registry.current(key)))
         except KeyError:  # no settings row yet: the worker's ensure_defaults() writes revision 1
             continue
-        with services.core.factory() as s:
-            created_by = s.execute(
-                select(m.StrategyConfig.created_by).where(m.StrategyConfig.id == cfg.id)
-            ).scalar_one_or_none()
+    with services.core.factory() as s:
+        ids = [cfg.id for _, cfg in current]
+        created_by: dict[int, str | None] = {
+            row.id: row.created_by
+            for row in s.execute(
+                select(m.StrategyConfig.id, m.StrategyConfig.created_by).where(m.StrategyConfig.id.in_(ids))
+            )
+        }
+        owning = _owning_keys(s, run_id)
+    cards: list[StrategyCardOut] = []
+    for key, cfg in current:
         max_positions = cfg.params.get("max_positions")
         cards.append(
             StrategyCardOut(
@@ -103,8 +130,8 @@ def strategy_cards(services: ApiServices, run_id: int) -> list[StrategyCardOut]:
                 revision=cfg.revision,
                 version=cfg.version,
                 updated_at=cfg.created_at,
-                updated_by=created_by,
-                owns_open_positions=_owns_open_positions(services, key, run_id),
+                updated_by=created_by.get(cfg.id),
+                owns_open_positions=key in owning,
                 max_positions=max_positions
                 if isinstance(max_positions, int) and not isinstance(max_positions, bool)
                 else None,
@@ -172,7 +199,8 @@ def schedule(
     core = services.core
     cal = core.calendar
     day = current_session(cal, now)
-    plan = _safe("plan", lambda: services.plan(day), DayPlan(day, False, None, None, ()))
+    no_plan = DayPlan(day, False, None, None, ())
+    plan = _safe("plan", lambda: readonly.day_plan(services, day, _settings(services)), no_plan)
     fired = _safe("fired", lambda: services.fired(day), set[str]())
     names = [j.job_name for j in DAY_JOBS]
     with core.factory() as s:

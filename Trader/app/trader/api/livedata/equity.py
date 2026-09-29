@@ -156,6 +156,9 @@ def _minute_points(
         while k < len(moves) and moves[k].ts <= end:
             cash += moves[k].amount
             k += 1
+        # Two different questions (fix round 1, kept on purpose): the minute gets a point when a position was
+        # open DURING it (opened before its end, closed after its start); the point values the positions held
+        # AT its end, including one opened exactly at the end, whose cash move (ts <= end) is already counted.
         if any(r.opened_at < end and (r.closed_at is None or r.closed_at > start) for r in positions):
             value = ZERO
             for r in positions:

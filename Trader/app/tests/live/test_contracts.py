@@ -20,6 +20,7 @@ import typing
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -112,7 +113,8 @@ STUBS: tuple[Stub, ...] = (
     Stub(
         "trader.api.livedata.activity",
         "activity_feed",
-        (P("factory"), P("run_id"), P("day"), P("limit", KW, 100)),
+        # fix round 1 (DB-GDATA): `tz`, the display zone of the times in texts (the route passes tz_display)
+        (P("factory"), P("run_id"), P("day"), P("limit", KW, 100), P("tz", KW, ZoneInfo("America/Edmonton"))),
     ),
     Stub("trader.api.livedata.activity", "rejections", (P("factory"), P("run_id"), P("day"))),
     # trader/api/livedata/control.py, health.py (DB-T6)

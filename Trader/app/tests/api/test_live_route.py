@@ -14,10 +14,12 @@ from collections.abc import Callable, Iterator, Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.api.conftest import make_client
@@ -47,12 +49,14 @@ from trader.api.schemas import (
     EquitySeriesOut,
     LivePositionOut,
     PeriodPnlOut,
+    ProposalOut,
     RejectionRuleOut,
     RejectionsOut,
     RiskOut,
 )
 from trader.db import models as m
 from trader.market.clock import FixedClock
+from trader.notify.views import proposal_view
 
 pytestmark = pytest.mark.db
 
@@ -267,7 +271,7 @@ def test_the_route_returns_every_part(db_factory: sessionmaker[Session], parts: 
     # the arguments the parts got: the run, the session day, the positions' open values and equity
     assert parts.calls["period_blocks"][0][1:] == (run_id, _windows(), LIVE_POSITIONS.open_values)
     assert parts.calls["equity_series"][0][2:] == (run_id, NOW, "today", Decimal("1003.5"))
-    assert parts.calls["activity_feed"][0][1:] == (run_id, DAY)
+    assert parts.calls["activity_feed"][0][1:] == (run_id, DAY, ZoneInfo("America/Edmonton"))  # tz_display
     assert parts.calls["rejections"][0][1:] == (run_id, DAY)
     assert parts.calls["risk_panel"][0][-1] is LIVE_POSITIONS
     assert parts.calls["live_positions"][0][1:] == (run_id, NOW, frozenset())
@@ -302,6 +306,49 @@ def test_closed_today_and_pending_come_from_the_live_run(
     body = _client(db_factory).get("/api/live").json()
     assert body["closed_today"] == 1
     assert [p["id"] for p in body["pending"]] == [pending.id]
+
+
+def test_pending_views_take_the_same_statements_for_0_2_and_10_pending(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """Fix round 1 (DB-GDATA F4): the views are built from one batch (no Session.get per proposal), and each
+    is the same view `notify.views.proposal_view` builds row by row."""
+    run_id = live_run(db_factory, FixedClock(NOW))
+    services = _services(db_factory)
+    engine = db_factory.kw["bind"]
+    counts: list[int] = []
+    with db_factory() as s:
+        cfg = _config(s, "orb_sip")
+        s.commit()
+    for n in (0, 2, 8):  # 0, then 2, then 10 pending
+        with db_factory() as s:
+            for sym in (add_symbol(s, f"PN{len(counts)}{i}") for i in range(n)):
+                sig = _signal(s, run_id, cfg, sym, DAY, NOW)
+                _proposal(s, run_id, sig, sym, kind="entry", created_at=NOW, status="pending")
+            s.commit()
+        seen: list[str] = []
+
+        def record(conn: Any, cursor: Any, statement: str, *args: Any, seen: list[str] = seen) -> None:
+            seen.append(statement)
+
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            out = live._pending(services, run_id)
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+        counts.append(len(seen))
+    assert len(out) == 10
+    assert counts == [counts[0]] * 3, counts
+    with db_factory() as s:
+        rows = s.scalars(
+            select(m.Proposal)
+            .where(m.Proposal.status == "pending")
+            .order_by(m.Proposal.created_at, m.Proposal.id)
+        ).all()
+        expected = [ProposalOut.from_view(proposal_view(s, p), p) for p in rows]
+    assert out == expected
+    assert {p.ticker for p in out} == {f"PN{k}{i}" for k, n in ((1, 2), (2, 8)) for i in range(n)}
+    assert {p.strategy_key for p in out} == {"orb_sip"}
 
 
 # --- 4. part isolation --------------------------------------------------------------------------------------
@@ -404,7 +451,7 @@ def test_the_header_fields_fall_back_when_their_lookup_fails(
     assert body["closed_today"] == 0
 
 
-@pytest.mark.parametrize("target", ["get_live_run", "current_session"])
+@pytest.mark.parametrize("target", ["live_run", "current_session"])
 def test_the_live_run_or_session_failing_is_a_500(
     db_factory: sessionmaker[Session], parts: FakeParts, monkeypatch: pytest.MonkeyPatch, target: str
 ) -> None:

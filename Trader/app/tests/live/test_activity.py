@@ -4,6 +4,7 @@ and the route in `tests/api/test_live_route.py`."""
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -38,8 +39,10 @@ def test_kill_switch_values_read_as_percent_or_r() -> None:
 
 
 def test_mt_times_in_texts() -> None:
-    assert activity._mt(TS) == "07:36"
-    assert activity.DISPLAY_TZ.key == "America/Edmonton"  # the zone's rules come from tzdata, not an offset
+    assert activity._mt(TS, activity.DEFAULT_DISPLAY_TZ) == "07:36"
+    # the zone's rules come from tzdata, not an offset; the default is the configured zone's default
+    assert activity.DEFAULT_DISPLAY_TZ.key == "America/Edmonton"
+    assert activity._mt(TS, ZoneInfo("America/Toronto")) == "09:36"
 
 
 def test_signed_amounts() -> None:

@@ -6,13 +6,19 @@
 inside its own guard: a part that raises is null in the response plus a `PartErrorOut` (the rest of the page
 still renders), and only the live run or the session info failing is a real error (500). The response
 carries `Server-Timing: app;dur=<ms>, <part>;dur=<ms>...` so a slow part is visible live.
+
+Read-only (fix round 1): the live run is SELECTed (`readonly.live_run`, created only on a fresh database),
+the timeline's day plan is `readonly.day_plan` (never `services.plan` = `runtime.plan_builder`, which creates
+the run, ensures the strategy defaults and reports plan and plug-in problems as events), and the pending
+proposals' views are built from one batch of rows (a fixed number of statements for any number pending).
 """
 
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Annotated
+from typing import Annotated, Any
+from zoneinfo import ZoneInfo
 
 import anyio.to_thread
 import structlog
@@ -21,7 +27,8 @@ from sqlalchemy import func, select
 
 from trader.api import views as api_views
 from trader.api.deps import ApiServices, Services, _settings, current_user
-from trader.api.livedata import activity, books, equity, periods, positions, risk
+from trader.api.livedata import activity, books, equity, periods, positions, readonly, risk
+from trader.api.livedata.readonly import live_run
 from trader.api.livedata.types import (
     HEARTBEAT_BADGE_SECONDS,
     MARK_STALE_SECONDS,
@@ -41,11 +48,12 @@ from trader.api.schemas import (
     WorkerOut,
 )
 from trader.db import models as m
-from trader.engine.runs import get_live_run
 from trader.engine.scheduler import EVENT_JOB_PREFIX, DayPlan
 from trader.logging_setup import redact_text
+from trader.market.clock import et_date
 from trader.market.sessions import current_session, session_phase
 from trader.notify.views import proposal_view
+from trader.settings_store import RuntimeSettings
 
 log = structlog.get_logger("api.live")
 
@@ -109,12 +117,16 @@ def _or_empty[T](what: str, fn: Callable[[], T], default: T) -> T:
         return default
 
 
-def _timeline(services: ApiServices, session: SessionInfoOut, now: datetime) -> list[TimelineItemOut]:
-    """Today's timeline exactly as `/api/dashboard` builds it (session days only)."""
+def _timeline(
+    services: ApiServices, session: SessionInfoOut, now: datetime, settings: RuntimeSettings
+) -> list[TimelineItemOut]:
+    """Today's timeline as `/api/dashboard` builds it (session days only), from the read-only day plan."""
     if not session.is_session:
         return []
     core, day = services.core, session.date
-    plan = _or_empty("plan", lambda: services.plan(day), DayPlan(day, False, None, None, ()))
+    plan = _or_empty(
+        "plan", lambda: readonly.day_plan(services, day, settings), DayPlan(day, False, None, None, ())
+    )
     fired = _or_empty("fired", lambda: services.fired(day), set[str]())
     names = [j.job_name for j in DAY_JOBS]
     with core.factory() as s:
@@ -132,14 +144,37 @@ def _timeline(services: ApiServices, session: SessionInfoOut, now: datetime) -> 
     return build_timeline(core.calendar, day, now, plan, fired, runs)
 
 
+def _symbol_id(p: m.Proposal, sig: m.Signal | None, cancelled: m.Order | None) -> int | None:
+    """The symbol `proposal_view` shows: the order spec's, else the cancelled order's, else the signal's."""
+    spec: Any = p.order_spec if isinstance(p.order_spec, dict) else {}
+    value = spec.get("symbol_id")
+    if value is None and cancelled is not None:
+        value = cancelled.symbol_id
+    if value is None and sig is not None:
+        value = sig.symbol_id
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
 def _pending(services: ApiServices, run_id: int) -> list[ProposalOut]:
+    """The live run's pending proposals, oldest first, with the view Telegram shows (`proposal_view`).
+
+    Two statements for any number pending: the proposals with their signal, strategy config and cancelled
+    order (outer joins), then their symbols. Both load into the session's identity map, so the view's
+    `Session.get` calls read no more rows."""
+    p, sig, cfg, order = m.Proposal, m.Signal, m.StrategyConfig, m.Order
     with services.core.factory() as s:
         rows = s.execute(
-            select(m.Proposal)
-            .where(m.Proposal.run_id == run_id, m.Proposal.status == "pending")
-            .order_by(m.Proposal.created_at, m.Proposal.id)
-        ).scalars()
-        return [ProposalOut.from_view(proposal_view(s, p), p) for p in rows]
+            select(p, sig, cfg, order)
+            .outerjoin(sig, sig.id == p.signal_id)
+            .outerjoin(cfg, cfg.id == sig.strategy_config_id)
+            .outerjoin(order, order.id == p.cancel_order_id)
+            .where(p.run_id == run_id, p.status == "pending")
+            .order_by(p.created_at, p.id)
+        ).all()
+        symbol_ids = {sid for r in rows if (sid := _symbol_id(r[0], r[1], r[3])) is not None}
+        # kept referenced: the identity map holds its objects weakly
+        _symbols = s.execute(select(m.Symbol).where(m.Symbol.id.in_(sorted(symbol_ids)))).scalars().all()
+        return [ProposalOut.from_view(proposal_view(s, r[0]), r[0]) for r in rows]
 
 
 def _closed_today(services: ApiServices, run_id: int, day: date) -> int:
@@ -153,6 +188,13 @@ def _closed_today(services: ApiServices, run_id: int, day: date) -> int:
         )
 
 
+def _last_session(services: ApiServices, session: SessionInfoOut, now: datetime) -> date:
+    """Plan S5's session day without `periods.session_day` (the header fallback when that part failed)."""
+    if session.is_session:
+        return session.date
+    return services.core.calendar.previous_session(et_date(now))
+
+
 def _no_positions() -> LivePositions:
     raise RuntimeError("the positions part failed")
 
@@ -164,18 +206,20 @@ def build_live(
     core = services.core
     cal, factory = core.calendar, core.factory
     settings = _settings(services)
-    run = get_live_run(factory, core.clock, settings)  # nothing else can be computed without it: 500
+    run = live_run(services)  # nothing else can be computed without it: 500
     session = _session_info(services, now)  # likewise
     run_id = run.id
     parts = _Parts()
 
     day = parts.run("session_day", lambda: periods.session_day(cal, now))
-    session_day = day if day is not None else session.date
+    # The fallback is the same rule (the last session on a weekend or holiday), not `session.date` (the next).
+    session_day = day if day is not None else _last_session(services, session, now)
     worker = parts.run(
         "worker", lambda: api_views.worker_out(factory, now, settings.worker_heartbeat_stale_seconds)
     )
     worker = worker if worker is not None else WorkerOut(ok=False)
-    trading = parts.run("trading", lambda: risk.trading_state(services.killswitches, run_id, session.date))
+    # The header's state is the session day's, like the risk panel's lights (a weekend shows the last one).
+    trading = parts.run("trading", lambda: risk.trading_state(services.killswitches, run_id, session_day))
 
     live = parts.run("positions", lambda: positions.live_positions(factory, run_id, now, expand))
     open_values = live.open_values if live is not None else []
@@ -207,9 +251,10 @@ def build_live(
             live if live is not None else _no_positions(),
         ),
     )
-    feed = parts.run("activity", lambda: activity.activity_feed(factory, run_id, session_day))
+    display_tz = ZoneInfo(core.env.tz_display)
+    feed = parts.run("activity", lambda: activity.activity_feed(factory, run_id, session_day, tz=display_tz))
     rejected = parts.run("rejections", lambda: activity.rejections(factory, run_id, session_day))
-    timeline = parts.run("timeline", lambda: _timeline(services, session, now))
+    timeline = parts.run("timeline", lambda: _timeline(services, session, now, settings))
     pending = parts.run("pending", lambda: _pending(services, run_id))
     closed = parts.run("closed_today", lambda: _closed_today(services, run_id, session_day))
 

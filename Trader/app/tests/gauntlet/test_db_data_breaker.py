@@ -398,11 +398,6 @@ def _seed_small_day(prod: Prod) -> int:
     return run_id
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DB-GDATA F1/F3: get_live_run INSERTs runs+sim_accounts per request (live.py:167) and "
-    "services.plan = runtime.plan_builder (get_live_run again, ensure_defaults advisory locks)",
-)
 @pytest.mark.parametrize("path", ["/api/live", "/api/live?range=run", "/api/control"])
 def test_b1_b2_both_routes_only_select_in_production_wiring(prod: Prod, path: str) -> None:
     """Plan Global Constraints (`trader.api.livedata` never writes) and design D1: the Dashboard and the
@@ -421,11 +416,6 @@ def test_b1_b2_both_routes_only_select_in_production_wiring(prod: Prod, path: st
 # --- B3. a broken plug-in config: no event written by opening a page ----------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DB-GDATA F2: schedule/timeline build the plan with runtime.plan_builder, whose fresh registry "
-    "writes an error event (relayed to Telegram) per broken plug-in, twice per request",
-)
 @pytest.mark.parametrize("path", ["/api/control", "/api/live"])
 def test_b3_opening_a_page_with_a_broken_plugin_writes_no_alert_event(prod: Prod, path: str) -> None:
     """A strategy whose stored params no longer validate: the worker reports it. The API's `schedule` (DB-T6)
@@ -938,11 +928,6 @@ def test_b11_live_answers_under_300_ms_on_a_normal_day(prod: Prod) -> None:
     assert len(sql) <= LIVE_MAX_STATEMENTS, report
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DB-GDATA F4: live._pending builds proposal_view per row (3 statements each); the normal day "
-    "already sits at LIVE_MAX_STATEMENTS = 80",
-)
 def test_b13_pending_proposals_do_not_add_statements_on_a_normal_day(prod: Prod) -> None:
     """Manual mode at 09:36 is the normal day with pending entries. The pending part builds each proposal's
     view with `notify.views.proposal_view` (signal, config and symbol `Session.get` per row): with the

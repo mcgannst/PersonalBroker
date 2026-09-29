@@ -1,0 +1,446 @@
+/* Live dashboard, components A (DB-T7): top bar, periods, costs, books, equity chart, risk.
+   Design D9: dark slate, one accent, green/red only on `.money` (tokens.css), tabular numerals, flat panels
+   with 1 px borders, 44 px targets. Every class is prefixed `lva-` so the B components (liveB.css) and the
+   Control page never collide with these rules. Status colours come only from the `--status-*` tokens. */
+
+/* ---------------------------------------------------------------- shared bits */
+
+.lva-label {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.lva-sub {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.lva-muted {
+  margin: 0;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.lva-dash {
+  color: var(--text-muted);
+}
+
+.lva-partial {
+  color: var(--status-warn);
+  font-size: 0.78rem;
+}
+
+.lva-headline {
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.lva-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  min-width: 0;
+}
+
+.lva-value {
+  overflow-wrap: anywhere;
+}
+
+.lva-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.lva-facts,
+.lva-breakdown {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.lva-fact {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.lva-fact dt {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.lva-fact dd {
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.lva-total {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-1);
+  font-weight: 600;
+}
+
+/* Status chips, dots, glyphs and meters: status tokens only (never green or red). */
+
+.lva-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--space-2);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.lva-chip.status-ok,
+.lva-glyph.status-ok {
+  color: var(--status-ok);
+}
+
+.lva-chip.status-warn,
+.lva-glyph.status-warn {
+  color: var(--status-warn);
+}
+
+.lva-chip.status-bad,
+.lva-glyph.status-bad {
+  color: var(--status-bad);
+}
+
+.lva-chip.status-muted,
+.lva-glyph.status-muted {
+  color: var(--status-muted);
+}
+
+.lva-dot {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.lva-dot.status-ok,
+.lva-meter-fill.status-ok {
+  background: var(--status-ok);
+}
+
+.lva-dot.status-warn,
+.lva-meter-fill.status-warn {
+  background: var(--status-warn);
+}
+
+.lva-dot.status-bad,
+.lva-meter-fill.status-bad {
+  background: var(--status-bad);
+}
+
+.lva-dot.status-muted,
+.lva-meter-fill.status-muted {
+  background: var(--status-muted);
+}
+
+.lva-meter {
+  height: 6px;
+  margin-top: var(--space-1);
+  border-radius: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.lva-meter-fill {
+  height: 100%;
+}
+
+/* ---------------------------------------------------------------- top bar */
+
+.lva-topbar .panel-title {
+  font-size: 1rem;
+}
+
+.lva-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* Panels nested in the top bar read as tiles: the second surface, no border of their own. */
+.lva-topbar .panel-body .panel {
+  --surface: var(--surface-2);
+  --panel-border: 1px solid transparent;
+}
+
+.lva-top-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.lva-top-periods {
+  grid-column: 1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.lva-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.lva-stats {
+  grid-column: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+}
+
+.lva-stat {
+  display: flex;
+  flex-direction: column;
+}
+
+.lva-top-side {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------- periods */
+
+.lva-periods {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.lva-period {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------- costs */
+
+.lva-claude {
+  margin-bottom: var(--space-3);
+}
+
+.lva-costs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.lva-cost-row {
+  display: grid;
+  grid-template-columns: minmax(5.5em, auto) repeat(3, minmax(0, 1fr));
+  gap: var(--space-1) var(--space-3);
+  align-items: baseline;
+}
+
+.lva-cost {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.lva-k {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+/* ---------------------------------------------------------------- books */
+
+.lva-books {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.lva-books-head {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  min-width: 0;
+}
+
+.lva-glyph {
+  font-size: 1.2rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.lva-books-text {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.lva-breakdown {
+  align-self: stretch;
+}
+
+.lva-link-button.btn {
+  background: transparent;
+  border-color: var(--border);
+  font-weight: 500;
+}
+
+/* ---------------------------------------------------------------- equity chart */
+
+.lva-toggle {
+  display: inline-flex;
+  gap: 0;
+}
+
+.lva-seg.btn {
+  background: transparent;
+  border-radius: 0;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.lva-seg.btn:first-child {
+  border-radius: var(--panel-radius) 0 0 var(--panel-radius);
+}
+
+.lva-seg.btn:last-child {
+  border-radius: 0 var(--panel-radius) var(--panel-radius) 0;
+  border-left: none;
+}
+
+.lva-seg.btn[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.lva-seg.btn:last-child[aria-pressed="true"] {
+  border-left: 1px solid var(--accent);
+}
+
+.lva-figure {
+  margin: 0;
+  min-width: 0;
+}
+
+.lva-chart-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+/* ---------------------------------------------------------------- risk */
+
+.lva-switches {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+}
+
+.lva-switch {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.lva-switch:last-child {
+  border-bottom: none;
+}
+
+.lva-switch-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.lva-switch-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lva-switch-value {
+  text-align: right;
+}
+
+.lva-switch.is-tripped .lva-switch-label {
+  font-weight: 600;
+}
+
+.lva-trip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-3);
+  padding-left: calc(10px + var(--space-2));
+}
+
+.lva-trip-at {
+  color: var(--status-bad);
+  font-weight: 600;
+}
+
+.lva-switch .lva-sub {
+  padding-left: calc(10px + var(--space-2));
+}
+
+.lva-risk-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* ---------------------------------------------------------------- phone: sections and columns stack */
+
+@media (max-width: 720px) {
+  .lva-top-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lva-top-side {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .lva-top-periods,
+  .lva-periods {
+    grid-template-columns: 1fr;
+  }
+
+  .lva-cost-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .lva-cost-row > .lva-label {
+    grid-column: 1 / -1;
+  }
+}

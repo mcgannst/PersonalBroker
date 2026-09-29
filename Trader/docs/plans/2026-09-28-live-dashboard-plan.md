@@ -647,16 +647,16 @@ export function RiskPanel(props: { risk: RiskOut | null; error?: string | null; 
 - Every component uses `Panel` for its frame, error and empty state; all text from the API renders as plain text.
 
 **Acceptance tests (vitest with `liveFixtures`):**
-- [ ] 1. TopBar shows the three P&L numbers with the right money tone class (a negative today → `money down`), fees, Claude spend, net after AI, win rate, trades and expectancy; the engine chip text for auto/running, manual/paused and blocked.
-- [ ] 2. Live indicator: connected and fresh → "Live"; not connected → "Degraded: polling every 15 s"; connected but `updatedAt` 25 s old → "Updated 25 s ago"; `worker_stale` → heartbeat badge.
-- [ ] 3. BooksCheck ✓ and ✗; expanding ✗ shows the difference; a `null` books with an error shows the error and Retry (calls `onRetry`).
-- [ ] 4. PeriodPnl with `unrealized` null and partial flags; CostBar at 0, 50 %, 80 % (amber) and 130 % (bar capped, text exact) and with cap 0 (no bar, text only).
-- [ ] 5. EquityChart renders with 500 points, shows the start line and markers, toggles range via `onRange`, shows the empty state for an empty series.
-- [ ] 6. RiskPanel: values vs thresholds in units, a tripped switch with its link to `/control`, open risk vs cap, slots.
-- [ ] 7. D9 colour rule: green/red classes (`money up`/`money down`) appear only on money values (a test renders every A component with the full fixture and checks every element with a money class contains a formatted money value); status lights use only status classes.
-- [ ] 8. Touch targets ≥ 44 px for every button and link in these components; no horizontal overflow at 390 px (layout test as `touchTargets.test.tsx` does).
-- [ ] 9. XSS: `withXssText()` fixture renders no `img` or `script` element and shows the text literally.
-- [ ] 10. `npm --prefix Trader/web exec tsc -b --noEmit` clean for these files; gate and commit `DB-T7: live dashboard top bar, P&L, costs, books, equity and risk components`.
+- [x] 1. TopBar shows the three P&L numbers with the right money tone class (a negative today → `money down`), fees, Claude spend, net after AI, win rate, trades and expectancy; the engine chip text for auto/running, manual/paused and blocked.
+- [x] 2. Live indicator: connected and fresh → "Live"; not connected → "Degraded: polling every 15 s"; connected but `updatedAt` 25 s old → "Updated 25 s ago"; `worker_stale` → heartbeat badge.
+- [x] 3. BooksCheck ✓ and ✗; expanding ✗ shows the difference; a `null` books with an error shows the error and Retry (calls `onRetry`).
+- [x] 4. PeriodPnl with `unrealized` null and partial flags; CostBar at 0, 50 %, 80 % (amber) and 130 % (bar capped, text exact) and with cap 0 (no bar, text only).
+- [x] 5. EquityChart renders with 500 points, shows the start line and markers, toggles range via `onRange`, shows the empty state for an empty series.
+- [x] 6. RiskPanel: values vs thresholds in units, a tripped switch with its link to `/control`, open risk vs cap, slots.
+- [x] 7. D9 colour rule: green/red classes (`money up`/`money down`) appear only on money values (a test renders every A component with the full fixture and checks every element with a money class contains a formatted money value); status lights use only status classes.
+- [x] 8. Touch targets ≥ 44 px for every button and link in these components; no horizontal overflow at 390 px (layout test as `touchTargets.test.tsx` does).
+- [x] 9. XSS: `withXssText()` fixture renders no `img` or `script` element and shows the text literally.
+- [x] 10. `npm --prefix Trader/web exec tsc -b --noEmit` clean for these files; gate and commit `DB-T7: live dashboard top bar, P&L, costs, books, equity and risk components`.
 
 **LIVE steps:** none.
 

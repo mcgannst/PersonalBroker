@@ -610,14 +610,14 @@ Web (`Trader/web/src/`):
 - No mutation here: every action on the page uses the existing routes (`PUT /api/settings/approval_mode`, `POST /api/killswitch/pause|resume|{switch}/reset`, `PUT /api/strategies/{key}`, `POST /api/jobs/{job}/run`, `POST /api/system/telegram-test`, `POST|DELETE /api/watchlist`), with their confirmations, typed reasons, CSRF and audit unchanged.
 
 **Acceptance tests:**
-- [ ] 1. `job_summary`: the orb_open batch text; skipped; error masked and truncated; generic scalars (three, key order, long strings skipped); None cases.
-- [ ] 2. `questrade_stats`/`opening_bars`/marks parsing: a well-formed detail → the models; yesterday's `questrade.day` → None; a batch at 09:34:59 ET is not the opening fetch, one at 09:35:00 is; malformed values (strings for ints, NaN-like strings, lists) → None, never an exception.
-- [ ] 3. (db) Schedule: a session day with premarket succeeded (2 attempts), orb_open failed once then succeeded, postclose upcoming → statuses as `build_timeline`, attempts, durations, summaries, `rerun` for day jobs only; on a Saturday the schedule is Monday's, all upcoming.
-- [ ] 4. (db) Engine and strategies: manual pause active → `paused` with `paused_at`; strategies list both plug-ins with kind, revision, `owns_open_positions` true for the one holding a position.
-- [ ] 5. (db) Soak: seeded job runs for 3 clean sessions after a reset mark → `consecutive_clean` 3, `day_one` the first of them, `today` present on a session day; a second call within 60 s does not query again (statement listener); `load_report` failing → part `soak` null with a `part_errors` entry.
-- [ ] 6. (db) Errors: warning, error and critical rows (including `log.api`) listed newest first up to 200; `info` rows and replay-run rows absent; messages masked (a `password=...` text is redacted).
-- [ ] 7. Route: part isolation as DB-T5 test 4 for each control part; no Questrade (services' `quotes`/`candles` fail the test if called); 401 without a session; the route is read-only (statement listener: SELECTs only, the soak report included).
-- [ ] 8. Gate and commit `DB-T6: GET /api/control`.
+- [x] 1. `job_summary`: the orb_open batch text; skipped; error masked and truncated; generic scalars (three, key order, long strings skipped); None cases.
+- [x] 2. `questrade_stats`/`opening_bars`/marks parsing: a well-formed detail → the models; yesterday's `questrade.day` → None; a batch at 09:34:59 ET is not the opening fetch, one at 09:35:00 is; malformed values (strings for ints, NaN-like strings, lists) → None, never an exception.
+- [x] 3. (db) Schedule: a session day with premarket succeeded (2 attempts), orb_open failed once then succeeded, postclose upcoming → statuses as `build_timeline`, attempts, durations, summaries, `rerun` for day jobs only; on a Saturday the schedule is Monday's, all upcoming.
+- [x] 4. (db) Engine and strategies: manual pause active → `paused` with `paused_at`; strategies list both plug-ins with kind, revision, `owns_open_positions` true for the one holding a position.
+- [x] 5. (db) Soak: seeded job runs for 3 clean sessions after a reset mark → `consecutive_clean` 3, `day_one` the first of them, `today` present on a session day; a second call within 60 s does not query again (statement listener); `load_report` failing → part `soak` null with a `part_errors` entry.
+- [x] 6. (db) Errors: warning, error and critical rows (including `log.api`) listed newest first up to 200; `info` rows and replay-run rows absent; messages masked (a `password=...` text is redacted).
+- [x] 7. Route: part isolation as DB-T5 test 4 for each control part; no Questrade (services' `quotes`/`candles` fail the test if called); 401 without a session; the route is read-only (statement listener: SELECTs only, the soak report included).
+- [x] 8. Gate and commit `DB-T6: GET /api/control`.
 
 **LIVE steps:** none.
 

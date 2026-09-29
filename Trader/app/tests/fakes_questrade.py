@@ -1,5 +1,6 @@
 """An in-memory Questrade client for tests. IDs here are Questrade symbol IDs, as at the real boundary."""
 
+import dataclasses
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -16,6 +17,9 @@ class FakeQuestrade:
         self.bars: dict[tuple[int, str], list[Candle]] = {}
         self.errors: dict[int, int] = {}
         self.calls: list[tuple[str, int]] = []
+        # QUOTEBAR: the regular session so far per Questrade id (open, high, low, consolidated volume), merged
+        # into every quote of that id, so a re-quote (set_quote) keeps them as Questrade's quote does.
+        self.session: dict[int, tuple[Decimal, Decimal, Decimal, int]] = {}
 
     def add_symbol(
         self, ticker: str, qt_id: int, *, currency: str = "USD", exchange: str = "NASDAQ"
@@ -40,6 +44,9 @@ class FakeQuestrade:
             vwap=None,
         )
 
+    def set_session(self, qt_id: int, o: Decimal, h: Decimal, low: Decimal, volume: int) -> None:
+        self.session[qt_id] = (o, h, low, volume)
+
     def add_bars(self, qt_id: int, interval: Interval, candles: Sequence[Candle]) -> None:
         self.bars.setdefault((qt_id, interval), []).extend(candles)
 
@@ -55,7 +62,13 @@ class FakeQuestrade:
 
     async def quotes(self, ids: Sequence[int]) -> list[QtQuote]:
         self.calls.append(("quotes", len(ids)))
-        return [self.quote_map[i] for i in ids if i in self.quote_map]
+        return [self._with_session(self.quote_map[i]) for i in ids if i in self.quote_map]
+
+    def _with_session(self, q: QtQuote) -> QtQuote:
+        if q.symbol_id not in self.session:
+            return q
+        o, h, low, volume = self.session[q.symbol_id]
+        return dataclasses.replace(q, open=o, high=h, low=low, volume=volume)
 
     async def candles(
         self, symbol_id: int, start: datetime, end: datetime, interval: Interval

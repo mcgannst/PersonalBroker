@@ -648,6 +648,41 @@ def postclose(
     _report("postclose", day, _run("postclose", day, lambda: runtime.postclose_job(core, day, force=force)))
 
 
+@app.command("openbar-check")
+def openbar_check(
+    date_: str | None = DATE_OPTION,
+    force: bool = typer.Option(False, "--force", help="Re-run a session that already succeeded."),
+) -> None:
+    """Shadow check (~09:47 ET): the official 09:30-09:35 candles against the 9:35 bars built from quotes."""
+    _setup_logging()
+    from trader import runtime
+
+    name = "openbar-check"
+    core = _core(name)
+    day = _session(core, date_, name)
+    if day is None:
+        return
+    _report(name, day, _run(name, day, lambda: runtime.openbar_check_job(core, day, force=force)))
+
+
+@app.command("volume-scale")
+def volume_scale(
+    date_: str | None = DATE_OPTION,
+    force: bool = typer.Option(False, "--force", help="Re-run a session that already succeeded."),
+) -> None:
+    """Measure a session's candle/quote volume factor (after its close, before the next open). The post-close
+    job does this every day; run it by hand to backfill the factor for the next 9:35 scan."""
+    _setup_logging()
+    from trader import runtime
+
+    name = "volume-scale"
+    core = _core(name)
+    day = _session(core, date_, name)
+    if day is None:
+        return
+    _report(name, day, _run(name, day, lambda: runtime.volume_scale_job(core, day, force=force)))
+
+
 @app.command("telegram-test")
 def telegram_test(
     buttons: bool = typer.Option(

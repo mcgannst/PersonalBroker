@@ -23,6 +23,7 @@ EXPECTED = {
     ("0 8 * * 1-5", "trader premarket"),
     ("20 9 * * 1-5", "trader preopen"),
     ("36 9 * * 1-5", "trader event orb_open"),
+    ("47 9 * * 1-5", "trader openbar-check"),  # QUOTEBAR: the shadow check once the delayed candle is out
     ("30 11 * * 1-5", "trader checkin --at 11:30"),
     ("32 12 * * 1-5", "trader event --due"),
     ("55 12 * * 1-5", "trader event flatten"),
@@ -41,6 +42,7 @@ WEEKDAY_ET = {
     "trader premarket": [time(8, 0)],
     "trader preopen": [time(9, 20)],
     "trader event orb_open": [time(9, 36)],
+    "trader openbar-check": [time(9, 47)],
     "trader checkin --at 11:30": [time(11, 30)],
     "trader event --due": [time(12, 32), time(15, 32)],
     "trader event flatten": [time(12, 55), time(12, 58), time(15, 55), time(15, 58)],

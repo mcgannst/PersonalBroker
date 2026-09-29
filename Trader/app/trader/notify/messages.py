@@ -30,6 +30,7 @@ from trader.notify.types import (
     PositionLine,
     PreopenView,
     ProposalView,
+    QuoteBarsLineView,
     Renderer,
     RunToDateView,
     SoakLineView,
@@ -191,6 +192,25 @@ fmt_signed_r = _fmt_r  # `+0.18R`
 def fmt_rate(value: Decimal) -> str:
     """A ratio (win rate, adherence) as a percentage with one decimal: `0.4167` → `41.7%`."""
     return f"{(value * 100).quantize(_TENTH, ROUND_HALF_UP):.1f}%"
+
+
+def _whole_pct(part: int, whole: int) -> str:
+    return f"{(Decimal(100 * part) / whole).quantize(Decimal(1), ROUND_HALF_UP)}%"
+
+
+def quote_bars_line(v: QuoteBarsLineView) -> str:
+    """QUOTEBAR: `Opening bars from quotes: 100 compared, prices exact 97%, volume within ±10% 81%` (plus
+    `, 2 decisions would differ` when any would), or `... 540 built, none compared (shadow check missing)`."""
+    head = "Opening bars from quotes: "
+    if v.compared <= 0:
+        return f"{head}{v.quote_bars} built, none compared (shadow check missing)"
+    text = (
+        f"{head}{v.compared} compared, prices exact {_whole_pct(v.prices_exact, v.compared)}, "
+        f"volume within ±10% {_whole_pct(v.volume_within, v.compared)}"
+    )
+    if v.decision_differs:
+        text += f", {v.decision_differs} decision{'' if v.decision_differs == 1 else 's'} would differ"
+    return text
 
 
 def run_to_date_lines(v: RunToDateView) -> list[str]:
@@ -565,6 +585,8 @@ class MessageRenderer:
             lines.append(self._decision_log_line(v.decision_log))
         lines.append(f"Unprotected time: {fmt_duration(v.unprotected_seconds)}")
         lines.append(f"Kill switches: {_e(', '.join(v.blocking_switches)) or 'none'}")
+        if v.quote_bars is not None:
+            lines.append(quote_bars_line(v.quote_bars))
         archive = ", ".join(f"{_e(k)}: {n}" for k, n in sorted(v.archive.items()))
         lines.append(f"Candles archived: {archive or 'none'}")
         lines.append("<b>Rules followed?</b>")

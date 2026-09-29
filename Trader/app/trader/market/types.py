@@ -1,6 +1,6 @@
 """Market data types. Candle start and end times are UTC-aware datetimes."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
@@ -61,5 +61,9 @@ class OpenBarStats:
 class OpeningBars:
     bars: dict[int, Candle]
     # symbol_id -> reason (Review Focus 4: reported, not raised): "no_questrade_id", "no_bar_at_open",
-    # "bar_not_complete", "timeout" or "questrade_error: HTTP <status>".
+    # "bar_not_complete", "timeout" or "questrade_error: HTTP <status>"; from quotes (QUOTEBAR) also
+    # "no_quote", "no_trade", "quote_incomplete", "quote_delayed".
     missing: dict[int, str]
+    # QUOTEBAR: symbol_id -> "quotes" | "candles", where each bar came from. Filled only by the live scan's
+    # quotes mode; empty (unknown: candles) everywhere else, so replay and the candle path are unchanged.
+    sources: dict[int, str] = field(default_factory=dict)

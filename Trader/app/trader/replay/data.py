@@ -97,6 +97,7 @@ QUIET_TIMES: tuple[tuple[time, frozenset[int]], ...] = (
     (time(8, 0), _WEEKDAYS),  # premarket
     (time(9, 20), _WEEKDAYS),  # preopen
     (time(9, 36), _WEEKDAYS),  # event orb_open
+    (time(9, 47), _WEEKDAYS),  # openbar-check (QUOTEBAR shadow check)
     (time(11, 30), _WEEKDAYS),  # checkin
     (time(12, 32), _WEEKDAYS),  # event --due
     (time(12, 55), _WEEKDAYS),  # event flatten

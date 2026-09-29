@@ -118,6 +118,7 @@ from trader.engine.scheduler import (
 from trader.events import log_event
 from trader.jobs.checkin import CheckinDeps, run_checkin
 from trader.jobs.events import run_event_backup
+from trader.jobs.openbar_check import OpenbarCheckDeps, run_openbar_check
 from trader.jobs.postclose import PostcloseDeps, run_postclose
 from trader.jobs.preopen import PreopenDeps, run_preopen
 from trader.jobs.runner import JobOutcome, RetryPolicy, run_job_async
@@ -139,6 +140,7 @@ from trader.notify.views import WORKER_PROCESS as WORKER_PROCESS  # re-exported 
 from trader.reports.weekly import WeekWindow
 from trader.settings_store import RuntimeSettings
 from trader.strategies.base import CatalystSource
+from trader.strategies.orb_sip import OrbSipParams
 from trader.strategies.registry import StrategyRegistry
 from trader.worker import LIVE_RUN_CHECK_SECONDS as LIVE_RUN_CHECK_SECONDS  # re-exported (one definition)
 from trader.worker import Worker, WorkerDeps, WorkerEngine
@@ -1214,6 +1216,61 @@ async def postclose_job(core: Core, session_date: date, *, force: bool) -> JobOu
             lambda: run_postclose(deps, session_date),
             force=force,
             retry=RetryPolicy.from_settings(settings()),
+        )
+
+
+OPENBAR_CHECK_JOB = "openbar_check"
+VOLUME_SCALE_JOB = "volume_scale"
+OPENBAR_CHECK_RETRY_DEADLINE = time(10, 30)  # the delayed candle is normally out by ~09:46 ET
+
+
+def _orb_params(core: Core) -> Callable[[], OrbSipParams]:
+    def params() -> OrbSipParams:
+        strategy, _cfg = StrategyRegistry(core.factory, core.clock).instance("orb_sip")
+        p = getattr(strategy, "params", None)
+        return p if isinstance(p, OrbSipParams) else OrbSipParams()
+
+    return params
+
+
+async def openbar_check_job(core: Core, session_date: date, *, force: bool) -> JobOutcome:
+    """QUOTEBAR: the ~09:47 ET shadow check (cron `trader openbar-check`): the official 09:30-09:35 candle
+    against the bar the 9:35 scan built from quotes. Retried (the day-job policy, until 10:30 ET) while the
+    delayed candle is not published yet."""
+    async with AsyncExitStack() as stack:
+        client = LazyQuestrade(core, stack)
+        settings = GuardedSettings(core)
+        run = get_live_run(core.factory, core.clock, settings())
+        deps = OpenbarCheckDeps(
+            factory=core.factory,
+            clock=core.clock,
+            calendar=core.calendar,
+            data=MarketDataService(core.factory, core.clock, core.calendar, client),  # candles: official
+            run_id=run.id,
+            params=_orb_params(core),
+        )
+        retry = RetryPolicy.from_settings(
+            settings(), deadline=retry_deadline(session_date, OPENBAR_CHECK_RETRY_DEADLINE)
+        )
+        return await run_cli_job(
+            core,
+            OPENBAR_CHECK_JOB,
+            session_date,
+            lambda: run_openbar_check(deps, session_date),
+            force=force,
+            retry=retry,
+        )
+
+
+async def volume_scale_job(core: Core, session_date: date, *, force: bool) -> JobOutcome:
+    """QUOTEBAR: `trader volume-scale`: measure a session's candle/quote volume factor now (the post-close job
+    does it every day; this is the deploy-time backfill and a manual re-run). Run it after the close of
+    `session_date` and before the next open: the quote volume must still be that session's."""
+    async with AsyncExitStack() as stack:
+        client = LazyQuestrade(core, stack)
+        data = MarketDataService(core.factory, core.clock, core.calendar, client)
+        return await run_cli_job(
+            core, VOLUME_SCALE_JOB, session_date, lambda: data.measure_volume_scale(session_date), force=force
         )
 
 

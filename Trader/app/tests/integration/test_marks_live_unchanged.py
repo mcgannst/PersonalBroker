@@ -286,7 +286,8 @@ async def test_1_2_a_worker_day_is_identical_with_the_marks_on_and_off(
     assert trading_rows(on_factory)["trades"]
     assert on.chat == off.chat and on.replies == off.replies
     assert on.calls == off.calls
-    assert any(c[0] == "candles_many" and c[2] is not None for c in on.calls[1])  # the 9:35 batch, tapped
+    # the 9:35 batch, tapped: one quotes request over the universe (QUOTEBAR; it was candles_many)
+    assert any(c[0] == "quotes" and len(c[1]) > 1 for c in on.calls[1])
     assert on.tapped and all(on.tapped) and not any(off.tapped)
     # the tap adds no event-loop iteration to any worker step (the 9:35 batch included), and a pass leaves
     # no lock behind

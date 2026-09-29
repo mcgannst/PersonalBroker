@@ -29,6 +29,11 @@ class QtQuote:
     delay: int | None  # None when Questrade omits it: unknown, never assume real-time
     is_halted: bool
     vwap: Decimal | None
+    # QUOTEBAR: the regular session's open, high and low so far (openPrice/highPrice/lowPrice; premarket
+    # prints excluded). None before the first regular-hours trade, or when Questrade omits them.
+    open: Decimal | None = None
+    high: Decimal | None = None
+    low: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)

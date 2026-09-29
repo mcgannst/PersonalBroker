@@ -26,6 +26,7 @@ from trader.decisions.loop import FinalPass
 from trader.decisions.types import DaySummary
 from trader.engine.killswitch import KillSwitches
 from trader.events import log_event
+from trader.jobs.openbar_check import quote_bars_line
 from trader.logging_setup import redact_text
 from trader.market import repository as repo
 from trader.market.calendar import SessionCalendar
@@ -161,6 +162,7 @@ async def run_postclose(deps: PostcloseDeps, session_date: date) -> dict[str, An
         }
     decisions_detail, line = await _decisions(deps, session_date)
     summary = await _send_summary(deps, session_date, counts, line)
+    scale = await _volume_scale(deps, session_date)  # after the summary: it never delays the message
     out: dict[str, Any] = {
         "open_positions": [int(p.id) for p in still_open],
         "cancelled": cancelled,
@@ -168,9 +170,27 @@ async def run_postclose(deps: PostcloseDeps, session_date: date) -> dict[str, An
         "summary_sent": summary in ("sent", "handed_off"),
         "summary": summary,
     }
+    if scale is not None:
+        out["volume_scale"] = scale
     if decisions_detail is not None:
         out["decisions"] = decisions_detail
     return out
+
+
+async def _volume_scale(deps: PostcloseDeps, session_date: date) -> dict[str, Any] | None:
+    """QUOTEBAR: today's candle/quote volume factor per universe symbol, for tomorrow's 9:35 bars
+    (`MarketDataService.measure_volume_scale`). None when the data service has no such method (test fakes);
+    a failure is one warning and `{"error": <type>}`, never a job failure (the summary still goes out)."""
+    measure = getattr(deps.data, "measure_volume_scale", None)
+    if measure is None:
+        return None
+    try:
+        detail: dict[str, Any] = await measure(session_date)
+    except Exception as exc:
+        error = type(exc).__name__
+        log.warning("postclose.volume_scale_failed", error=error)
+        return {"error": error}
+    return detail
 
 
 def decisions_line(s: DaySummary, session_date: date) -> DecisionsLineView:
@@ -300,6 +320,13 @@ async def _send_summary(
         )
         if decision_log is not None:
             view = dataclasses.replace(view, decision_log=decision_log)
+        try:
+            quote_bars = quote_bars_line(deps.factory, session_date)
+        except Exception as exc:  # the line is optional: the summary never depends on it
+            log.warning("postclose.quote_bars_line_failed", error=type(exc).__name__)
+            quote_bars = None
+        if quote_bars is not None:
+            view = dataclasses.replace(view, quote_bars=quote_bars)
         buttons: Buttons = ()
         try:
             _nonce, data = deps.issuer.issue(

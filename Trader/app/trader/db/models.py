@@ -642,3 +642,46 @@ class MarkBar(Base):
     close: Mapped[Decimal] = mapped_column(Money)
     samples: Mapped[int] = mapped_column(Integer)
     updated_at: Mapped[datetime] = mapped_column(TS)
+
+
+# --- QUOTEBAR (migration 0009): the 9:35 opening bar from live quotes. Market data, not run-scoped. ---------
+class OpeningBarQuote(Base):
+    """One symbol's 09:30-09:35 bar as the 9:35 scan built it from a live quote (open/high/low: the quote's
+    session open/high/low; close: its last regular-hours trade; `volume`: `quote_volume` x `vol_factor`, the
+    candle scale). NOT a candle: nothing that reads candles (replay, the archive) ever reads it. The
+    `official_*` columns are the delayed official candle the ~09:47 shadow check compared it with."""
+
+    __tablename__ = "opening_bar_quotes"
+    session_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    symbol_id: Mapped[int] = mapped_column(ForeignKey(SYMBOL_FK), primary_key=True)
+    captured_at: Mapped[datetime] = mapped_column(TS)  # when the scan read the quote
+    quote_time: Mapped[datetime | None] = mapped_column(TS)  # Questrade's lastTradeTime
+    open: Mapped[Decimal] = mapped_column(Money)
+    high: Mapped[Decimal] = mapped_column(Money)
+    low: Mapped[Decimal] = mapped_column(Money)
+    close: Mapped[Decimal] = mapped_column(Money)
+    quote_volume: Mapped[int] = mapped_column(BigInteger)  # the quote's consolidated volume, as read
+    volume: Mapped[int] = mapped_column(BigInteger)  # candle scale: what rvol used
+    vol_factor: Mapped[Decimal] = mapped_column(Numeric(10, 6))
+    factor_source: Mapped[str] = mapped_column(String(10))  # symbol | median | default
+    checked_at: Mapped[datetime | None] = mapped_column(TS)
+    check_status: Mapped[str | None] = mapped_column(String(200))  # "compared" or the missing reason
+    official_open: Mapped[Decimal | None] = mapped_column(Money)
+    official_high: Mapped[Decimal | None] = mapped_column(Money)
+    official_low: Mapped[Decimal | None] = mapped_column(Money)
+    official_close: Mapped[Decimal | None] = mapped_column(Money)
+    official_volume: Mapped[int | None] = mapped_column(BigInteger)
+    decision_differs: Mapped[bool | None] = mapped_column(Boolean)
+
+
+class QuoteVolumeScale(Base):
+    """A session's volume factor per symbol, measured after the close: `candle_volume` (the regular-session
+    5-minute candles summed) / `quote_volume` (the quote's day volume). NULL factor: not measurable."""
+
+    __tablename__ = "quote_volume_scale"
+    session_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    symbol_id: Mapped[int] = mapped_column(ForeignKey(SYMBOL_FK), primary_key=True)
+    quote_volume: Mapped[int] = mapped_column(BigInteger)
+    candle_volume: Mapped[int | None] = mapped_column(BigInteger)
+    factor: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    recorded_at: Mapped[datetime] = mapped_column(TS)

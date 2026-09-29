@@ -11,13 +11,16 @@
 # Saturday is not a session and does nothing for a week without one. Retries of the day-level jobs happen
 # in-process (SPEC section 9), so there are no retry lines here. The two `soak-report --notify` lines (P6-T2)
 # send one read-only soak/ops line per session: weekdays 18:05 after the post-close and its retries, and
-# Saturday 10:30 after the weekly report, settling the week's last session (`--final`).
+# Saturday 10:30 after the weekly report, settling the week's last session (`--final`). QUOTEBAR: the 09:47
+# `openbar-check` compares the 9:35 opening bars built from live quotes with the official 09:30-09:35 candles,
+# which Stephen's market-data package publishes ~10 minutes late; it retries in-process until 10:30.
 CRON_TZ=America/New_York
 0 2 * * *      trader token-refresh
 0 20 * * 0-4   trader nightly
 0 8 * * 1-5    trader premarket
 20 9 * * 1-5   trader preopen
 36 9 * * 1-5   trader event orb_open
+47 9 * * 1-5   trader openbar-check
 30 11 * * 1-5  trader checkin --at 11:30
 32 12 * * 1-5  trader event --due
 55 12 * * 1-5  trader event flatten

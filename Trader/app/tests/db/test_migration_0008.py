@@ -92,8 +92,11 @@ def _bar(run_id: int, symbol_id: int, **kw: Any) -> m.MarkBar:
 
 
 # 1: head, columns, keys ------------------------------------------------------------------------------------
-def test_head_is_0008(pg_url: str) -> None:
-    assert ScriptDirectory.from_config(alembic_config(pg_url)).get_current_head() == "0008"
+def test_0008_is_below_the_head(pg_url: str) -> None:
+    script = ScriptDirectory.from_config(alembic_config(pg_url))
+    assert script.get_current_head() == "0009"  # QUOTEBAR added 0009 on top
+    rev = script.get_revision("0008")
+    assert rev is not None and rev.down_revision == "0007"
 
 
 @pytest.mark.parametrize(
@@ -220,7 +223,7 @@ def test_downgrade_drops_both_tables_and_upgrade_restores_them(
     assert not {"quote_marks", "mark_bars"} & tables
     assert "decision_log" in tables  # 0007 untouched
     command.upgrade(alembic_config(pg_url), "head")
-    assert _version(migrated_engine) == "0008"
+    assert _version(migrated_engine) == "0009"
     assert {"quote_marks", "mark_bars"} <= set(inspect(migrated_engine).get_table_names(schema="trader"))
 
 

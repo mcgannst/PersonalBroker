@@ -39,7 +39,7 @@ from trader.engine.runs import get_live_run
 from trader.events import log_event
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock, et_date
-from trader.market.data_service import MarketDataService, OpeningScan, QuoteClient
+from trader.market.data_service import LIVE_OPENING_BAR_SOURCE, MarketDataService, OpeningScan, QuoteClient
 from trader.market.types import Candle
 from trader.settings_store import Market, RuntimeSettings, SettingsStore
 from trader.strategies.base import (
@@ -875,7 +875,10 @@ def build_engine(core: Core, client: QuoteClient, catalysts: CatalystSource) -> 
         calendar=core.calendar,
         settings=core.settings,
         registry=registry,
-        data=MarketDataService(core.factory, core.clock, core.calendar, client),
+        # QUOTEBAR: the 9:35 opening bar from live quotes (candles are ~10 minutes late on the data package)
+        data=MarketDataService(
+            core.factory, core.clock, core.calendar, client, opening_bar_source=LIVE_OPENING_BAR_SOURCE
+        ),
         catalysts=catalysts,
         broker=broker,
         # an entry approved while a kill switch is tripped (or /pause is on) is never submitted (SPEC §6.3)

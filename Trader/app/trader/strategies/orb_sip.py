@@ -243,6 +243,9 @@ class OrbSip:
                     "universe_source": member.source,
                 },
             )
+            bar_source = opening.sources.get(sc.symbol_id)
+            if bar_source is not None:  # QUOTEBAR: the live scan says where the bar came from
+                rec.data["bar_source"] = bar_source
             if sc.symbol_id in held:
                 rec.reject_reason = "already_held"
             elif sc.symbol_id in working:

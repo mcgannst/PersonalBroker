@@ -703,8 +703,9 @@ def test_quiet_times_cover_every_crontab_line() -> None:
 
 
 async def test_full_mode_fetches_wait_out_the_cron_windows(db_factory: sessionmaker[Session]) -> None:
-    """At 09:10 ET on a Monday the preopen (09:20) and orb_open (09:36) windows overlap: the fetch waits until
-    09:46, sleeping through the injected sleep, and only then asks Questrade."""
+    """At 09:10 ET on a Monday the preopen (09:20), orb_open (09:36) and openbar-check (09:47, QUOTEBAR)
+    windows overlap: the fetch waits until 09:57, sleeping through the injected sleep, and only then asks
+    Questrade."""
     w = seed_replay_world(db_factory, universe_days=[D1], strategies=False)
     wall = FixedClock(datetime(2026, 11, 30, 9, 10, tzinfo=ET))
     slept: list[float] = []
@@ -742,9 +743,9 @@ async def test_full_mode_fetches_wait_out_the_cron_windows(db_factory: sessionma
         quiet_sleep=sleep,
     )
     await rd.prepare_day(D1)
-    assert slept == [1200.0, 960.0]
+    assert slept == [1200.0, 960.0, 660.0]
     assert fq.at
-    assert min(fq.at) == datetime(2026, 11, 30, 9, 46, tzinfo=ET)
+    assert min(fq.at) == datetime(2026, 11, 30, 9, 57, tzinfo=ET)
     # outside every window: no wait at all
     slept.clear()
     wall.set(datetime(2026, 11, 30, 10, 30, tzinfo=ET))

@@ -17,7 +17,7 @@ import re
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 import pytest
@@ -49,6 +49,7 @@ from trader.jobs.runner import run_job_async
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import ET, FixedClock
 from trader.market.data_service import MarketDataService
+from trader.market.quote_bars import DEFAULT_VOLUME_FACTOR
 from trader.market.types import Candle
 from trader.notify.relay import NotificationRelay
 from trader.settings_store import SettingsStore
@@ -441,17 +442,40 @@ async def pre_open(d: Driver, day: date) -> None:
     ]
 
 
+def open_session(w: World, ticker: str, bar: Candle) -> None:
+    """QUOTEBAR: the live quote during the first five minutes: its session open/high/low are the opening
+    bar's, its last trade the bar's close, its consolidated volume the bar's candle volume /
+    DEFAULT_VOLUME_FACTOR (no factor measured in this world, so the 9:35 scan scales it back to the candle's
+    volume)."""
+    spread = Decimal("0.01")
+    bid, ask = str(bar.close - spread), str(bar.close + spread)
+    w.fq.set_quote(QT[ticker], bid, ask, str(bar.close), w.clock.now())
+    volume = int((Decimal(bar.volume) / DEFAULT_VOLUME_FACTOR).quantize(Decimal(1), ROUND_HALF_UP))
+    w.fq.set_session(QT[ticker], bar.open, bar.high, bar.low, volume)
+
+
 async def to_orb(d: Driver, day: date, t: Times) -> Sent:
-    """The session opens; the 09:35 opening bars arrive; orb_open fires at the first step at or after
-    09:35:05 and the entry proposal goes out with its buttons."""
+    """The session opens; the 09:35 opening bars arrive (as live quotes for the 9:35:05 scan, QUOTEBAR, and as
+    the delayed candles for later); orb_open fires at the first step at or after 09:35:05 and the entry
+    proposal goes out with its buttons."""
+    open_ = CAL.session_open(day)
+    spy = next(c for c in d.w.fq.bars[(QT["SPY"], "FiveMinutes")] if c.start == open_)
     for tk, bar in (
         ("AAA", opening(day, "21.00", "21.50", "20.90", "21.40", 5000)),
         ("BBB", opening(day, "20.00", "20.40", "19.95", "20.30", 3000)),
+        ("SPY", spy),
     ):
-        d.w.fq.add_bars(QT[tk], "FiveMinutes", [bar])
+        if tk != "SPY":
+            d.w.fq.add_bars(QT[tk], "FiveMinutes", [bar])
+        open_session(d.w, tk, bar)
     steps = await d.walk(t.orb - timedelta(seconds=310), t.orb)
     fired = [(r.now, f.key, f.status) for r in steps for f in r.fired]
     assert fired == [(t.orb, "orb_open", "fired")]  # exactly once, at 09:35:05
+    with d.w.factory() as s:  # QUOTEBAR: the scan built its bars from the quotes (default volume factor)
+        built = s.execute(
+            select(m.OpeningBarQuote.factor_source).where(m.OpeningBarQuote.session_date == day)
+        ).scalars()
+        assert sorted(built) == ["default"] * 3
     entry = d.w.api.sent[-1]
     assert entry.label == "ENTRY: BUY 33 AAA"
     assert [b.text for b in entry.buttons[0]] == ["✅ Approve", "❌ Reject"]

@@ -48,6 +48,10 @@ TOKEN_REUSE_MARGIN = timedelta(seconds=120)
 # already after a forced token refresh), the rest are cancelled and reported with that 401 at once,
 # instead of burning the whole deadline on requests Questrade will refuse (Tue 2026-09-29: 757 x 401).
 FAIL_FAST_401 = 20
+# QUOTEBAR: Questrade's code on a 401 for data the account's market-data package does not include ("...current
+# market data package..."): Stephen's package serves intraday candles only ~10 minutes late. Raised at once,
+# never retried with a new token (the token is fine).
+PACKAGE_401_CODE = 1022
 Category = Literal["market", "account"]
 
 log = structlog.get_logger("questrade.client")
@@ -371,6 +375,10 @@ class QuestradeClient:
             last_status, last_text, last_resp = resp.status_code, resp.text[:300], resp
             if resp.status_code == 200:
                 return json.loads(resp.text, parse_float=Decimal)
+            if resp.status_code == 401 and _questrade_error(resp)[0] == PACKAGE_401_CODE:
+                # QUOTEBAR: not a token problem (the data is outside the market-data package, e.g. a candle
+                # less than ~10 minutes old): a forced refresh would only rotate the refresh token.
+                raise QuestradeApiError.from_response(resp)
             if resp.status_code == 401 and not refreshed:
                 refreshed = True
                 await self._refresh_after_401(token)
@@ -449,6 +457,9 @@ class QuestradeClient:
                     delay=None if q.get("delay") is None else int(q["delay"]),
                     is_halted=bool(q.get("isHalted")),
                     vwap=_dec(q.get("VWAP")),
+                    open=_dec(q.get("openPrice")),
+                    high=_dec(q.get("highPrice")),
+                    low=_dec(q.get("lowPrice")),
                 )
                 for q in data.get("quotes", [])
             )

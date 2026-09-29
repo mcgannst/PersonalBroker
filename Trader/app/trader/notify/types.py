@@ -217,6 +217,20 @@ class DecisionsLineView:
 
 
 @dataclass(frozen=True, slots=True)
+class QuoteBarsLineView:
+    """QUOTEBAR: the daily summary's "Opening bars from quotes" line. `quote_bars`: the 9:35 bars built from
+    quotes; `compared`: how many the ~09:47 shadow check compared with the official candle; of those,
+    `prices_exact` (open, high and low equal), `volume_within` (candle-scale volume within ±10%) and
+    `decision_differs` (the bar-level ORB screen would have decided otherwise)."""
+
+    quote_bars: int
+    compared: int
+    prices_exact: int
+    volume_within: int
+    decision_differs: int
+
+
+@dataclass(frozen=True, slots=True)
 class DailySummaryView:
     session_date: date
     trades: tuple[TradeLine, ...]
@@ -234,6 +248,8 @@ class DailySummaryView:
     # P6-T11: the decision log's line; None when it is off (reports.decisions_in_summary) or the day has no
     # decision-log day row. Named `decision_log` because `decisions` above is the human-decision count.
     decision_log: DecisionsLineView | None = None
+    # QUOTEBAR: the shadow check's line; None on a day without quote-built opening bars.
+    quote_bars: QuoteBarsLineView | None = None
 
 
 @dataclass(frozen=True, slots=True)

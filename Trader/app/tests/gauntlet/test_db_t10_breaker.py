@@ -164,7 +164,7 @@ async def probed_day(factory: sessionmaker[Session], mode: str) -> Summary:
         calls=(calls, detail),
         iterations=iterations,
         foreign_locks=locks,
-        batch_sizes=[len(c[1]) for c in detail if c[0] == "candles_many"],
+        batch_sizes=[len(c[1]) for c in detail if c[0] in ("candles_many", "quotes")],
     )
 
 
@@ -221,14 +221,13 @@ def _mutant_delay(mp: pytest.MonkeyPatch) -> None:
 
 
 def _mutant_reorder(mp: pytest.MonkeyPatch) -> None:
-    real = QuoteTap.candles_many
+    # QUOTEBAR: the 9:35 opening-bar batch is now one quotes request (several ids), no longer candles_many
+    real = QuoteTap.quotes
 
-    async def candles_many(
-        self: QuoteTap, reqs: Sequence[CandleRequest], *, deadline_s: float | None = None
-    ) -> Any:
-        return await real(self, list(reversed(list(reqs))), deadline_s=deadline_s)
+    async def quotes(self: QuoteTap, ids: Sequence[int]) -> list[QtQuote]:
+        return await real(self, list(reversed(list(ids))))
 
-    mp.setattr(QuoteTap, "candles_many", candles_many)
+    mp.setattr(QuoteTap, "quotes", quotes)
 
 
 def _mutant_lock(mp: pytest.MonkeyPatch) -> None:

@@ -215,8 +215,9 @@ def exit_category(exit_reason: str, *, expiry: bool = False) -> str:
 
 # --- LiveScanData -------------------------------------------------------------------------------------------
 class LiveScanData(ScanData):
-    """`ScanData` over the database only (universe snapshots, open-bar stats, stored 5-minute opening bars in
-    `intraday_candles`, else `candle_archive`). Never a network call; each read runs in a worker thread."""
+    """`ScanData` over the database only (universe snapshots, open-bar stats, the opening bars the live scan
+    built from quotes in `opening_bar_quotes`, else stored 5-minute opening bars in `intraday_candles`, else
+    `candle_archive`). Never a network call; each read runs in a worker thread."""
 
     def __init__(self, factory: sessionmaker[Session], calendar: SessionCalendar | None = None) -> None:
         self._factory = factory
@@ -249,11 +250,21 @@ class LiveScanData(ScanData):
         if not ids:
             return out
         with self._factory() as s:
+            # QUOTEBAR: the bar the live 9:35 scan built from a quote is what it decided on, so it wins over a
+            # candle stored later for the same symbol (the shadow check or the post-close archive).
+            for q in s.execute(
+                select(m.OpeningBarQuote).where(
+                    m.OpeningBarQuote.session_date == session_date, m.OpeningBarQuote.symbol_id.in_(ids)
+                )
+            ).scalars():
+                out[q.symbol_id] = Candle(
+                    open_, open_ + OPENING_BAR, q.open, q.high, q.low, q.close, q.volume, None
+                )
             for r in s.execute(
                 select(m.IntradayCandle).where(
                     m.IntradayCandle.interval == OPENING_BAR_CODE,
                     m.IntradayCandle.ts == open_,
-                    m.IntradayCandle.symbol_id.in_(ids),
+                    m.IntradayCandle.symbol_id.in_([i for i in ids if i not in out]),
                 )
             ).scalars():
                 out[r.symbol_id] = Candle(
@@ -397,6 +408,7 @@ def fingerprint(
                 m.IntradayCandle.interval == OPENING_BAR_CODE, m.IntradayCandle.ts == open_
             )
         ).scalar_one(),
+        "quote_bars": s.execute(select(func.count()).where(m.OpeningBarQuote.session_date == d)).scalar_one(),
         "jobs": _digest(
             s,
             select(m.JobRun.job, func.max(m.JobRun.id))
@@ -1047,6 +1059,8 @@ class _Builder:
                     "avg_volume": data.get("avg_volume"),
                     "avg_open_vol_14d": data.get("avg_open_vol_14d"),
                     "universe_source": data.get("universe_source"),
+                    # QUOTEBAR: "quotes" | "candles", only when the live scan recorded it
+                    **({"bar_source": data["bar_source"]} if "bar_source" in data else {}),
                     "entry": _s(entry),
                     "stop_loss": _s(stop_loss),
                     "target": None,  # orb_sip has no target (SPEC §5.2)

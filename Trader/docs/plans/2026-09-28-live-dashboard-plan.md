@@ -573,15 +573,15 @@ Web (`Trader/web/src/`):
 - The route never touches `services.quotes`, `services.candles` or any market-data service.
 
 **Acceptance tests:**
-- [ ] 1. (db) Activity: a seeded session day with an entry order, its fill (slippage 0.06), a stop exit trade (−12.50, −0.50 R), a proposal created/approved via telegram, one expired and auto-flattened, a kill-switch trip and reset, a failed premarket job run, an `error` event, a `log.worker` error event, 543 candidates with 12 passed → items of every kind in S7 except the `log.` event, newest first, texts as S7's examples (MT times), chips and tones as S7, links as S7; another day's rows and a replay run's rows absent; `limit` respected.
-- [ ] 2. (db) Rejections: decision log rows for 800 scan rejections over 3 rules and 2 risk rejections → counts by (stage, rule), ≤ 50 tickers with `truncated`, links with `stage` and `outcome=rejected`; a summary-only scan row supplies scan counts without tickers; with no decision-log scan rows but candidates present → `source` `candidates`; none of either → `source` `none`, total 0.
-- [ ] 3. Route shape: with every part function monkeypatched to return fixtures, `GET /api/live` returns them in `LiveOut`; `?range=run` reaches `equity_series`; `?expand=12,15` reaches `live_positions` as {12, 15}; `?expand=1,2,3,4` and `?expand=abc` → 422; `?range=week` → 422.
-- [ ] 4. Part isolation: each part in turn raising `RuntimeError("boom <secret-looking token>")` → 200, that part `null`, one `part_errors` entry naming it with the type and masked text, every other part present; the live run lookup raising → 500 error shape `ErrorOut`.
-- [ ] 5. No Questrade: with `ApiServices.quotes` and `candles` replaced by functions that fail the test when called, a seeded `/api/live` (both ranges, with `expand`) returns 200; `tests/live/test_no_questrade_static.py` covers `routers/live.py` and `activity.py`.
-- [ ] 6. `Server-Timing` header present with a numeric `app;dur` first and one entry per part; the route runs its database work off the event loop (a part that sleeps 1 s in its thread does not block a concurrent `/api/health` request on the same app, which answers first).
-- [ ] 7. Replay exclusion (db): a replay run with trades, fills, proposals, events, decision log rows and quote marks on the same day changes nothing in the response (compare with and without the replay rows).
-- [ ] 8. Auth: 401 without a session (sweep) and no CSRF needed (GET).
-- [ ] 9. Gate and commit `DB-T5: activity feed, rejections and GET /api/live`.
+- [x] 1. (db) Activity: a seeded session day with an entry order, its fill (slippage 0.06), a stop exit trade (−12.50, −0.50 R), a proposal created/approved via telegram, one expired and auto-flattened, a kill-switch trip and reset, a failed premarket job run, an `error` event, a `log.worker` error event, 543 candidates with 12 passed → items of every kind in S7 except the `log.` event, newest first, texts as S7's examples (MT times), chips and tones as S7, links as S7; another day's rows and a replay run's rows absent; `limit` respected.
+- [x] 2. (db) Rejections: decision log rows for 800 scan rejections over 3 rules and 2 risk rejections → counts by (stage, rule), ≤ 50 tickers with `truncated`, links with `stage` and `outcome=rejected`; a summary-only scan row supplies scan counts without tickers; with no decision-log scan rows but candidates present → `source` `candidates`; none of either → `source` `none`, total 0.
+- [x] 3. Route shape: with every part function monkeypatched to return fixtures, `GET /api/live` returns them in `LiveOut`; `?range=run` reaches `equity_series`; `?expand=12,15` reaches `live_positions` as {12, 15}; `?expand=1,2,3,4` and `?expand=abc` → 422; `?range=week` → 422.
+- [x] 4. Part isolation: each part in turn raising `RuntimeError("boom <secret-looking token>")` → 200, that part `null`, one `part_errors` entry naming it with the type and masked text, every other part present; the live run lookup raising → 500 error shape `ErrorOut`.
+- [x] 5. No Questrade: with `ApiServices.quotes` and `candles` replaced by functions that fail the test when called, a seeded `/api/live` (both ranges, with `expand`) returns 200; `tests/live/test_no_questrade_static.py` covers `routers/live.py` and `activity.py`.
+- [x] 6. `Server-Timing` header present with a numeric `app;dur` first and one entry per part; the route runs its database work off the event loop (a part that sleeps 1 s in its thread does not block a concurrent `/api/health` request on the same app, which answers first).
+- [x] 7. Replay exclusion (db): a replay run with trades, fills, proposals, events, decision log rows and quote marks on the same day changes nothing in the response (compare with and without the replay rows).
+- [x] 8. Auth: 401 without a session (sweep) and no CSRF needed (GET).
+- [x] 9. Gate and commit `DB-T5: activity feed, rejections and GET /api/live`.
 
 **LIVE steps:** none.
 

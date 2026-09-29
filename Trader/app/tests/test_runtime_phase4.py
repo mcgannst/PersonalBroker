@@ -158,7 +158,8 @@ async def test_run_worker_passes_the_rate_limit_as_heartbeat_extra(
     async def capture(self: Worker, stop: Any, *, once: bool = False) -> None:
         captured.append(self.deps)
         assert self.deps.heartbeat_extra is not None
-        assert dict(self.deps.heartbeat_extra()) == {}  # the client has not been opened yet
+        # the client has not been opened yet (DB-T10: the tap's and the publisher's health keys are there)
+        assert "rate_limit" not in dict(self.deps.heartbeat_extra())
 
     monkeypatch.setattr(Worker, "run", capture)
     assert await rt.run_worker(once=True) == 0

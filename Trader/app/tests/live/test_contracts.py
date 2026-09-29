@@ -16,6 +16,7 @@ import dataclasses
 import importlib
 import inspect
 import textwrap
+import typing
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -255,6 +256,14 @@ def test_the_final_constants() -> None:
         lt.LivePositions,
     ):
         assert cls.__dataclass_params__.frozen and hasattr(cls, "__slots__")  # type: ignore[attr-defined]
+
+
+def test_publish_step_skipped_literals() -> None:
+    # DB-T10 ruling (additive): "busy" is a NOWAIT-skipped pass, distinct from "no_new_quotes"
+    skipped = typing.get_type_hints(mt.PublishStep)["skipped"]
+    literal = next(a for a in typing.get_args(skipped) if typing.get_origin(a) is typing.Literal)
+    assert set(typing.get_args(literal)) == {"no_run", "no_new_quotes", "error", "busy"}
+    assert type(None) in typing.get_args(skipped)
 
 
 # --- import direction ---------------------------------------------------------------------------------------

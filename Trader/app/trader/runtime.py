@@ -52,6 +52,15 @@ Phase 6 (P6-T11), the decision log (logging only, D2): the worker runs `Decision
 summary for the "Decisions" line); the CLI calls `record_decisions_quietly` after a succeeded pre-market job
 and after `trader event` fired an event. None of them can fail or change a job: every failure is one masked
 warning, and all their database work runs in worker threads.
+
+Live dashboard (DB-T10), the quote marks (logging only, D2): `live_marks` wraps the worker's ONE shared
+`LazyQuestrade` in a `QuoteTap` (a transparent pass-through that remembers the quotes it returned, S1a), and
+the session engines and the bot's market data use the tap; the `MarkPublisher` (its own single-thread
+executor) writes the tapped quotes to the mark tables and runs as `WorkerDeps.marks`. The heartbeat's
+detail gains the tap's `questrade`/`candle_batches` and the publisher's `marks` (S10), each under its own
+guard; `rate_limit` still comes from the `LazyQuestrade`. The publisher is closed with the worker's stack,
+after the worker's shutdown cancelled its task. No other process builds a tap or a publisher (the cron jobs,
+the API and replay keep their own clients), and nothing on the decision path reads what it writes.
 """
 
 import asyncio
@@ -118,6 +127,10 @@ from trader.logging_setup import redact_text
 from trader.market.clock import ET, et_date
 from trader.market.data_service import MarketDataService, QuoteClient
 from trader.market.types import Candle, Interval
+from trader.marks.publisher import MarkPublisher, MarkPublisherDeps
+from trader.marks.tap import QuoteTap
+from trader.marks.types import MARKS_SOURCE
+from trader.marks.types import EventWriter as MarksEventWriter
 from trader.notify.messages import MessageRenderer
 from trader.notify.notifier import NullNotifier, TelegramNotifier
 from trader.notify.relay import NotificationRelay
@@ -739,7 +752,13 @@ async def _run_worker(core: Core, settings: GuardedSettings, once: bool) -> int:
         # The shared Questrade client lives on its own inner stack, entered first, so at exit the last
         # session's engine stack closes before the client it uses.
         client = LazyQuestrade(core, await stack.enter_async_context(AsyncExitStack()))
-        engines = SessionEngines(core, client, watch=watch)
+        # DB-T10: every worker market-data call goes through the transparent tap; the publisher writes what it
+        # saw. The publisher's executor is shut down with this stack, i.e. after `worker.run` returned (its
+        # shutdown cancelled the publisher's task).
+        tapped, publisher = live_marks(core, client, lambda: run.id)
+        if publisher is not None:
+            stack.callback(publisher.close)
+        engines = SessionEngines(core, tapped, watch=watch)
         stack.push_async_callback(engines.aclose)
         fdeps = fire_deps(core, engines.current)
         settled = fired_for(core)
@@ -749,7 +768,7 @@ async def _run_worker(core: Core, settings: GuardedSettings, once: bool) -> int:
             watch.check()
             return settled(session_date)
 
-        data = MarketDataService(factory, clock, core.calendar, client)
+        data = MarketDataService(factory, clock, core.calendar, tapped)
         api = await open_telegram(core, stack)
         chat_id = core.env.telegram_chat_id
         relay: Callable[[], Awaitable[Any]] | None = None
@@ -817,10 +836,23 @@ async def _run_worker(core: Core, settings: GuardedSettings, once: bool) -> int:
                 return JobOutcome("skipped", {"reason": "live run changed; restarting"})
             return await run_job_async(factory, clock, SESSION_END_JOB, session_date, body)
 
+        health = HeartbeatParts()
+
         def heartbeat_extra() -> dict[str, Any]:
-            # The Questrade rate-limit numbers the System page shows (P4-T18), once the client is open.
-            rate_limit = client.rate_limit_remaining()
-            return {"rate_limit": rate_limit} if rate_limit is not None else {}
+            # The Questrade rate-limit numbers the System page shows (P4-T18), once the client is open, then
+            # the tap's and the publisher's health (S10). Each part is guarded on its own: a failing one
+            # leaves its keys out and the others in. Synchronous, no I/O (it runs on the loop in _beat).
+            extra: dict[str, Any] = {}
+            rate_limit = health.part("rate_limit", client.rate_limit_remaining)
+            if rate_limit is not None:
+                extra["rate_limit"] = rate_limit
+            if isinstance(tapped, QuoteTap):
+                extra.update(health.part("tap", tapped.health_detail) or {})
+            if publisher is not None:
+                marks = health.part("marks", publisher.health_detail)
+                if marks is not None:
+                    extra["marks"] = marks
+            return extra
 
         run_id = run.id
 
@@ -841,6 +873,7 @@ async def _run_worker(core: Core, settings: GuardedSettings, once: bool) -> int:
                 host=socket.gethostname(),
                 heartbeat_extra=heartbeat_extra,
                 decisions=decisions_loop(core, lambda: run_id),
+                marks=publisher,
             )
         )
         try:
@@ -848,6 +881,51 @@ async def _run_worker(core: Core, settings: GuardedSettings, once: bool) -> int:
         except SystemExit as exc:  # 2: another worker runs; 3: this one lost its lock
             return exit_code(exc)
     return EXIT_LIVE_RUN_CHANGED if watch.changed else 0
+
+
+# --- the live dashboard's quote marks (DB-T10) --------------------------------------------------------------
+
+
+def marks_event_writer(core: Core) -> MarksEventWriter:
+    """The mark publisher's warning/info events: one `event_log` row, source `marks` (levels `warning` and
+    `info` are never relayed). Never raises."""
+
+    def write(level: str, message: str, data: dict[str, Any], run_id: int | None) -> None:
+        _record_event(core, level, MARKS_SOURCE, message, data, run_id)
+
+    return write
+
+
+def live_marks(
+    core: Core, client: QuoteClient, run_id: Callable[[], int | None]
+) -> tuple[QuoteClient, MarkPublisher | None]:
+    """The worker's quote client behind a transparent `QuoteTap`, and the `MarkPublisher` that writes what the
+    tap saw for `run_id()` (live dashboard plan S1, S1a). The tap returns the client's own results and
+    exceptions; the publisher never calls Questrade."""
+    tap = QuoteTap(client, core.clock)
+    deps = MarkPublisherDeps(core.factory, core.clock, tap, run_id, marks_event_writer(core))
+    return tap, MarkPublisher(deps)
+
+
+class HeartbeatParts:
+    """Guards each part of the worker's heartbeat extra on its own: a raising part gives None (its keys are
+    left out, the others stay), logged once per failure streak and once on recovery."""
+
+    def __init__(self) -> None:
+        self._failing: set[str] = set()
+
+    def part(self, name: str, read: Callable[[], Any]) -> Any:
+        try:
+            value = read()
+        except Exception as exc:
+            if name not in self._failing:
+                self._failing.add(name)
+                log.warning("runtime.heartbeat_part_failed", part=name, error_type=type(exc).__name__)
+            return None
+        if name in self._failing:
+            self._failing.discard(name)
+            log.info("runtime.heartbeat_part_recovered", part=name)
+        return value
 
 
 # --- the decision log (P6-T11) ------------------------------------------------------------------------------

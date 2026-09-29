@@ -42,10 +42,12 @@ class CandleBatch:
 
 @dataclass(frozen=True, slots=True)
 class PublishStep:
-    """The outcome of one publisher pass (`MarkPublisher.run_once`)."""
+    """The outcome of one publisher pass (`MarkPublisher.run_once`). `busy` (DB-T10 ruling, additive): a row
+    the inserts reference was locked by another transaction (NOWAIT), so the pass was skipped without waiting
+    and its observations are retried with the next pass; not a failure."""
 
     at: datetime
-    skipped: Literal["no_run", "no_new_quotes", "error"] | None
+    skipped: Literal["no_run", "no_new_quotes", "error", "busy"] | None
     marks_written: int
     bars_written: int
 

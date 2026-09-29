@@ -352,7 +352,7 @@ async def test_a_referenced_row_locked_for_update_skips_the_pass_at_once_and_ret
         with capture_logs() as logs:
             step, took = await _timed(pub.run_once())
         assert took < 1.0  # NOWAIT: no lock_timeout (5 s), no deadlock_timeout (1 s) wait
-        assert step.skipped is None and (step.marks_written, step.bars_written) == (0, 0)
+        assert step.skipped == "busy" and (step.marks_written, step.bars_written) == (0, 0)
         assert pub.busy_passes == 1 and pub.health_detail()["failing"] is False
         assert [e["event"] for e in logs if e["log_level"] != "debug"] == []  # no warning, no event
         assert marks(db_factory) == {} and bars(db_factory) == {}  # the pass was rolled back

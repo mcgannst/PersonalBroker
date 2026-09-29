@@ -447,7 +447,9 @@ async def test_rate_limit_appears_only_once_the_one_shared_client_is_open(
     assert await rt.run_worker(once=True) == 0
     assert len(lazies) == 1, "the worker built more than one Questrade client"
     assert world.qt.entered == 1
-    assert seen == [{}, {"rate_limit": {"market_data": 19, "account": 28}}]
+    # DB-T10 adds the tap's and the publisher's health keys beside rate_limit (S10)
+    rate_limits = [{k: v for k, v in s.items() if k == "rate_limit"} for s in seen]
+    assert rate_limits == [{}, {"rate_limit": {"market_data": 19, "account": 28}}]
 
 
 # --- the notifier through to_thread -------------------------------------------------------------------------

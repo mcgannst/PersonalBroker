@@ -187,14 +187,14 @@ class MarkPublisher:
         except _Busy:
             # Not a failure (no warning, no event, the streak is untouched): the rows are locked by another
             # transaction for now. The transaction was rolled back; the next cadence retries these
-            # observations.
+            # observations. Reported as `skipped="busy"` (DB-T10 ruling), distinct from nothing to write.
             self.busy_passes += 1
             self._carry = list(observed[-MAX_CARRY:])
             try:
                 log.debug("marks.publish_busy", busy_passes=self.busy_passes, carried=len(self._carry))
             except Exception:  # noqa: S110 - a skipped pass never raises
                 pass
-            return PublishStep(now, None, 0, 0)
+            return PublishStep(now, "busy", 0, 0)
         except Exception as exc:
             self._failed(exc, run_id)
             return PublishStep(now, "error", 0, 0)

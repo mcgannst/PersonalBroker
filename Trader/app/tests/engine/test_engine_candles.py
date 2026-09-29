@@ -71,6 +71,7 @@ def build(factory: sessionmaker[Session], model: FillModel) -> World:
     clock = FixedClock(T_ORB)
     store = SettingsStore(factory, now=clock.now)
     store.set("approval_mode", "auto", actor="test")
+    store.set("max_position_pct", "1", actor="test")  # SIZECAP: this scenario keeps the pre-cap sizing
     settings = store.load()
     run = get_live_run(factory, clock, settings)
     ids: dict[str, int] = {}

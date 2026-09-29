@@ -167,12 +167,12 @@ async def test_intent_to_fill_to_protective_stop_end_to_end(db_factory: sessionm
     (out,) = res.outcomes
     assert out.status == "submitted" and out.proposal_id is not None
     (order,) = w.broker.working_orders()
-    # 720 / (21.51 x 1.005) = 33.3 -> 33 shares (cash-limited; risk allows 144)
+    # SIZECAP: the 10% cap, 72 / (21.51 x 1.005) = 3.33 -> 3 shares (cash allows 33, risk 144)
     assert (order.symbol_id, order.order_type, order.stop, order.qty) == (
         w.ids["AAA"],
         "stop",
         Decimal("21.5100"),
-        33,
+        3,
     )
     with db_factory() as s:
         cands = {
@@ -186,7 +186,7 @@ async def test_intent_to_fill_to_protective_stop_end_to_end(db_factory: sessionm
         w.ids["BBB"]: (False, "catalyst_missing", w.run_id),
     }
     assert signal.strategy_config_id == w.registry.current("orb_sip").id and signal.event_key == "orb_open"
-    assert signal.evidence["rvol"] == "5.0000" and signal.evidence["sizing"]["shares"] == "33"
+    assert signal.evidence["rvol"] == "5.0000" and signal.evidence["sizing"]["shares"] == "3"
     assert signal.intent["type"] == "enter_long" and notes
 
     w.clock.set(T_ORB + timedelta(seconds=55))
@@ -194,7 +194,7 @@ async def test_intent_to_fill_to_protective_stop_end_to_end(db_factory: sessionm
     (fill,) = await w.engine.poll_quotes()
     assert fill.price == Decimal("21.5608") and fill.purpose == "entry"
     (stop,) = w.broker.working_orders()
-    assert (stop.purpose, stop.order_type, stop.stop, stop.qty) == ("stop", "stop", Decimal("21.4100"), 33)
+    assert (stop.purpose, stop.order_type, stop.stop, stop.qty) == ("stop", "stop", Decimal("21.4100"), 3)
     with db_factory() as s:
         kinds = [(p.kind, p.status) for p in s.execute(select(m.Proposal).order_by(m.Proposal.id)).scalars()]
         snaps = s.execute(select(func.count()).select_from(m.EquitySnapshot)).scalar_one()

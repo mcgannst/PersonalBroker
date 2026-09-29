@@ -238,6 +238,7 @@ def world(
     w = World(core, clock, ChatApi(), FakeQuestrade(), FakeFinviz(), FakeClaude(), monkeypatch)
     store.set("approval_mode", "manual", actor="test")
     store.set("auto_flatten_on_expiry", True, actor="test")
+    store.set("max_position_pct", "1", actor="test")  # SIZECAP: this scenario keeps the pre-cap sizing
 
     async def open_catalysts(core: Core, stack: Any) -> CatalystService:
         return w.catalysts()

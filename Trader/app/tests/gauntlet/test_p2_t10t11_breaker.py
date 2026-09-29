@@ -81,31 +81,41 @@ def long(
         (long("20.01", "20.01"), {}, ("invalid", None)),
         # a "stop" above the entry of a long is backwards
         (long("20.01", "20.50"), {}, ("invalid", None)),
-        # tiny equity: risk $0.0144 / 0.10 -> 0 shares
-        (long(), {"account": acct(equity="0.72", buying_power="720")}, ("zero_shares", None)),
-        # fractional floor: 1000 x 2% = 20 / 0.07 = 285.71 -> 285 (risk-limited)
-        (long("20.00", "19.93"), {"account": acct("1000", "100000")}, (None, 285)),
+        # tiny equity: risk $0.0144 / 0.10 -> 0 shares; SIZECAP: the 10% cap ($0.072) buys no share first
+        (long(), {"account": acct(equity="0.72", buying_power="720")}, ("position_cap", None)),
+        # fractional floor: 1000 x 2% = 20 / 0.07 = 285.71 -> 285 (risk);
+        # SIZECAP: the 10% cap 100 / (20.00 x 1.005) = 4.98 -> 4 binds
+        (long("20.00", "19.93"), {"account": acct("1000", "100000")}, (None, 4)),
         # cash exactly 35 x 20.00 x 1.005 = 703.5 -> 35, not 34
         (long("20.00", "19.93"), {"account": acct("10000", "703.5")}, (None, 35)),
         # one ten-thousandth less cash -> 34
         (long("20.00", "19.93"), {"account": acct("10000", "703.4999")}, (None, 34)),
         # buying power below the price of one share -> zero shares, not a negative or fractional order
         (long(), {"account": acct("720", "20")}, ("zero_shares", None)),
-        # risk_pct at its upper bound (10%): 72 / 0.10 = 720
+        # risk_pct at its upper bound (10%): 72 / 0.10 = 720; SIZECAP: the 10% cap 72 / 20.11 -> 3 binds
         (
             long(),
             {"account": acct("720", "1000000"), "settings": RuntimeSettings(risk_pct=Decimal("0.10"))},
-            (None, 720),
+            (None, 3),
+        ),
+        # ... and with the cap off (1 = all of equity) the cap is 720 / 20.11 = 35.8 -> 35
+        (
+            long(),
+            {
+                "account": acct("720", "1000000"),
+                "settings": RuntimeSettings(risk_pct=Decimal("0.10"), max_position_pct=Decimal("1")),
+            },
+            (None, 35),
         ),
         # risk_pct near its lower bound: 0.072 / 0.10 -> 0
         (long(), {"settings": RuntimeSettings(risk_pct=Decimal("0.0001"))}, ("zero_shares", None)),
         # market entry with no reference price has nothing to size from
         (long(order_type="market"), {}, ("invalid", None)),
-        # market entry sizes from the reference price
+        # market entry sizes from the reference price (SIZECAP: the 10% cap, 4, binds as above)
         (
             long("20.00", "19.93", "market"),
             {"account": acct("1000", "100000"), "reference_price": Decimal("20.00")},
-            (None, 285),
+            (None, 4),
         ),
     ],
 )
@@ -122,9 +132,10 @@ def test_sizing_edges_never_crash_and_floor_correctly(
     assert isinstance(out, SizedOrder) and out.qty == qty, out
     assert out.spec is not None and out.spec.qty == qty and out.spec.side == "buy"
     assert int(out.sizing["shares"]) == qty
-    assert out.sizing["limited_by"] == (
-        "cash" if int(out.sizing["shares_cash"]) < int(out.sizing["shares_risk"]) else "risk"
-    )
+    # SIZECAP: the binding limit is one of the three whose shares equal the order's
+    limits = {k: int(out.sizing[f"shares_{k}"]) for k in ("risk", "cash", "cap")}
+    assert min(limits.values()) == qty
+    assert out.sizing["limited_by"] in [k for k, v in limits.items() if v == qty]
 
 
 def test_risk_pct_bounds_are_enforced() -> None:

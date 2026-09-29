@@ -287,10 +287,12 @@ Worker fill loop (quotes) → Fill → Ledger/Positions → Strategy.on_fill
   risk_$ = equity × risk_pct
   shares_risk = floor(risk_$ / (entry − stop_loss))
   shares_cash = floor(buying_power / (entry × (1 + slippage_buffer)))
-  shares = min(shares_risk, shares_cash)
+  cap_$ = equity × max_position_pct
+  shares_cap = floor((cap_$ − fees.commission) / (entry × (1 + slippage_buffer) + ECN per share if direct-routed))
+  shares = min(shares_risk, shares_cap, shares_cash)
   ```
 
-  Reject the trade if shares is 0.
+  **Per-stock cap (SIZECAP, Stephen 2026-09-28):** no single entry may cost more than `max_position_pct` (default 10%) of the same equity `risk_pct` uses, with its estimated costs. If the cap buys no share at all (one share costs more than the cap), the intent is rejected with check `position_cap` and a reason like "1 share of XYZ costs $100.91, over the 10% cap $72.00"; it reaches the signal's evidence, the `risk` event and the decision log (`stage risk`, `rule position_cap`) like the other risk rejections. Otherwise reject the trade (`zero_shares`) if shares is 0. `sizing` records `shares_risk`, `shares_cash`, `shares_cap`, `max_position_pct`, `cap_dollars` and `limited_by` (`risk`, `cash` or `cap`). All sizing math is `Decimal`. A replay uses its settings snapshot: a snapshot taken before the setting existed loads it as 1 (no cap beyond cash), so old replays keep their behaviour.
 - **Checks, in order:**
   1. Kill switch not tripped.
   2. Daily realized + unrealized P&L above the daily loss limit.
@@ -502,7 +504,7 @@ Without `run_id` the decision routes serve only a live run; a replay's decisions
 
 **Start-up-only secrets are not isolated inside the container (P6-T6 fix round 1).** The entrypoint unsets `MIGRATION_DATABASE_URL` and `ADMIN_PASSWORD_INITIAL` after the migration and first-user steps, but that only removes them from its own process tree: PID 1 (`docker-init`) keeps the full environment and runs as the same uid 10001 as every other process, so any process in the container (api, worker, cron jobs, a `docker exec`) can read them from `/proc/1/environ`, and a `docker exec` starts with them anyway. The unset is defence in depth, not a boundary. The real fix is a separate one-shot migrate container that alone gets the owner URL (on the P4 backlog); until then treat anything that runs in the container as able to use the owner role.
 
-**Runtime settings** (the `settings` table, editable in the UI) include `approval_mode` (`manual`|`auto`), `starting_cash`, `account_currency`, `markets_enabled`, `cash_account_mode`, `risk_pct`, `quote_poll_seconds`, `slippage_*`, `stale_quote_seconds`, `proposal_ttl_*`, `auto_flatten_on_expiry`, `killswitch.*`, `claude.model`, `claude.daily_budget_usd`, and `claude.premarket_max_candidates` (default 50).
+**Runtime settings** (the `settings` table, editable in the UI) include `approval_mode` (`manual`|`auto`), `starting_cash`, `account_currency`, `markets_enabled`, `cash_account_mode`, `risk_pct`, `max_position_pct`, `quote_poll_seconds`, `slippage_*`, `stale_quote_seconds`, `proposal_ttl_*`, `auto_flatten_on_expiry`, `killswitch.*`, `claude.model`, `claude.daily_budget_usd`, and `claude.premarket_max_candidates` (default 50).
 
 Data-layer settings (Phase 1):
 
@@ -525,6 +527,7 @@ Engine settings (Phase 2; `trader/settings_store.py` is the source of truth):
 | `fx.fee_pct` | `0.015` | 0–0.10 | Questrade's FX fee |
 | `cash_account_mode` | `true` | bool | Buying power is settled cash (T+1) when on, total cash when off |
 | `risk_pct` | `0.02` | > 0, ≤ 0.10 | Equity risked per trade (§6.1) |
+| `max_position_pct` | `0.10` | > 0, ≤ 1 | Per-stock cap: no entry costs more than this fraction of equity, with estimated costs; `1` is no cap beyond cash (§6.1, SIZECAP) |
 | `slippage_buffer` | `0.005` | 0–0.05 | Cash-sizing headroom: shares ≤ buying power / (entry × (1 + buffer)) |
 | `no_entry_before_close_minutes` | `30` | 0–390 | No entry from this long before the close (BR-42); the broker cancels later entries |
 | `quote_poll_seconds` | `2.0` | 1–60 | Quote polling interval for working orders |
@@ -632,6 +635,8 @@ Both environments run on the **same Docker host** (`192.168.68.73`) and the **sa
 4. Run `deploy.sh prod`.
 5. Add the NPM proxy host and the Pi-hole record.
 6. Start with a **fresh** `live` run. Dev trades aren't carried over; dev results stay in `trader_dev` for comparison.
+
+**A fresh live run in place (SIZECAP):** `trader live-run new --confirm [--set KEY=VALUE ...] [--strategy-param STRATEGY.PARAM=VALUE ...]` retires the active live run (status `completed`, every row kept) and starts a new active live run with a new sim account and deposit from the current settings, in one transaction with a `live_run.new` audit row (actor `cli:live-run`). It refuses (nothing changed) while the active run has an open position, a working order or a pending proposal, and from 09:15 to 16:30 ET on a session day. `--set` settings and `--strategy-param` strategy parameters are validated together first and written (each audited as usual) only when the run can start. A running worker notices the new run (`LiveRunWatch`) and restarts on it.
 
 ## 16. Testing strategy
 

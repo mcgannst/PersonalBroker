@@ -6,7 +6,7 @@ Exits and cancels are never blocked, so a kill switch can't trap an open positio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from decimal import ROUND_FLOOR, Decimal
+from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import Any, Literal
 
 from trader.broker.types import AccountState, OrderSpec, OrderView, PositionView
@@ -14,6 +14,7 @@ from trader.market.calendar import SessionCalendar
 from trader.settings_store import Market, RuntimeSettings
 from trader.strategies.base import Cancel, EnterLong, Exit, Intent
 
+CENTS = Decimal("0.01")
 ProposalKind = Literal["entry", "stop", "exit", "cancel"]
 RiskCheck = Literal[
     "kill_switch",
@@ -23,6 +24,7 @@ RiskCheck = Literal[
     "settled_cash",
     "market_enabled",
     "zero_shares",
+    "position_cap",  # SIZECAP: one share costs more than max_position_pct of equity
     "invalid",
     "duplicate_symbol",  # the engine's own pre-check: one live entry per symbol per run (P2-T13)
 ]
@@ -43,6 +45,7 @@ class RiskContext:
     max_positions: int = 1
     symbol_market: Market | None = None
     reference_price: Decimal | None = None
+    symbol: str | None = None  # the ticker, for the position_cap reason only
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +174,18 @@ class RiskManager:
         risk_dollars = ctx.account.equity * s.risk_pct
         shares_risk = _floor(risk_dollars / per_share)
         shares_cash = _floor(buying_power / (entry * (1 + s.slippage_buffer)))
-        shares = min(shares_risk, shares_cash)
+        # SIZECAP: the entry's estimated cost (price + slippage buffer, the ECN fee on direct routing, the
+        # order's commission) must stay within max_position_pct of the same equity risk_pct uses.
+        cap_dollars = ctx.account.equity * s.max_position_pct
+        cap_unit = entry * (1 + s.slippage_buffer) + (s.fees_ecn_per_share if s.fees_direct_route else 0)
+        shares_cap = max(_floor((cap_dollars - s.fees_commission) / cap_unit), 0)
+        shares = min(shares_risk, shares_cap, shares_cash)
+        if shares == shares_risk:
+            limited_by = "risk"
+        elif shares == shares_cash:
+            limited_by = "cash"
+        else:
+            limited_by = "cap"
         sizing = {
             "equity": str(ctx.account.equity),
             "buying_power": str(buying_power),
@@ -183,10 +197,21 @@ class RiskManager:
             "slippage_buffer": str(s.slippage_buffer),
             "shares_risk": str(shares_risk),
             "shares_cash": str(shares_cash),
+            "max_position_pct": str(s.max_position_pct),
+            "cap_dollars": str(cap_dollars),
+            "shares_cap": str(shares_cap),
             "shares": str(max(shares, 0)),
-            "limited_by": "risk" if shares_risk <= shares_cash else "cash",
+            "limited_by": limited_by,
             "cash_account_mode": s.cash_account_mode,
         }
+        if shares_cap <= 0:
+            one = (cap_unit + s.fees_commission).quantize(CENTS, ROUND_HALF_UP)
+            pct = format((s.max_position_pct * 100).normalize(), "f")
+            name = ctx.symbol or f"symbol {intent.symbol_id}"
+            cap = cap_dollars.quantize(CENTS, ROUND_HALF_UP)
+            return Rejection(
+                intent, "position_cap", f"1 share of {name} costs ${one}, over the {pct}% cap ${cap}", sizing
+            )
         if shares <= 0:
             return Rejection(intent, "zero_shares", "the position size rounds to zero shares", sizing)
         spec = OrderSpec(

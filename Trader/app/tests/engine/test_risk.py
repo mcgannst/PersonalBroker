@@ -32,7 +32,9 @@ def ctx(**over: Any) -> RiskContext:
     base = RiskContext(
         now=T,
         session_date=DAY,
-        settings=RuntimeSettings(),
+        # SIZECAP: these tests pin the risk and cash sizing, so the per-stock cap is off (1 = 100% of
+        # equity); tests/engine/test_risk_cap.py covers the cap and its 10% default.
+        settings=RuntimeSettings(max_position_pct=Decimal("1")),
         account=account(),
         positions={POS.id: POS},
         orders={ORDER.id: ORDER},
@@ -60,8 +62,11 @@ def test_sizing_is_the_smaller_of_risk_and_cash_shares() -> None:
 
 
 def test_risk_limited_when_cash_is_plentiful() -> None:
-    out = RISK.evaluate(ENTRY, ctx(account=account(equity="720", buying_power="100000")))
-    assert isinstance(out, SizedOrder) and out.qty == 144 and out.sizing["limited_by"] == "risk"
+    # SIZECAP: buying power above equity is capped by max_position_pct x equity (here 100%), so this uses a
+    # large account and a wide stop: risk 100000 x 2% / 10 = 200 shares; cash and cap 4972
+    wide = replace(ENTRY, stop_loss=Decimal("10.01"))
+    out = RISK.evaluate(wide, ctx(account=account(equity="100000", buying_power="100000")))
+    assert isinstance(out, SizedOrder) and out.qty == 200 and out.sizing["limited_by"] == "risk"
 
 
 ALL_BAD: dict[str, Any] = {

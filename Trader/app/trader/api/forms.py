@@ -29,6 +29,7 @@ SETTING_GROUPS: Mapping[str, str] = {
     "cash_account_mode": "Account",
     "markets_enabled": "Account",
     "risk_pct": "Risk",
+    "max_position_pct": "Risk",
     "slippage_buffer": "Risk",
     "no_entry_before_close_minutes": "Risk",
     "quote_poll_seconds": "Fill model",

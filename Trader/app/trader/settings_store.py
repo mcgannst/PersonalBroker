@@ -97,6 +97,11 @@ class RuntimeSettings(BaseModel):
     risk_pct: Decimal = Field(
         Decimal("0.02"), gt=0, le=Decimal("0.10"), allow_inf_nan=False, alias="risk_pct"
     )
+    # SIZECAP (Stephen, 2026-09-28): no single entry may cost more than this fraction of equity (SPEC §6.1).
+    # 1 is no cap beyond cash (a replay snapshot taken before the setting existed loads as 1).
+    max_position_pct: Decimal = Field(
+        Decimal("0.10"), gt=0, le=Decimal("1"), allow_inf_nan=False, alias="max_position_pct"
+    )
     slippage_buffer: Decimal = Field(
         Decimal("0.005"), ge=0, le=Decimal("0.05"), allow_inf_nan=False, alias="slippage_buffer"
     )

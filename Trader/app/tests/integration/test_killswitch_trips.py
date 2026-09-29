@@ -174,6 +174,7 @@ async def build(factory: sessionmaker[Session], *, max_positions: int) -> World:
     store = SettingsStore(factory, now=clock.now)
     store.set("approval_mode", "auto", actor="test")
     store.set("killswitch.expectancy_min_trades", 5, actor="test")
+    store.set("max_position_pct", "1", actor="test")  # SIZECAP: this scenario keeps the pre-cap sizing
     settings = store.load()
     assert (settings.starting_cash, settings.risk_pct) == (START, Decimal("0.02"))
     run = get_live_run(factory, clock, settings)

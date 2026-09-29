@@ -757,16 +757,18 @@ class Engine:
                     self.run_id,
                 )
 
-    def _market_of(self, symbol_id: int) -> Market | None:
+    def _market_of(self, symbol_id: int) -> tuple[Market | None, str | None]:
+        """The symbol's market (from its currency) and its ticker (for the position_cap reason)."""
         with self._factory() as s:
-            currency = s.execute(
-                select(m.Symbol.currency).where(m.Symbol.id == symbol_id)
-            ).scalar_one_or_none()
+            row = s.execute(
+                select(m.Symbol.currency, m.Symbol.ticker).where(m.Symbol.id == symbol_id)
+            ).one_or_none()
+        currency, ticker = (row[0], row[1]) if row is not None else (None, None)
         if currency == "USD":
-            return "US"
+            return "US", ticker
         if currency == "CAD":
-            return "TSX"
-        return None
+            return "TSX", ticker
+        return None, ticker
 
     async def _risk_context(
         self,
@@ -797,6 +799,7 @@ class Engine:
             except QuestradeApiError:
                 q = None  # no reference price: risk rejects it as "no entry price to size from"
             reference = q.ask if q else None
+        market, ticker = self._market_of(intent.symbol_id)
         return dataclasses.replace(
             base,
             blocking_switch=self.killswitches.blocking(self.run_id, session_date),
@@ -805,7 +808,8 @@ class Engine:
             entries_today=0,
             # Strategy.params is a plug-in's own BaseModel: max_positions is not part of the protocol (P2-T6)
             max_positions=int(getattr(strategy.params, "max_positions", 1)),
-            symbol_market=self._market_of(intent.symbol_id),
+            symbol_market=market,
+            symbol=ticker,
             reference_price=reference,
         )
 

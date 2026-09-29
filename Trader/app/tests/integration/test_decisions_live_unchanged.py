@@ -48,6 +48,7 @@ def build_world(factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch)
     w = wd.World(core, clock, wd.ChatApi(), FakeQuestrade(), FakeFinviz(), FakeClaude(), monkeypatch)
     store.set("approval_mode", "manual", actor="test")
     store.set("auto_flatten_on_expiry", True, actor="test")
+    store.set("max_position_pct", "1", actor="test")  # SIZECAP: this scenario keeps the pre-cap sizing
 
     async def open_catalysts(core: Core, stack: Any) -> Any:
         return w.catalysts()

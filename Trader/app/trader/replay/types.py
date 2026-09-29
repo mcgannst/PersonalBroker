@@ -199,6 +199,14 @@ class ReplayRun:
     cancel_requested: bool
 
 
+def _snapshot_settings(snapshot: Mapping[str, Any]) -> RuntimeSettings:
+    """A run's frozen settings. SIZECAP: a snapshot taken before `max_position_pct` existed ran without a
+    per-stock cap, so it loads as 1 (no cap beyond cash) and replays exactly as it did."""
+    if "max_position_pct" not in snapshot:
+        snapshot = {**snapshot, "max_position_pct": "1"}
+    return RuntimeSettings.model_validate(snapshot)
+
+
 def replay_run_from_row(row: m.Run) -> ReplayRun:
     """The `ReplayRun` of a replay `runs` row (params shape in the module docstring)."""
     p: Mapping[str, Any] = row.params or {}
@@ -211,7 +219,7 @@ def replay_run_from_row(row: m.Run) -> ReplayRun:
         data_mode=p["data_mode"],
         catalyst_mode=p["catalyst_mode"],
         half_spread_bps=Decimal(str(p["half_spread_bps"])),
-        settings=RuntimeSettings.model_validate(p.get("settings") or {}),
+        settings=_snapshot_settings(p.get("settings") or {}),
         strategies=tuple(PinnedStrategy.from_json(s) for s in p.get("strategies", ())),
         overrides=dict(p.get("overrides") or {}),
         progress=ReplayProgress.from_json(row.progress),

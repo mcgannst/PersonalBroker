@@ -108,6 +108,8 @@ def seed_live(factory: sessionmaker[Session], symbols: dict[str, int]) -> int:
     """The live run's own activity before the replay (all committed); returns the live run id."""
     clock = FixedClock(WALL - timedelta(days=7))
     SettingsStore(factory, now=clock.now).set("approval_mode", "manual", "web:stephen")
+    # SIZECAP: the pre-cap sizing, so the replay's losses still trip the tight daily-loss switch
+    SettingsStore(factory, now=clock.now).set("max_position_pct", "1", "web:stephen")
     run = get_live_run(factory, clock, SettingsStore(factory, now=clock.now).load())
     at = datetime(2026, 11, 20, 15, 0, tzinfo=UTC)
     with session_scope(factory) as s:

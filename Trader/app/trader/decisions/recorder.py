@@ -1395,6 +1395,8 @@ class _Builder:
                             "limited_by",
                         )
                     }
+                    # SIZECAP: the per-stock cap, on proposals sized with it (older ones never had it)
+                    | {k: sizing[k] for k in ("shares_cap", "max_position_pct", "cap_dollars") if k in sizing}
                     | {"sized_risk_dollars": sizing.get("risk_dollars")},
                 )
                 data["sizing"].pop("risk_dollars", None)

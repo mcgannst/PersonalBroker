@@ -1351,3 +1351,121 @@ def decisions_prune() -> None:
     except Exception as exc:
         _fail(f"{name}: failed: {_one_line(exc)}")
     typer.echo(f"{name}: deleted {result.live_deleted} live rows, {result.replay_deleted} replay rows")
+
+
+# --- SIZECAP: a fresh live run ------------------------------------------------------------------------------
+live_run_app = typer.Typer(no_args_is_help=True, add_completion=False, help="The live run (SIZECAP).")
+app.add_typer(live_run_app, name="live-run")
+LIVE_RUN_ACTOR = "cli:live-run"
+
+
+def _key_values(name: str, flag: str, values: list[str]) -> dict[str, Any]:
+    """`KEY=VALUE` items: VALUE as JSON when it parses (numbers, true/false), else as text."""
+    import json
+
+    out: dict[str, Any] = {}
+    for item in values:
+        key, sep, raw = item.partition("=")
+        key = key.strip()
+        if not sep or not key:
+            _fail(f"{name}: {flag} {_masked_line(item)} is not KEY=VALUE")
+        try:
+            out[key] = json.loads(raw)
+        except ValueError:
+            out[key] = raw
+    return out
+
+
+def _checked_settings(name: str, current: "RuntimeSettings", sets: dict[str, Any]) -> None:
+    from pydantic import ValidationError
+
+    from trader.settings_store import RuntimeSettings
+
+    keys = {f.alias or n for n, f in RuntimeSettings.model_fields.items()}
+    for key in sorted(sets):
+        if key not in keys:
+            _fail(f"{name}: --set {_masked_line(key)} is not a runtime setting")
+    try:
+        RuntimeSettings.model_validate({**current.model_dump(mode="json", by_alias=True), **sets})
+    except ValidationError as exc:
+        where = ", ".join(sorted({".".join(str(p) for p in e["loc"]) for e in exc.errors()}))
+        _fail(f"{name}: --set: invalid {_masked_line(where)}")
+
+
+def _checked_strategy_params(name: str, registry: Any, items: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    from pydantic import ValidationError
+
+    by_key: dict[str, dict[str, Any]] = {}
+    for dotted, value in items.items():
+        key, dot, param = dotted.partition(".")
+        if not dot or not key or not param:
+            _fail(f"{name}: --strategy-param {_masked_line(dotted)} is not STRATEGY.PARAM=VALUE")
+        by_key.setdefault(key, {})[param] = value
+    known = set(registry.keys())
+    for key, params in sorted(by_key.items()):
+        if key not in known:
+            _fail(f"{name}: --strategy-param: {_masked_line(key)} is not an installed strategy")
+        try:
+            current = registry.current(key)
+            registry.plugin_class(key).params_model.model_validate({**current.params, **params})
+        except KeyError:
+            _fail(f"{name}: --strategy-param: {key} has no live settings yet")
+        except ValidationError as exc:
+            where = ", ".join(sorted({".".join(str(p) for p in e["loc"]) for e in exc.errors()}))
+            _fail(f"{name}: --strategy-param: invalid {key} {_masked_line(where)}")
+    return by_key
+
+
+@live_run_app.command("new")
+def live_run_new(
+    confirm: bool = typer.Option(False, "--confirm", help="Required: retire the active live run."),
+    set_: list[str] = typer.Option(  # noqa: B008 (typer's option declaration)
+        [], "--set", help="A runtime setting KEY=VALUE to store first, e.g. starting_cash=1000 (repeatable)"
+    ),
+    strategy_param: list[str] = typer.Option(  # noqa: B008 (typer's option declaration)
+        [], "--strategy-param", help="STRATEGY.PARAM=VALUE, e.g. orb_sip.max_positions=10 (repeatable)"
+    ),
+) -> None:
+    """Retire the active live run (kept, status completed) and start a new one with a fresh sim account from
+    the settings. Refused while a position is open, an order is working or a proposal is pending, and from
+    09:15 to 16:30 ET on a session day. `--set` and `--strategy-param` values are all validated first and
+    written (audited) only when the new run can start. A running worker restarts on the new run by itself."""
+    _setup_logging()
+    from decimal import Decimal
+
+    from trader.engine.runs import LiveRunRefused, check_new_live_run, start_new_live_run
+    from trader.strategies.registry import StrategyRegistry
+
+    name = "live-run new"
+    if not confirm:
+        _fail(f"{name}: this retires the active live run; add --confirm to do it")
+    sets = _key_values(name, "--set", set_)
+    params = _key_values(name, "--strategy-param", strategy_param)
+    core = _core(name)
+    registry = StrategyRegistry(core.factory, core.clock)
+    _checked_settings(name, _strict_settings(core, name), sets)
+    by_key = _checked_strategy_params(name, registry, params)
+    try:
+        check_new_live_run(core.factory, core.clock, core.calendar)
+        for key in sorted(sets):
+            core.settings.set(key, sets[key], LIVE_RUN_ACTOR)
+        for key in sorted(by_key):
+            registry.update(key, params=by_key[key], actor=LIVE_RUN_ACTOR)
+        out = start_new_live_run(
+            core.factory, core.clock, core.calendar, core.settings.load(), actor=LIVE_RUN_ACTOR
+        )
+    except LiveRunRefused as exc:
+        _fail(f"{name}: refused: {_masked_line(str(exc))}")
+    except Exception as exc:
+        _fail(f"{name}: failed: {_one_line(exc)}")
+
+    def plain(v: Decimal) -> str:
+        return format(v.normalize(), "f")
+
+    if out.retired_id is not None:
+        typer.echo(f"retired live run {out.retired_id} (status completed, rows kept)")
+    a = out.account
+    typer.echo(
+        f"started live run {out.run.id}: starting cash {a.starting_cash} {a.currency} "
+        f"(from {plain(a.source_amount)} {a.source_currency})"
+    )

@@ -126,6 +126,7 @@ def setup_day(factory: sessionmaker[Session]) -> Day:
     clock = FixedClock(et(20, 0, day=date(2026, 10, 5)))  # Monday evening: the nightly job
     store = SettingsStore(factory, now=clock.now)
     store.set("approval_mode", "auto", actor="test")
+    store.set("max_position_pct", "1", actor="test")  # SIZECAP: this scenario keeps the pre-cap sizing
     settings = store.load()
     fq = FakeQuestrade()
     for t, q in QT.items():

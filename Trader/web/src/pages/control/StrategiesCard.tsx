@@ -11,13 +11,9 @@ import type { StrategyCardOut } from "../../api/types";
 import { Button, errorMessage } from "../../components/ui";
 import { fmtDateTime } from "../../lib/format";
 import { Panel } from "../live/Panel";
+import { safeLink } from "../live/safeLink";
 import { Confirm } from "../settings/Confirm";
 import { StatusChip, cardError } from "./parts";
-
-/** Only same-site paths become links. */
-function safeLink(link: string): string | null {
-  return link.startsWith("/") && !link.startsWith("//") ? link : null;
-}
 
 function StrategyRow({ s }: { s: StrategyCardOut }) {
   const api = useApi();

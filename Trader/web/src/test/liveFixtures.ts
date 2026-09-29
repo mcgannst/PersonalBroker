@@ -481,10 +481,11 @@ export function liveWith(overrides: Partial<LiveOut>): LiveOut {
   return { ...clone(LIVE_OUT), ...clone(overrides) };
 }
 
-/** Saturday 2026-10-10: not a session (the day shown is Friday), no positions, activity or rejections. */
+/** Saturday 2026-10-10: not a session (the day shown is Friday), no positions, activity or rejections. The
+ * API's `session.date` on a closed day is the NEXT session (market.sessions.current_session): Monday 10-12. */
 export const liveEmptyDay: LiveOut = liveWith({
   server_time: EMPTY_DAY_SERVER_TIME,
-  session: { date: "2026-10-10", phase: "closed_day", is_session: false, open_at: null, close_at: null },
+  session: { date: "2026-10-12", phase: "closed_day", is_session: false, open_at: null, close_at: null },
   session_day: "2026-10-09",
   worker: { ...workerOut, phase: "idle", beat_at: "2026-10-10T14:59:57Z", age_seconds: 3, session_date: null },
   closed_today: 0,

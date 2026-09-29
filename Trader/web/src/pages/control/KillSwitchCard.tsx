@@ -79,7 +79,8 @@ export function KillSwitchCard({
           </ul>
         )}
         <h3 className="ctl-sub">Reset and history</h3>
-        <KillSwitchPanel />
+        {/* Pause/Resume live on the Engine card only (one pair, both confirmed); lights in status tones (D9). */}
+        <KillSwitchPanel showTradingControls={false} statusTones />
       </div>
     </Panel>
   );

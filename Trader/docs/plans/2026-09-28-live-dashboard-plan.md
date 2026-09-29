@@ -660,6 +660,11 @@ export function RiskPanel(props: { risk: RiskOut | null; error?: string | null; 
 - [x] 9. XSS: `withXssText()` fixture renders no `img` or `script` element and shows the text literally.
 - [x] 10. `npm --prefix Trader/web exec tsc -b --noEmit` clean for these files; gate and commit `DB-T7: live dashboard top bar, P&L, costs, books, equity and risk components`.
 
+**Fix round 1 (DB-GWEB builder a2, web gauntlet B11/B15; §7.1 contract change approved by the orchestrator):**
+- `TopBar` now takes an optional `onRetry?: () => void`: `TopBar(props: { live; connected; updatedAt; nowMs?; onRetry? })`. Each failed top-bar part (`periods`, `claude_today`, `books`) shows its message with a 44 px Retry. Without `onRetry` the Retry invalidates `["dashboard"]` when a QueryClient is mounted (else the message shows without a button). **DB-T11 wires `onRetry` to the page's `live` refetch.**
+- `CostBar` now takes `error?: string | null; onRetry?: () => void`: `CostBar(props: { claude; periods; error?; onRetry? })`. When `claude` is null the `claude_today` error shows in place of the spend line (with Retry); the per-period cost rows stay. `InlinePartError` (exported from `CostBar.tsx`) is the shared inline error.
+- `RiskPanel`: `r2` goes through `fmtR` and `pct1` rounds the decimal digits (half away from zero, BigInt), never `Number.toFixed`; each light's `aria-label` is "<switch label>: tripped|not tripped".
+
 **LIVE steps:** none.
 
 ---
@@ -704,6 +709,12 @@ export function TodayTimeline(props: { timeline: TimelineItemOut[] | null; sessi
 - [x] 9. Touch targets ≥ 44 px; no horizontal overflow at 390 px with 20 positions; XSS fixture renders text literally.
 - [x] 10. Types clean; gate and commit `DB-T8: live dashboard positions, activity, rejections and today components`.
 
+**Fix round 1 (DB-GWEB builder a2, web gauntlet B3/B9/B15):**
+- `PositionsTable` uses only the first `EXPAND_MAX` (3) ids of `expanded` (a hand-edited `?expand=`); **DB-T11 still clamps the URL before `api.live`** (a 4th id makes `/api/live` 422).
+- Every API-provided link (ActivityFeed items, RejectionsPanel tickers and Day view, PositionChart "Open trade", StrategiesCard settings) goes through `pages/live/safeLink.tsx` (`safeLink(link)`: same-site path only, no `//`, `/\`, whitespace or control characters; `SafeLink`: otherwise an `<a>` without `href`, i.e. plain text).
+- `PositionRow` unrealised $ and `ActivityFeed` exit amounts use DB-T7's `Money` (decimal `fmtMoney`; a value that rounds to $0.00 is `flat`, never red). RejectionsPanel ticker keys include the index (duplicate tickers).
+- Test fixture: `liveEmptyDay.session.date` is now `2026-10-12` (the next session, as the API sends on a closed day).
+
 **LIVE steps:** none.
 
 ---
@@ -743,6 +754,11 @@ export function ErrorLog(props: { errors: EventOut[] | null }): JSX.Element
 - [x] 8. Error log: filters by level and source; XSS text literal; empty state "No warnings or errors".
 - [x] 9. Carried over from `SystemPage.test.tsx` (each still applies): the worker-down text `WORKER_DOWN_TEXT` when the worker is not ok, `TELEGRAM_OFF_TEXT` when Telegram is not configured, failed sends listed, the watchlist upload present.
 - [x] 10. Touch targets ≥ 44 px; no horizontal overflow at 390 px; gate and commit `DB-T9: Control page`.
+
+**Fix round 1 (DB-GWEB builder a2, web gauntlet B6/B13):**
+- `KillSwitchPanel` (pages/settings) takes two optional props, defaults keep Settings unchanged: `showTradingControls?: boolean` (default true; false hides its Pause/Resume row) and `statusTones?: boolean` (default false; true draws lights and notices with `status-*` classes instead of `tone-*`). `KillSwitchCard` passes `showTradingControls={false} statusTones`, so Control has exactly one Pause/Resume pair (the Engine card's, both confirmed).
+- `control.css` maps `.tone-*`, `.status-*` and `.error-box` inside `.control-page` to the `--status-*` tokens (reused System/Settings pieces never draw the money green/red on Control).
+- `JobsCard` shows Re-run (and preselects RunJob) only for a job listed in `manual_jobs`.
 
 **LIVE steps:** none.
 
@@ -794,6 +810,7 @@ export function ErrorLog(props: { errors: EventOut[] | null }): JSX.Element
 **Behaviour and decisions:**
 - Test migration per S13: every assertion of the deleted `DashboardPage.test.tsx` that still applies moves to `pages/live/LivePage.test.tsx` (pending proposals and approve/reject flow, decision notices, `?proposal=` highlight and `ProposalPanel`, Telegram-not-configured notice, error box with Retry, empty states); `web_pages_breaker.test.tsx` cases that rendered `DashboardPage`/`SystemPage`/`PnlTiles`/`PositionCard` now render the new Dashboard/Control with the `withXssText()` fixtures and the new empty-state texts; the nav-order assertions change to the S12 order; the "dashboard polls every 15 s while disconnected" breaker case keeps its meaning with the `live` query and gains the same for `control`.
 - No component of DB-T7/DB-T8/DB-T9 is edited here (a needed change is reported).
+- From the DB-GWEB fix round 1 (approved contract change, see the DB-T7/T8/T9 "Fix round 1" notes): pass `onRetry` to `TopBar` (its failed `periods`/`claude_today`/`books` parts show Retry); clamp `?expand=` to the first 3 ids before `api.live` (the table also clamps); import `theme/tokens.css` in `main.tsx` before `styles.css` (the `--status-*`, money and touch tokens are undefined until then).
 
 **Acceptance tests:**
 - [ ] 1. `LivePage.test.tsx`: the page composes every section from `liveOut`; 0/1/20-position fixtures; the non-session empty day; `range` and `expand` round-trip through the URL and reach `api.live` (fake call args); pending approvals shown in manual mode and hidden in auto mode with none pending, shown in auto mode when one is pending; approve flow as before.
@@ -848,7 +865,7 @@ Additive changes to the master plan's cross-phase contracts (DB-T12 writes them 
 1. **Worker process:** `WorkerDeps.marks: MarkPublisher | None = None` (last field): one more supervised task beside the decisions loop, cancelled on stop without grace, never started by `--once`. The heartbeat `detail` gains `questrade`, `candle_batches` and `marks` (S10); `rate_limit`, `fills_today`, `last_event` unchanged.
 2. **Quote client at the worker's composition root:** the worker's engines and its bot's market data get `QuoteTap(LazyQuestrade)`; the tap satisfies `QuoteClient`, returns the wrapped client's results and exceptions unchanged, and is synchronous bookkeeping only (S1a: one direct `await` per method, no task, lock, timeout or I/O, `deadline_s` forwarded untouched, bounded memory; `stats` forwards the wrapped client's `stats` on every access). `MarketDataService`, `Engine` and every other process are unchanged. The publisher's database work runs in its own single-thread executor, never the default one.
 3. **Web API:** `GET /api/live?range=today|run&expand=<≤3 ids>` → `LiveOut` (with `Server-Timing: app;dur=`) and `GET /api/control` → `ControlOut`; both read-only, `live_or_unscoped`/live-run filtered, never Questrade, each part isolated (`part_errors`). `Topic` gains `marks` and `activity`; `ROUTERS` gains `live.router` and `control.router` (20 routers). `/api/dashboard` and `/api/system` stay (unused by the web app).
-4. **Web API types:** the new models and literals mirrored in `web/src/api/types.ts`; `ApiClient.live(q: LiveQuery)` and `ApiClient.control()`; query keys `qk.live` under the `dashboard` prefix and `qk.control` under `system`.
+4. **Web API types:** the new models and literals mirrored in `web/src/api/types.ts`; `ApiClient.live(q: LiveQuery)` and `ApiClient.control()`; query keys `qk.live` under the `dashboard` prefix and `qk.control` under `system`. Web links from the API (`link`, `settings_link`) are rendered only when they are same-site paths (`pages/live/safeLink.tsx`, DB-GWEB fix round 1).
 5. **Web links:** `/control` added; `/system` redirects to `/control` (the link Telegram sends keeps working); `/reports?day=<D>` accepts `stage`, `outcome`, `ticker` filters.
 6. **Tables:** `quote_marks` and `mark_bars` (migration 0008), run-scoped, written only by the worker's mark publisher, read only by the API; a replay never writes them.
 

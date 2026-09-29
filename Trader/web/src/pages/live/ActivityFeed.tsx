@@ -2,13 +2,13 @@
 // events, job failures, alerts and scan summaries, in the server's order (newest first), filtered by chip. Only
 // exits carry a money tone; warnings get the amber status tone. Every text is plain text.
 import { useState } from "react";
-import { Link } from "react-router-dom";
 
 import type { ActivityChip, ActivityItemOut } from "../../api/types";
 import { Button } from "../../components/ui";
-import { fmtMoney, fmtTime } from "../../lib/format";
-import { moneyTone } from "../../theme/tokens";
+import { fmtTime } from "../../lib/format";
 import { Panel } from "./Panel";
+import { Money } from "./PeriodPnl";
+import { SafeLink } from "./safeLink";
 
 import "./liveB.css";
 
@@ -30,14 +30,14 @@ function ActivityRow({ item }: { item: ActivityItemOut }) {
       <span className="activity-time num small muted">{fmtTime(item.ts)}</span>
       <span className="activity-text">
         {item.link ? (
-          <Link className="link-touch" to={item.link}>
+          <SafeLink className="link-touch" to={item.link}>
             {item.text}
-          </Link>
+          </SafeLink>
         ) : (
           item.text
         )}
       </span>
-      {showAmount && <span className={`activity-amount money ${moneyTone(item.amount)}`}>{fmtMoney(item.amount)}</span>}
+      {showAmount && <Money value={item.amount} className="activity-amount" />}
     </li>
   );
 }

@@ -21,7 +21,7 @@ const STATUS_TONE: Record<TimelineStatus, ChipTone> = {
   upcoming: "muted",
 };
 
-function ScheduleRow({ item, onRerun }: { item: ScheduleItemOut; onRerun: (job: ManualJob) => void }) {
+function ScheduleRow({ item, canRerun, onRerun }: { item: ScheduleItemOut; canRerun: boolean; onRerun: (job: ManualJob) => void }) {
   const facts: string[] = [];
   if (item.duration_seconds !== null) facts.push(`took ${fmtDuration(item.duration_seconds)}`);
   if (item.attempts > 1) facts.push(`${item.attempts} attempts`);
@@ -43,7 +43,7 @@ function ScheduleRow({ item, onRerun }: { item: ScheduleItemOut; onRerun: (job: 
       )}
       {item.summary && <div className="ctl-small ctl-text">{item.summary}</div>}
       {item.detail && <div className="ctl-small ctl-muted ctl-text">{item.detail}</div>}
-      {item.rerun && (
+      {item.rerun && canRerun && (
         <div className="ctl-row">
           <Button variant="plain" aria-label={`Re-run ${item.label}`} onClick={() => onRerun(item.rerun as ManualJob)}>
             Re-run
@@ -71,8 +71,10 @@ export function JobsCard({
   const runRef = useRef<HTMLDivElement>(null);
   const failed = cardError(schedule, error);
 
-  // RunJob starts on its first job: a Re-run remounts it with that job first (the same jobs, reordered).
-  const jobs: ManualJob[] = preselect
+  // RunJob starts on its first job: a Re-run remounts it with that job first (the same jobs, reordered). Only
+  // a job the API lists in `manual_jobs` can be run (fix round 1: never add one RunJob does not offer).
+  const runnable = (job: string | null): job is ManualJob => job !== null && manualJobs.includes(job as ManualJob);
+  const jobs: ManualJob[] = preselect && runnable(preselect.job)
     ? [preselect.job, ...manualJobs.filter((j) => j !== preselect.job)]
     : manualJobs;
 
@@ -98,7 +100,7 @@ export function JobsCard({
         ) : (
           <ul className="ctl-list" aria-label="Schedule">
             {schedule.map((item) => (
-              <ScheduleRow key={item.key} item={item} onRerun={(job) => setPreselect((p) => ({ job, n: (p?.n ?? 0) + 1 }))} />
+              <ScheduleRow key={item.key} item={item} canRerun={runnable(item.rerun)} onRerun={(job) => setPreselect((p) => ({ job, n: (p?.n ?? 0) + 1 }))} />
             ))}
           </ul>
         )}

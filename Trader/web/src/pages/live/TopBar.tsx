@@ -3,13 +3,14 @@
 // (fees, Claude spend against its cap, net after AI); win rate, trades and expectancy of the run; the engine
 // chip; the live indicator; the heartbeat badge when the worker is stale; and the books check. Money values
 // are `.money` spans (the only green and red); chips and lights use status tokens.
-import { useEffect, useState } from "react";
+import { QueryClientContext } from "@tanstack/react-query";
+import { useContext, useEffect, useState } from "react";
 
 import type { LiveOut, PeriodPnlOut, TradingState } from "../../api/types";
 import { fmtDate, fmtR, fmtRate } from "../../lib/format";
 import { phaseLabel } from "../dashboard/labels";
 import { BooksCheck } from "./BooksCheck";
-import { CostBar } from "./CostBar";
+import { CostBar, InlinePartError } from "./CostBar";
 import { DASH, Money, orderedPeriods, periodLabel } from "./PeriodPnl";
 import { Panel } from "./Panel";
 import "./liveA.css";
@@ -85,8 +86,34 @@ function RunStats({ run }: { run: PeriodPnlOut }) {
   );
 }
 
-export function TopBar({ live, connected, updatedAt, nowMs }: { live: LiveOut; connected: boolean; updatedAt: number; nowMs?: number }) {
+/**
+ * Retry for the top bar's failed parts (fix round 1, DB-GWEB): the given `onRetry` (DB-T11 wires the page's
+ * refetch), else a refetch of every `["dashboard"]` query (`qk.live` lives under it) when a QueryClient is
+ * mounted, else none (no Retry button, the error text still shows).
+ */
+function useTopBarRetry(onRetry: (() => void) | undefined): (() => void) | undefined {
+  const client = useContext(QueryClientContext);
+  if (onRetry) return onRetry;
+  if (!client) return undefined;
+  return () => void client.invalidateQueries({ queryKey: ["dashboard"] });
+}
+
+export function TopBar({
+  live,
+  connected,
+  updatedAt,
+  nowMs,
+  onRetry,
+}: {
+  live: LiveOut;
+  connected: boolean;
+  updatedAt: number;
+  nowMs?: number;
+  /** Fix round 1: Retry for a failed `periods`, `claude_today` or `books` part. */
+  onRetry?: () => void;
+}) {
   const now = useNow(nowMs);
+  const retry = useTopBarRetry(onRetry);
   const indicator = liveIndicator(connected, updatedAt, now);
   const periods = orderedPeriods(live.periods);
   const run = periods.find((p) => p.period === "run");
@@ -117,12 +144,12 @@ export function TopBar({ live, connected, updatedAt, nowMs }: { live: LiveOut; c
               ))}
             </div>
           ) : (
-            <p className="lva-muted">{partError(live, "periods") ?? "P&L unavailable"}</p>
+            <InlinePartError message={partError(live, "periods") ?? "P&L unavailable"} onRetry={retry} />
           )}
           {run && <RunStats run={run} />}
           <div className="lva-top-side">
-            <CostBar claude={live.claude_today} periods={live.periods} />
-            <BooksCheck books={live.books} error={partError(live, "books") ?? "Books check unavailable"} />
+            <CostBar claude={live.claude_today} periods={live.periods} error={partError(live, "claude_today") ?? "Claude spend unavailable"} onRetry={retry} />
+            <BooksCheck books={live.books} error={partError(live, "books") ?? "Books check unavailable"} onRetry={retry} />
           </div>
         </div>
       </Panel>

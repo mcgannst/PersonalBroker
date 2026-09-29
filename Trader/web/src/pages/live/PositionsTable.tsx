@@ -64,7 +64,9 @@ function closedLine(n: number): string {
   return n === 1 ? "1 trade closed today" : `${n} trades closed today`;
 }
 
-export function PositionsTable({ positions, closedToday, staleAfterSeconds, expanded, onExpand, error, onRetry }: PositionsTableProps) {
+export function PositionsTable({ positions, closedToday, staleAfterSeconds, expanded: expandedIn, onExpand, error, onRetry }: PositionsTableProps) {
+  // A hand-edited `?expand=` can hold more ids than the API allows: only the first EXPAND_MAX count here.
+  const expanded = expandedIn.slice(0, EXPAND_MAX);
   const [sort, setSort] = useState<PositionSort>("unrealized");
   const rows = useMemo(() => (positions ? sortPositions(positions, sort) : []), [positions, sort]);
   const anyStale = rows.some((p) => p.mark_state !== "live");

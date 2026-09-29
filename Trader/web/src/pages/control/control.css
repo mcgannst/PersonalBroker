@@ -221,6 +221,53 @@
   min-width: 0;
 }
 
+/* Reused components on Control draw in the status colours, never the money green/red (design D9): the
+   KillSwitchPanel's lights and notices (statusTones: .status-*), and the legacy .tone-* lights, badges and
+   notes of the reused System/Settings components (Health, Run job, watchlist), and the shared ErrorBox. */
+.control-page .status-ok,
+.control-page .tone-ok {
+  --tone: var(--status-ok);
+  --tone-bg: transparent;
+}
+
+.control-page .status-warn,
+.control-page .tone-warn {
+  --tone: var(--status-warn);
+  --tone-bg: transparent;
+}
+
+.control-page .status-bad,
+.control-page .tone-bad {
+  --tone: var(--status-bad);
+  --tone-bg: transparent;
+}
+
+.control-page .status-muted {
+  --tone: var(--status-muted);
+  --tone-bg: transparent;
+}
+
+.control-page p.status-ok,
+.control-page p.tone-ok {
+  color: var(--status-ok);
+}
+
+.control-page p.status-warn,
+.control-page p.tone-warn {
+  color: var(--status-warn);
+}
+
+.control-page p.status-bad,
+.control-page p.tone-bad {
+  color: var(--status-bad);
+}
+
+.control-page .error-box {
+  border-color: var(--status-bad);
+  background: transparent;
+  color: var(--status-bad);
+}
+
 .ctl-part-error {
   display: flex;
   flex-direction: column;

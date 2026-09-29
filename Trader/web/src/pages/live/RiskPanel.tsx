@@ -5,23 +5,41 @@
 import { Link } from "react-router-dom";
 
 import type { KillSwitchLightOut, RiskOut } from "../../api/types";
-import { fmtTime } from "../../lib/format";
+import { fmtR, fmtTime } from "../../lib/format";
 import { plotNumber } from "../performance/ChartFrame";
 import { Meter } from "./CostBar";
 import { DASH, Money } from "./PeriodPnl";
 import { Panel } from "./Panel";
 import "./liveA.css";
 
-/** A fraction as a percentage to 1 dp (`0.0013` → `0.1%`), for display only. */
+const DEC = /^\s*([+-])?(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?\s*$/;
+
+/**
+ * A decimal string as a percentage to 1 dp, rounded half away from zero on the decimal digits (never through a
+ * float): `0.0013` → `0.1%`, `0.00125` → `0.1%`, `0.00150` → `0.2%`; a value that rounds to zero has no minus.
+ */
 export function pct1(value: string | null | undefined): string {
-  const n = plotNumber(value);
-  return n === null ? DASH : `${(n * 100).toFixed(1)}%`;
+  if (value === null || value === undefined) return DASH;
+  const m = DEC.exec(value);
+  if (!m || ((m[2] ?? "") === "" && (m[3] ?? "") === "")) return DASH;
+  const frac = m[3] ?? "";
+  // value = digits / 10^scale; percent to 1 dp = value * 1000 rounded, then / 10
+  const digits = BigInt(`${m[2] ?? ""}${frac}` || "0");
+  const scale = frac.length - (m[4] ? Number(m[4]) : 0) - 3;
+  let tenths: bigint;
+  if (scale <= 0) tenths = digits * 10n ** BigInt(-scale);
+  else {
+    const div = 10n ** BigInt(scale);
+    tenths = digits / div + ((digits % div) * 2n >= div ? 1n : 0n);
+  }
+  const sign = m[1] === "-" && tenths !== 0n ? "-" : "";
+  return `${sign}${tenths / 10n}.${tenths % 10n}%`;
 }
 
-/** An R value to 2 dp (`0.7091` → `0.71 R`). */
+/** An R value to 2 dp through the shared decimal formatter (`0.7050` → `0.71 R`, never float-rounded). */
 export function r2(value: string | null | undefined): string {
-  const n = plotNumber(value);
-  return n === null ? DASH : `${n.toFixed(2)} R`;
+  if (plotNumber(value) === null) return DASH;
+  return `${fmtR(value).replace(/^\+/, "").replace(/R$/, "")} R`;
 }
 
 /** "value of threshold" (percent: a ceiling), "value vs threshold" (R: a floor), yes/no for a pause. */
@@ -47,7 +65,7 @@ function SwitchLight({ k }: { k: KillSwitchLightOut }) {
   return (
     <li className={k.tripped ? "lva-switch is-tripped" : "lva-switch"} data-testid={`killswitch-${k.switch}`}>
       <div className="lva-switch-head">
-        <span className={`lva-dot ${lightTone(k)}`} role="img" aria-label={k.tripped ? "tripped" : "not tripped"} />
+        <span className={`lva-dot ${lightTone(k)}`} role="img" aria-label={`${k.label}: ${k.tripped ? "tripped" : "not tripped"}`} />
         <span className="lva-switch-label">{k.label}</span>
         <span className="num lva-switch-value">{switchValue(k)}</span>
       </div>

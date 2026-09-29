@@ -2,12 +2,12 @@
 // first; a tap on a rule shows its tickers, each linking to Reports → Day filtered to it. Full per-candidate
 // detail stays on the Day view. Every rule and ticker is plain text.
 import { useState } from "react";
-import { Link } from "react-router-dom";
 
 import type { RejectionRuleOut, RejectionsOut } from "../../api/types";
 import { MIN_TOUCH_PX } from "../../components/ui";
 import { fmtTime } from "../../lib/format";
 import { Panel } from "./Panel";
+import { SafeLink } from "./safeLink";
 
 import "./liveB.css";
 
@@ -40,18 +40,19 @@ function RuleRow({ rule, open, onToggle }: { rule: RejectionRuleOut; open: boole
       {open && (
         <div className="rej-tickers" id={id}>
           <ul className="rej-ticker-list" aria-label={`${label} tickers`}>
-            {rule.tickers.map((t) => (
-              <li key={t}>
-                <Link className="link-touch" to={tickerLink(rule, t)}>
+            {rule.tickers.map((t, i) => (
+              // a ticker can repeat within a rule (two candidates, one symbol): the index keeps keys unique
+              <li key={`${i}:${t}`}>
+                <SafeLink className="link-touch" to={tickerLink(rule, t)}>
                   {t}
-                </Link>
+                </SafeLink>
               </li>
             ))}
           </ul>
           {rule.truncated && more > 0 && <p className="muted small">{`+${more} more`}</p>}
-          <Link className="link-touch small" to={rule.link} aria-label={`Open ${label} in Reports`}>
+          <SafeLink className="link-touch small" to={rule.link} aria-label={`Open ${label} in Reports`}>
             Day view
-          </Link>
+          </SafeLink>
         </div>
       )}
     </li>

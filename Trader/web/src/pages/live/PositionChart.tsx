@@ -1,11 +1,11 @@
 // An expanded position's chart (DB-T8): the 1-minute closes since entry, the entry, stop and target lines and
 // a dot at each fill. Bars built from the worker's quotes (`source: "marks"`) are flagged with a small note.
 import { CartesianGrid, ComposedChart, Line, ReferenceDot, ReferenceLine, Tooltip, XAxis, YAxis } from "recharts";
-import { Link } from "react-router-dom";
 
 import type { LivePositionOut } from "../../api/types";
 import { fmtPrice, fmtTime } from "../../lib/format";
 import { ChartFrame, plotNumber, plotTime, tickClock } from "../performance/ChartFrame";
+import { SafeLink } from "./safeLink";
 
 import "./liveB.css";
 
@@ -37,9 +37,9 @@ export function PositionChart({ p, width }: { p: LivePositionOut; /** A fixed wi
   const fromQuotes = (p.bars ?? []).some((b) => b.source === "marks");
   const prices = { entry: p.entry, stop: p.stop, target: p.target };
   const open = (
-    <Link className="link-touch" to={p.link}>
+    <SafeLink className="link-touch" to={p.link}>
       Open trade
-    </Link>
+    </SafeLink>
   );
 
   if (points.length === 0) {

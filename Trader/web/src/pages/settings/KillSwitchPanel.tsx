@@ -74,10 +74,28 @@ function ResetForm({ sw, busy, onSubmit, onCancel }: { sw: KillSwitchOut; busy: 
   );
 }
 
+/** A tone as a class: the legacy `tone-*` (Settings) or the `status-*` family (Control, design D9: never the
+ * money green/red). */
+function toneClass(t: Tone, statusTones: boolean): string {
+  if (!statusTones) return `tone-${t}`;
+  return t === "ok" || t === "warn" || t === "bad" ? `status-${t}` : "status-muted";
+}
+
+/** The shared Light's markup with a status-token class (Control). */
+function StatusLight({ tone: t, label }: { tone: Tone; label: string }) {
+  return (
+    <span className={`light ${toneClass(t, true)}`} role="status" aria-label={label}>
+      <span className="light-dot" aria-hidden="true" />
+      <span className="light-label">{label}</span>
+    </span>
+  );
+}
+
 function SwitchRow({
   s,
   resetOpen,
   busy,
+  statusTones,
   onOpenReset,
   onCloseReset,
   onReset,
@@ -85,14 +103,16 @@ function SwitchRow({
   s: KillSwitchOut;
   resetOpen: boolean;
   busy: boolean;
+  statusTones: boolean;
   onOpenReset: () => void;
   onCloseReset: () => void;
   onReset: (reason: string) => void;
 }) {
+  const label = `${s.label}: ${stateWord(s)}`;
   return (
     <li className="stack">
       <div className="row">
-        <Light tone={tone(s)} label={`${s.label}: ${stateWord(s)}`} />
+        {statusTones ? <StatusLight tone={tone(s)} label={label} /> : <Light tone={tone(s)} label={label} />}
         {s.tripped && s.tripped_at && <span className="small muted">since {fmtDateTime(s.tripped_at)}</span>}
         {s.tripped && s.value !== null && (
           <span className="small">
@@ -113,7 +133,14 @@ function SwitchRow({
   );
 }
 
-export function KillSwitchPanel() {
+/**
+ * Props (DB-GWEB fix round 1, both optional so Settings is unchanged):
+ * - `showTradingControls` (default true): the Pause/Resume row. Control passes false: its Engine card owns the
+ *   one Pause/Resume pair, both behind a confirm (design §4.1).
+ * - `statusTones` (default false): lights and notices in the `status-*` classes instead of the legacy
+ *   `tone-*` (whose ok/bad are the money green/red). Control passes true (design D9).
+ */
+export function KillSwitchPanel({ showTradingControls = true, statusTones = false }: { showTradingControls?: boolean; statusTones?: boolean } = {}) {
   const api = useApi();
   const queryClient = useQueryClient();
   const state = useQuery({ queryKey: qk.killswitches(), queryFn: () => api.killswitches() });
@@ -149,6 +176,7 @@ export function KillSwitchPanel() {
             s={s}
             resetOpen={resetOpen === s.switch}
             busy={act.isPending}
+            statusTones={statusTones}
             onOpenReset={() => {
               act.reset();
               setResetOpen(s.switch);
@@ -158,7 +186,7 @@ export function KillSwitchPanel() {
           />
         ))}
       </ul>
-      {confirmPause ? (
+      {!showTradingControls ? null : confirmPause ? (
         <Confirm
           message="Block new entries? Exits and stops keep working."
           confirmLabel="Pause new entries"
@@ -185,12 +213,12 @@ export function KillSwitchPanel() {
         </div>
       )}
       {notice && (
-        <p className="small tone-ok" role="status">
+        <p className={`small ${toneClass("ok", statusTones)}`} role="status">
           {notice}
         </p>
       )}
       {act.isError && (
-        <p className="small tone-bad" role="alert">
+        <p className={`small ${toneClass("bad", statusTones)}`} role="alert">
           {errorMessage(act.error)}
         </p>
       )}

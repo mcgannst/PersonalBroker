@@ -5,8 +5,8 @@ import type { ReactNode } from "react";
 
 import type { LivePositionOut } from "../../api/types";
 import { MIN_TOUCH_PX } from "../../components/ui";
-import { fmtDuration, fmtMoney, fmtPrice, fmtR } from "../../lib/format";
-import { moneyTone } from "../../theme/tokens";
+import { fmtDuration, fmtPrice, fmtR } from "../../lib/format";
+import { Money as DecimalMoney } from "./PeriodPnl";
 import { PositionChart } from "./PositionChart";
 import { Sparkline } from "./Sparkline";
 
@@ -19,9 +19,10 @@ function price(value: string | null): string {
   return value === null ? DASH : fmtPrice(value);
 }
 
+/** Unrealised $ through the shared decimal Money (a value that rounds to $0.00 is flat, never red). */
 function Money({ value }: { value: string | null }) {
   if (value === null) return <span className="num muted">{DASH}</span>;
-  return <span className={`money ${moneyTone(value)}`}>{fmtMoney(value)}</span>;
+  return <DecimalMoney value={value} />;
 }
 
 export function StaleBadge({ title }: { title?: string }) {

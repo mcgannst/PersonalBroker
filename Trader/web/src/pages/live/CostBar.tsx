@@ -3,6 +3,7 @@
 // and net after AI for each period. Fees and spend are costs, shown in the neutral money tone; net after AI
 // is P&L, green or red by sign.
 import type { ClaudeTodayOut, PeriodPnlOut } from "../../api/types";
+import { Button } from "../../components/ui";
 import { fmtRate } from "../../lib/format";
 import { plotNumber } from "../performance/ChartFrame";
 import { Money, orderedPeriods, periodLabel } from "./PeriodPnl";
@@ -72,12 +73,45 @@ function CostRow({ p }: { p: PeriodPnlOut }) {
   );
 }
 
-export function CostBar({ claude, periods }: { claude: ClaudeTodayOut | null; periods: PeriodPnlOut[] | null }) {
+/**
+ * A failed part inside a panel that keeps its other content (the `claude_today` part in Costs, the periods in
+ * the top bar): the message as plain text and, when `onRetry` is given, a 44 px Retry. Panel's error look.
+ */
+export function InlinePartError({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  return (
+    <div className="panel-error lva-part-error" role="alert">
+      <p className="lva-muted">{message}</p>
+      {onRetry && (
+        <Button variant="plain" onClick={onRetry}>
+          Retry
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Fix round 1 (DB-GWEB): `error` is the `claude_today` part's error; when that part is null it shows in place
+ * of the Claude spend line, with Retry when `onRetry` is given. The per-period cost rows stay.
+ */
+export function CostBar({
+  claude,
+  periods,
+  error,
+  onRetry,
+}: {
+  claude: ClaudeTodayOut | null;
+  periods: PeriodPnlOut[] | null;
+  error?: string | null;
+  onRetry?: () => void;
+}) {
   const rows = orderedPeriods(periods);
-  const nothing = claude === null && rows.length === 0;
+  const claudeError = claude === null && error ? error : null;
+  const nothing = claude === null && rows.length === 0 && claudeError === null;
   return (
     <Panel title="Costs" empty={nothing ? "No cost data" : null}>
       {claude && <ClaudeToday claude={claude} />}
+      {claudeError !== null && <InlinePartError message={claudeError} onRetry={onRetry} />}
       {rows.length > 0 && (
         <div className="lva-costs">
           {rows.map((p) => (

@@ -536,17 +536,17 @@ Web (`Trader/web/src/`):
 - Read-only: no write of any kind (`KillSwitches.evaluate` is never called).
 
 **Acceptance tests:**
-- [ ] 1. `mark_state`: observed 30 s ago → `live`, 30.001 s → `stale`, None → `missing`.
-- [ ] 2. (db) One position with a fresh mark: mark, bid, ask, `unrealized`, `unrealized_r`, `distance_to_stop_r` and `near_stop` as defined (a mark 0.2 R above the stop → near); a working stop order's price wins over `stop_loss`; a position whose stop order is cancelled shows `stop_working` false and the stop loss.
-- [ ] 3. (db) Stale and missing marks: a 45 s old mark → `stale` with its value kept; no mark → `missing`, `unrealized` None, row still present.
-- [ ] 4. (db) 0, 1 and 20 open positions → 0, 1 and 20 rows; each with `spark` ≤ 60 points ending at the mark; closed positions and positions of a replay run never appear.
-- [ ] 5. (db) Bars: 100 minutes of `mark_bars` and 20 minutes of stored 1-minute candles overlapping → `bars` for an expanded id has one bar per minute with `source` `candle` where candles exist; `expand` with 4 ids fills only the first 3; an id not open is ignored.
-- [ ] 6. (db) `open_values` and `equity_at_marks`: equals ledger cash + Σ (mark or avg) × qty; `all_marked` false with one missing mark.
-- [ ] 7. (db) Risk: two positions with stops → `open_risk` = Σ (avg − stop) × qty; a position whose stop is above its entry (trailed) contributes 0; `slots_max` from the enabled entry strategy's `max_positions` (an overlay strategy adds nothing); `slots_used` counts today's entries only.
-- [ ] 8. (db) Kill-switch lights: with a prior-close snapshot of 1000 and equity at marks 960 → daily loss value 0.04 vs threshold 0.05, not tripped; a tripped `max_drawdown_pct` event → `tripped`, `trip_value`/`trip_threshold` from the event, `needs_web_reset` as `killswitch_states`; `expectancy` shows count vs min; `manual_pause` active → `trading_state` `paused`; another switch tripped → `blocked`.
-- [ ] 9. Read-only (db): a statement listener sees only SELECTs across `live_positions`, `risk_panel` and `killswitch_lights`.
-- [ ] 10. No Questrade (static): DB-T4 creates `tests/live/test_no_questrade_static.py`, an AST check that none of the eight `trader/api/livedata/` modules nor `routers/live.py` nor `routers/control.py` references `quotes` or `candles` attributes of the services, `open_positions`, `last_prices`, `position_lines`, `OffLoopMarketData`, `MarketDataService`, `LazyQuestrade`, `QuestradeClient`, `questrade_client`, `trader.market.data_service` or `trader.adapters.questrade.client`, or imports `httpx` (it covers all ten files from the start, so DB-T5 and DB-T6 never edit it; the stubs pass trivially).
-- [ ] 11. Gate and commit `DB-T4: live positions, sparklines and risk panel`.
+- [x] 1. `mark_state`: observed 30 s ago → `live`, 30.001 s → `stale`, None → `missing`.
+- [x] 2. (db) One position with a fresh mark: mark, bid, ask, `unrealized`, `unrealized_r`, `distance_to_stop_r` and `near_stop` as defined (a mark 0.2 R above the stop → near); a working stop order's price wins over `stop_loss`; a position whose stop order is cancelled shows `stop_working` false and the stop loss.
+- [x] 3. (db) Stale and missing marks: a 45 s old mark → `stale` with its value kept; no mark → `missing`, `unrealized` None, row still present.
+- [x] 4. (db) 0, 1 and 20 open positions → 0, 1 and 20 rows; each with `spark` ≤ 60 points ending at the mark; closed positions and positions of a replay run never appear.
+- [x] 5. (db) Bars: 100 minutes of `mark_bars` and 20 minutes of stored 1-minute candles overlapping → `bars` for an expanded id has one bar per minute with `source` `candle` where candles exist; `expand` with 4 ids fills only the first 3; an id not open is ignored.
+- [x] 6. (db) `open_values` and `equity_at_marks`: equals ledger cash + Σ (mark or avg) × qty; `all_marked` false with one missing mark.
+- [x] 7. (db) Risk: two positions with stops → `open_risk` = Σ (avg − stop) × qty; a position whose stop is above its entry (trailed) contributes 0; `slots_max` from the enabled entry strategy's `max_positions` (an overlay strategy adds nothing); `slots_used` counts today's entries only.
+- [x] 8. (db) Kill-switch lights: with a prior-close snapshot of 1000 and equity at marks 960 → daily loss value 0.04 vs threshold 0.05, not tripped; a tripped `max_drawdown_pct` event → `tripped`, `trip_value`/`trip_threshold` from the event, `needs_web_reset` as `killswitch_states`; `expectancy` shows count vs min; `manual_pause` active → `trading_state` `paused`; another switch tripped → `blocked`.
+- [x] 9. Read-only (db): a statement listener sees only SELECTs across `live_positions`, `risk_panel` and `killswitch_lights`.
+- [x] 10. No Questrade (static): DB-T4 creates `tests/live/test_no_questrade_static.py`, an AST check that none of the eight `trader/api/livedata/` modules nor `routers/live.py` nor `routers/control.py` references `quotes` or `candles` attributes of the services, `open_positions`, `last_prices`, `position_lines`, `OffLoopMarketData`, `MarketDataService`, `LazyQuestrade`, `QuestradeClient`, `questrade_client`, `trader.market.data_service` or `trader.adapters.questrade.client`, or imports `httpx` (it covers all ten files from the start, so DB-T5 and DB-T6 never edit it; the stubs pass trivially).
+- [x] 11. Gate and commit `DB-T4: live positions, sparklines and risk panel`.
 
 **LIVE steps:** none.
 

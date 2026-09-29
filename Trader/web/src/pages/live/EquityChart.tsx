@@ -28,6 +28,10 @@ export function changePct(now: string | null | undefined, change: string | null 
   return fmtPct((c / base).toFixed(8));
 }
 
+/** The account currency shown beside money on the Dashboard. The sim account is USD (SPEC §7.3 default
+ * `account_currency`); the live API does not carry the currency yet, so the label is fixed here. */
+export const ACCOUNT_CURRENCY = "USD";
+
 /** The current equity, large, with today's change in $ (green/red by sign, flat at zero) and %. */
 function EquityHero({ now, change }: { now: string | null; change: string | null }) {
   const pct = changePct(now, change);
@@ -35,6 +39,7 @@ function EquityHero({ now, change }: { now: string | null; change: string | null
     <div className="lva-hero" data-testid="equity-hero">
       <span className="lva-hero-now">
         <Money value={now} tone="flat" />
+        <span className="lva-label lva-ccy" data-testid="equity-currency">{` ${ACCOUNT_CURRENCY}`}</span>
       </span>
       <span className="lva-hero-change">
         <Money value={change} signed />

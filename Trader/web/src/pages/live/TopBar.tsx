@@ -14,6 +14,7 @@ import { plotNumber } from "../performance/ChartFrame";
 import { phaseLabel } from "../dashboard/labels";
 import { BooksCheck } from "./BooksCheck";
 import { CostBar, InlinePartError, Meter } from "./CostBar";
+import { ACCOUNT_CURRENCY } from "./EquityChart";
 import { DASH, Money, orderedPeriods, periodLabel } from "./PeriodPnl";
 import "./liveA.css";
 
@@ -56,7 +57,10 @@ function title(live: LiveOut): string {
 function PeriodTile({ p }: { p: PeriodPnlOut }) {
   return (
     <div className="st st-period lva-tile" data-testid={`topbar-period-${p.period}`}>
-      <div className="st-label lva-label">{periodLabel(p.period)}</div>
+      <div className="st-label lva-label">
+        <span>{periodLabel(p.period)}</span>
+        <span className="lva-ccy">{` · ${ACCOUNT_CURRENCY}`}</span>
+      </div>
       <div className="st-value lva-headline">
         <Money value={p.pnl_after_fees} signed />
       </div>

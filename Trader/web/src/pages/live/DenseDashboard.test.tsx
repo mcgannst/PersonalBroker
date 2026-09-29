@@ -110,6 +110,14 @@ describe("DB-DENSE equity hero", () => {
     expect(within(region("Equity")).getByRole("figure", { name: "Equity today" })).toHaveClass("is-tall");
   });
 
+  it("labels the account currency (USD) on the equity headline and every P&L tile", async () => {
+    await renderLive();
+    expect(within(region("Equity")).getByTestId("equity-currency")).toHaveTextContent("USD");
+    for (const p of ["today", "week", "run"]) {
+      expect(screen.getByTestId(`topbar-period-${p}`).querySelector(".lva-ccy")).toHaveTextContent("USD");
+    }
+  });
+
   it("changePct: change over the day's start equity; null when it cannot be computed", () => {
     expect(changePct("769.7250", "11.0000")).toBe("+1.45%");
     expect(changePct("740.0000", "-10.0000")).toBe("-1.33%");

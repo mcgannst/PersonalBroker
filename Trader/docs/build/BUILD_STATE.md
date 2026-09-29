@@ -9,7 +9,7 @@ Shared state for the gauntlet build. Rules: [`../plans/2026-09-26-build-master-p
 | Current phase | 5 (Phase 4 COMPLETE ~17:05 MT Sep 27, tag phase-4-complete) |
 | Current task | P5 gauntlets (group W; replay core) + builders T2, T9, T11, T14, T15, T16 |
 | Gauntlet stage | Breaker + reviewers |
-| Last updated (UTC) | 2026-09-28T08:57:48Z |
+| Last updated (UTC) | 2026-09-29T04:22:45Z |
 | Last pushed commit | d64518b |
 | Questrade token owner | trader_dev.trader.api_credentials (since P1-T6, 2026-09-27 ~04:39Z). Keep-alive: bash Trader/app/scripts/trader-dev.sh token-refresh. Never run spikes/qt.py or s1_tokens.py again. |
 | Token last refreshed (UTC) | 2026-09-27T17:21:56Z (re-seeded from Stephen's new token after .env.dev rebuild; token removed from .env.dev) |
@@ -138,6 +138,19 @@ Status: `todo` · `building` · `gauntlet` · `fixing` · `accepted` · `blocked
 | P6-T12 | Decisions API + web Day view | T9 | accepted | 2 | fix a2: offset capped (422); list_days reads day rows only (index confirmed); recent days deduped | db4682a |
 | P6-T13 | GitHub deploy workflow + tooling | T6 | deferred | 1 | deferred by Stephen 2026-09-27 (GitHub deploy/secrets: only when asked) | - |
 | P6-T14 | GitHub secrets cut-over (LIVE) | T13 | deferred | 1 | deferred by Stephen 2026-09-27 | - |
+| DB-T0 | Live dashboard plan | spec | accepted | 1 | plan verify+fix PASS (quote tap tightened) | 8cd8963 |
+| DB-T1 | Contracts (migration 0008, schemas, TS, theme) | T0 | accepted | 1 | contracts: 0008 quote_marks/mark_bars, schemas+topics, stubs, web types/client/fixtures, theme tokens, Panel; gate 3769 py + 486 web | 1a6512d |
+| DB-T2 | Quote tap + mark publisher | T1 | accepted | 2 | fix a2: breaker 19/19; raising logger can never replace a result; publisher takes FK key locks NOWAIT in order (skips pass if busy, never deadlocks nightly); test_errors path-fragility fixed | 50985fb |
+| DB-T3 | Live data A: period P&L, costs, books, equity | T1 | accepted | 2 | fix a2 (group): data breaker 35/35 | 86fb541 |
+| DB-T4 | Live data B: positions, marks, risk | T1 | accepted | 2 | fix a2 (group): shared session_day | 86fb541 |
+| DB-T5 | Activity, rejections, GET /api/live | T1 | accepted | 2 | fix a2: /api/live read-only (readonly plan, no get_live_run per request), pending batched; 74 statements, ~90 ms | 86fb541 |
+| DB-T6 | GET /api/control | T1 | accepted | 2 | fix a2: /api/control read-only plan; part failures warn; strategy cards batched | 86fb541 |
+| DB-T7 | Web: top bar, P&L, costs, equity, risk | T1 | accepted | 2 | fix a2: web breaker 16/16; TopBar/CostBar Retry (contract change); money formatters | 73b460a |
+| DB-T8 | Web: positions, charts, activity, rejections, today | T1 | accepted | 2 | fix a2: expand clamp 3; safeLink on API links; flat $0.00 | 73b460a |
+| DB-T9 | Web: Control page | T1 | accepted | 2 | fix a2: single confirmed Pause/Resume; status colours on Control; rerun only manual jobs | 73b460a |
+| DB-T10 | Backend wiring + D2 proofs | T1,T2 | accepted | 1 | gauntlet PASS: D2 = NOT a trading change (diff vs 459e172 clean; sim day identical incl. loop iterations and held locks); mutants caught; SIGTERM clean; follow-ups F1 fold loop/lock checks into live-unchanged test, F2 daemon publisher thread -> DB-T12 | 4d4b3ef |
+| DB-T11 | Web wiring, nav, Settings move | T1,T7,T8,T9 | accepted | 2 | fix a2: breaker 14/14; Control refreshes after reset/pause; status colours for non-money; pre-paint theme script; dead code removed; web 708 green, build OK | 31f29de |
+| DB-T12 | End to end + LIVE deploy (Stephen: deploy as soon as the build passes, incl. after 04:00 MT, but never 07:15-14:30 MT market hours; cron catch-up re-runs premarket if interrupted). Soak: keep running (option a); count from Tue 09-29 | T3-T6,T10,T11 | accepted | 1 | e2e tests + D2 PASS (base 459e172); deployed aff7fcd 22:21 MT after freeing ~1 GB on VM 107; health 200, alembic 0008, crontab valid, cron_gap nothing skipped, soak day 1 = Tue 09-29 (0/10, earliest 10-12). Playwright live smoke pending | aff7fcd |
 
 ## Escalations
 
@@ -2160,3 +2173,232 @@ None open.
 - D2: trading change (pacing of the 9:35 opening-bar fetch). Soak already restarts Tue 2026-09-29
 - Notes: the literal "429 every 15 requests" worst case lands at 44 s, inside 45 s but not well under, since pacing cannot help if the 429 rate does not fall. Log: Trader/docs/build/agents/FIX-PACING-a1.md
 - Correction: test_questrade_pacing.py has 16 cases (not 18). Telegram update sent
+
+### 2026-09-28 17:50 MT · DB-T0 · Planner · attempt 1 · started
+- Result: implementation plan (specification) for the approved Live Dashboard and Control page design (2026-09-28-live-dashboard-design.md). Log: Trader/docs/build/agents/DB-T0-planner-a1.md
+
+### 2026-09-28 18:24 MT · DB-T0 · Planner · attempt 1 · finished
+- Result: done. Plan Trader/docs/plans/2026-09-28-live-dashboard-plan.md: 12 tasks DB-T1..DB-T12, critical path 4 (T1 then T7/T8/T9 then T11 then T12; backend T1, T2, T10, T12), max parallel width 8 (T2..T9). Marks come from a transparent QuoteTap around the worker's shared Questrade client (composition root, runtime.py) plus a supervised MarkPublisher task (2 s, off the loop) writing quote_marks and mark_bars (migration 0008). No decision-path file and no settings key change
+- Commits: e734f58
+- D2: planned as not a trading change. Proof: worker day identical with the publisher on and off (trading rows, chat, Questrade call log), tap transparency tests, static import rules, git diff from the deployed commit, golden unchanged
+- Notes: 9 open questions for Stephen, each with a default (dark theme by default, nav, keep /api/dashboard and /api/system, weekend "today" = last session, overnight open P&L in today, engine controls leave Settings, sparklines from worker quotes, target shown as a dash, System contents move to Control). Log: Trader/docs/build/agents/DB-T0-planner-a1.md
+
+### 2026-09-28 18:17 MT · DB-T0 · Verifier+Spec reviewer · attempt 1 · started
+- Result: combined verify+fix of the live dashboard plan (e734f58); focus QuoteTap soak safety. Log: Trader/docs/build/agents/DB-T0-verifier-a1.md
+
+### 2026-09-28 18:30 MT · DB-T0 · Verifier+Spec reviewer · attempt 1 · finished
+- Result: PASS after fixes (plan commit 8cd8963). Tap kept (no in-memory quote cache exists on trunk) and specified as sync bookkeeping only (S1a): one direct await per method, no task/lock/timeout/I/O, deadline_s and reqs forwarded untouched, live stats, memory capped 30x1000; new DB-T2 tests 14 (no yield of its own) and 15 (9:35 opening-bar guard identical through the tap)
+- Fixes: heartbeat Questrade baseline would drop the 429s of the batch that opens the client (now zero-based); publisher DB work on its own 1-thread executor with statement/lock timeouts (not the default executor the token fetch uses); mark_bars/quote_marks reader allow-list; D2 base from /api/meta via TRADER_D2_BASE at deploy (gate: parent of first DB-T1 commit), no hard-coded sha; perf ceiling 45 -> 80 plus N+1 invariance, per-part Server-Timing, live median of 5; names: proposals has no approval_mode, candle_archive.start_ts, logging_setup.redact_text, test_phase5_contracts ROUTERS pin, tests/live pkg to DB-T1
+- Notes: no new questions for Stephen. Log: Trader/docs/build/agents/DB-T0-verifier-a1.md
+
+### 2026-09-28 18:34 MT · DB-T1 · Builder · attempt 1 · started
+- Contracts: migration 0008 + ORM, API schemas/topics, stubs, web types/client/fake/fixtures, tokens, Panel
+
+### 2026-09-28 18:50 MT · SPEEDUP-gate · Builder · attempt 1 · started
+- Result: parallel pytest (pytest-xdist, -n 4, one Postgres database per worker), fix xdist-unsafe tests (test-only), replace real sleeps with fakes where safe, check.sh -n ${TRADER_TEST_WORKERS:-4}, gate.sh default 2 slots. Log: Trader/docs/build/agents/SPEEDUP-gate-a1.md
+
+### 2026-09-28 19:20 MT · DB-T1 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-10 ticked
+- Commits: 1a6512d
+- Gate: gate.sh passed (pytest 3769, vitest 486, ruff, mypy, tsc)
+- Notes: head 0008 (0007 was head). tests/live/test_contracts.py skips the NotImplementedError check once a function is implemented, signatures stay pinned. TOKENS also lists chartRange/chartStopFill/chartExit/chartBar. tokens.css not yet imported (main.tsx/styles.css are DB-T11's).
+
+### 2026-09-28 19:08 MT · DB-T7 · Builder · attempt 1 · started
+- Web components A: top bar, period P&L, costs, books check, equity chart, risk panel
+
+### 2026-09-28 19:08 MT · DB-T8 · Builder · attempt 1 · started
+- Web: positions, sparklines, position chart, activity feed, rejections, today (worktree agent-a112697ec2c99c858, base 1a6512d)
+
+### 2026-09-28 19:08 MT · DB-T2 · Builder · attempt 1 · started
+- Worker quote tap and mark publisher, worktree agent-a547eeabc04587f35 at 1a6512d
+
+### 2026-09-28 19:08 MT · DB-T6 · Builder · attempt 1 · started
+- Result: started GET /api/control (engine, strategies, schedule, health, soak, errors)
+
+### 2026-09-28 19:09 MT · DB-T5 · Builder · attempt 1 · started
+- Activity feed, rejections, GET /api/live (worktree agent-ad6d98ca556b15461)
+
+### 2026-09-28 19:08 MT · DB-T3 · Builder · attempt 1 · started
+- Live data A: periods, books check, equity series (trader/api/livedata/{periods,books,equity}.py). Log: Trader/docs/build/agents/DB-T3-builder-a1.md
+
+### 2026-09-28 19:10 MT · DB-T4 · Builder · attempt 1 · started
+- Live data B: positions with marks, sparklines and bars, risk panel, kill-switch lights (worktree agent-a08dfb6360a233ac0, base 1a6512d). Log: Trader/docs/build/agents/DB-T4-builder-a1.md
+
+### 2026-09-28 19:08 MT · DB-T9 · Builder · attempt 1 · started
+- Web: Control page and its cards (worktree agent-ad5a6a9795f94230a, base 1a6512d). Log: Trader/docs/build/agents/DB-T9-builder-a1.md
+
+### 2026-09-28 19:59 MT · DB-T8 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-10 ticked
+- Commits: 0736e1a
+- Gate: gate.sh passed (pytest 3769, vitest 535 in 56 files), 49 new DB-T8 web tests
+- Notes: liveEmptyDay fixture's session.date is the Saturday (2026-10-10), not the next session. TodayTimeline shows session.date as "next session" per SessionInfoOut semantics, so DB-T5 should send the next session date. PositionChart takes an optional width (tests).
+
+### 2026-09-28 19:58 MT · DB-T4 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-11 ticked
+- Commits: e84838d
+- Gate: gate.sh passed (pytest 3816 passed 5 skipped, vitest 486, ruff, mypy, tsc)
+- Notes: live_positions uses a fixed statement count (10 with at least one position, same for 1 and 20, tested). Cash comes from a process-cached Ledger(SessionCalendar()).balances because live_positions takes no calendar. risk.py has a private _session_day (the S5 rule) so it does not depend on DB-T3's periods.session_day. The no-Questrade static test refuses open_positions only as an import or through a whole-module import of trading or notify.views, so a local or field named open_positions is still allowed. mark_bars are only read into BarOut.
+
+### 2026-09-28 19:41 MT · DB-T7 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-10 ticked
+- Commits: 0621771
+- Gate: gate.sh passed (pytest 3769, vitest 526, ruff, mypy, tsc)
+- Notes: shared helpers (Money, periodLabel, orderedPeriods) live in PeriodPnl.tsx and Meter in CostBar.tsx (no extra files). TopBar embeds CostBar and BooksCheck. All classes lva- prefixed. .money/.num rules are in theme/tokens.css, which DB-T11 must import (main.tsx). Log: Trader/docs/build/agents/DB-T7-builder-a1.md
+
+### 2026-09-28 20:05 MT · DB-T2 · Builder · attempt 1 · finished
+- Result: done, plan tests 1-16 ticked
+- Commits: ec1e011
+- Gate: ruff/format/mypy clean, pytest 3822 passed 1 failed. The failure is test_errors secret check matching 'abc' inside this worktree's path (agent-a547eeabc...), environmental, passes on a normal checkout
+- Notes: timeouts set via set_config(..., true) (bindable SET LOCAL). 59 marks tests + 5 worker tests. No decision-path file touched
+
+### 2026-09-28 19:59 MT · DB-T9 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-10 ticked. Control.tsx and pages/control/{EngineCard,KillSwitchCard,StrategiesCard,JobsCard,HealthCard,SoakCard,ErrorLog,parts}.tsx and control.css, plus 7 test files (55 tests)
+- Commits: 49df10d
+- Gate: gate.sh passed (ruff, mypy, tsc, pytest 3769, vitest 541)
+- Notes: Control page shows two Pause buttons: EngineCard (with confirm) and the reused KillSwitchPanel's own Pause/Resume, whose Resume has no confirm; KillSwitchPanel stays unchanged as the plan says. Re-run remounts RunJob with the chosen job first, because RunJob has no preselect prop. The time-zone check reads /api/meta (not Questrade). Part "killswitch_history" also maps to the Kill switches card. Log: Trader/docs/build/agents/DB-T9-builder-a1.md
+
+### 2026-09-28 20:00 MT · DB-GWEB · Verifier+Breaker+Reviewer · attempt 1 · started
+- Web gauntlet for DB-T7 (0621771), DB-T8 (0736e1a), DB-T9 (49df10d): verify, 12-16 breaker tests (src/gauntlet/db_web_breaker.test.tsx), spec+code review. Log: Trader/docs/build/agents/DB-GWEB-gauntlet-a1.md
+
+### 2026-09-28 20:00 MT · DB-T2 · Verifier+Breaker+Reviewer · attempt 1 · started
+- Tap-safety gauntlet for DB-T2 (ec1e011): 10-14 breaker tests (tests/gauntlet/test_db_t2_breaker.py: real opening_bars + real client + tap on a virtual clock, cancellation/exception identity, memory, DST roll, publisher isolation), S1a line-by-line review, FK lock review. Log: Trader/docs/build/agents/DB-T2-gauntlet-a1.md
+
+### 2026-09-28 20:00 MT · DB-T6 · Builder · attempt 1 · finished
+- Result: done, GET /api/control (engine, killswitches+history, strategies, schedule, health, soak, errors), part isolation
+- Commits: 9498b2d
+- Gate: gate.sh passed (pytest 3840 passed/9 skipped, vitest 486), post-rebase targeted re-run 195 passed
+- Notes: soak via soak.readonly_plan + NullNotifier, cached 60 s (SELECTs only, tested). Live run looked up read-only (get_live_run only when none exists). Schedule uses services.plan as the plan says (plan_builder in prod, same as /api/dashboard)
+
+### 2026-09-28 20:16 MT · DB-GWEB · Verifier+Breaker+Reviewer · attempt 1 · finished
+- Result: VERIFY PASS (three commits on trunk, boxes ticked, npm check green 630). BREAK 10 PASS / 6 FAIL (findings, not test bugs): B3 expand list not clamped to 3, B6 Control status lights green/red via reused KillSwitchPanel, B9 javascript: links rendered from API links, B11 top bar part errors have no Retry and claude_today error is silent, B13 KillSwitchPanel Resume unconfirmed on Control, B15 RiskPanel float r2 and red $0.00 for tiny negatives
+- Commits: aeb88be (Trader/web/src/gauntlet/db_web_breaker.test.tsx, 16 tests)
+- Notes: for DB-T11: import theme/tokens.css in main.tsx before styles.css and drop styles.css :root blocks (money/status/touch tokens undefined until then), clamp ?expand= to 3 before api.live (a 4th id makes /api/live 422), hide or confirm the KillSwitchPanel Pause/Resume on Control. liveEmptyDay fixture session.date is a Saturday (API sends the next session). Log: Trader/docs/build/agents/DB-GWEB-gauntlet-a1.md
+
+### 2026-09-28 20:14 MT · DB-GWEB · Builder · attempt 2 · started
+- Fix round for DB-T7/T8/T9 per the web gauntlet (16 breaker tests in src/gauntlet/db_web_breaker.test.tsx) and orchestrator rulings (KillSwitchPanel showTradingControls, TopBar/CostBar Retry, Control status tokens, expand clamp, safeLink, decimal formatters, liveEmptyDay next-session date, nits). Worktree agent-aa02957b165685bda. Log: Trader/docs/build/agents/DB-GWEB-builder-a2.md
+
+### 2026-09-28 20:25 MT · DB-GWEB · Builder · attempt 2 · finished
+- Result: all 16 breaker tests pass (was 10/16). B3 table clamps expanded to 3. B6 KillSwitchPanel statusTones on Control plus control.css maps tone/status/error-box to --status-*. B9 shared pages/live/safeLink (unsafe links render as an <a> without href). B11 TopBar onRetry and CostBar error/onRetry (approved contract change). B13 KillSwitchPanel showTradingControls=false on Control (one confirmed Pause/Resume). B15 decimal r2/pct1 and shared Money (rounds-to-zero is flat). Nits: rejection ticker keys, labelled risk dots, Re-run only for manual_jobs. Fixture liveEmptyDay.session.date is 2026-10-12
+- Commits: 73b460a
+- Gate: web only (no Python change): npm run -s check green, tsc clean, vitest 72 files / 659 tests (13 new fix-round tests)
+- Notes: for DB-T11: pass onRetry to TopBar, clamp ?expand= to 3 before api.live, import theme/tokens.css in main.tsx (plan DB-T11 note added). Log: Trader/docs/build/agents/DB-GWEB-builder-a2.md
+
+### 2026-09-28 20:30 MT · DB-T3 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-17 ticked
+- Commits: 1acf987
+- Gate: gate.sh passed (pytest 3803 passed / 9 skipped, vitest 486, ruff, mypy). After rebase onto DB-T4/DB-T6/DB-GWEB, tests/live 209 green
+- Notes: added public helpers periods.open_pnl, fee_total, q4 (books/equity reuse them). Marks points are stamped at the minute's END, only complete minutes up to min(now, close). Price priority intraday 1m candle > candle_archive > mark_bars. unrealized_partial = any open position lacks a mark (also True when none has one, value None). downsample uses max_points//2 buckets, first/last added and a non-extreme point dropped (end buckets first, max one per bucket) to stay under the cap, global min/max always kept
+
+### 2026-09-28 20:25 MT · DB-T11 · Builder · attempt 1 · started
+- Web wiring: Dashboard page, routes and nav, 2 s throttle, Settings move, test migration, smoke spec. Worktree agent-afdd775092f65af4d. Log: Trader/docs/build/agents/DB-T11-builder-a1.md
+
+### 2026-09-28 20:26 MT · DB-T2 · Verifier+Breaker+Reviewer · attempt 1 · finished
+- Result: VERIFY PASS. BREAK 17 PASS / 2 FAIL (committed as strict xfail so the shared gate stays green). REVIEW: 0 must-fix, 2 should-fix, 4 nits. Verdict: the tap is safe for the soak. On a virtual-time loop, the real opening_bars + real QuestradeClient 9:35 batch (800 symbols, 17 rps, 429 pauses, 45 s deadline) is byte-identical with and without the tap: same dispatch times, cancellations, results, log fields and loop iterations
+- Findings: F1 should-fix, tap.py:218-222 `_failed` calls the logger unguarded inside except blocks, so a raising logger (double fault) replaces the caller's result or the 9:35 CancelledError. F2 should-fix, the publisher's FK KEY SHARE on symbols against nightly upsert_symbols (ON CONFLICT SET ticker/exchange takes FOR UPDATE): a lock-order deadlock where nightly is the victim, reproduced on PG14. It only happens when nightly overlaps held positions plus quote polling, so not on the normal 20:00 schedule. Fix: FOR KEY SHARE NOWAIT pre-lock, sorted. The builder note "trading never locks a symbols row" is wrong
+- Commits: c36019c (tests/gauntlet/test_db_t2_breaker.py, 14 tests / 19 cases), 351b704 (log)
+- Gate: targeted lane only, as instructed: 676 passed, 15 skipped, 2 xfailed (breaker, marks, live, worker, adapters, market, FIX-OPENBARS, P6-T11 D2, decisions live-unchanged/static, golden replay, replay isolation)
+- Notes: tests/api/test_errors.py:146 is path-fragile: it fails whenever the checkout path contains "abc". Nits: set_config deviation OK, the quotes() day-roll OK (S10), the worker never calls publisher.close() (DB-T10), a roll failure drops that batch record. Log: Trader/docs/build/agents/DB-T2-gauntlet-a1.md
+
+### 2026-09-28 20:29 MT · DB-T2 · Builder · attempt 2 · started
+- Fix round (combined verify+fix, §6.3) for gauntlet F1 (guarded tap logging, split roll/batch guards), F2 (publisher FOR KEY SHARE NOWAIT pre-lock, busy pass skipped) and the path-fragile tests/api/test_errors.py sentinel. Worktree agent-a92460448f47a87ab. Log: Trader/docs/build/agents/DB-T2-builder-a2.md
+
+### 2026-09-28 20:30 MT · SPEEDUP-gate · Builder · attempt 1 · finished
+- Result: done. check.sh runs pytest -n ${TRADER_TEST_WORKERS:-4} --dist loadfile (pytest-xdist 3.8.0, 0 = one process), one Postgres container per worker (session fixture runs per worker), test container with fsync/synchronous_commit/full_page_writes off. gate.sh default TRADER_GATE_SLOTS 3 -> 2. Master plan shared-lane line now 2 lanes x 4 workers
+- Timing: serial baseline 3629 passed in 746 s (12:26, machine partly loaded) -> -n 4 231 s (3:50) quiet, ~5-6 min with builders' gates alongside. 3 back-to-back -n 4 runs under load 13-30 all green (3769 passed each, 379/365/349 s). Final gate.sh: pytest 3941 passed, 24 skipped in 309 s, web failed only on DB-GWEB breaker tests whose fix landed mid-gate, web 659 passed after rebase
+- Commits: 4118401
+- xdist-unsafe tests: none found, no xdist_group or serialized tests. Sleeps: decisions/test_wiring worker-steps-on teardown 3 s -> 0 (event instead of sleep, same assertions). No production change needed
+- Log: Trader/docs/build/agents/SPEEDUP-gate-a1.md
+
+### 2026-09-28 20:55 MT · DB-T5 · Builder · attempt 1 · finished
+- Result: done, plan tests 1-9 ticked
+- Commits: cbf7426
+- Gate: gate.sh passed (pytest 4035 passed, vitest 659 passed)
+- Notes: route tests 5 and 7 run on the real DB-T3/DB-T4 parts. A failed positions part also nulls risk (risk_panel needs LivePositions). Failed proposals are shown as proposal_rejected "Failed ...".
+
+### 2026-09-28 20:48 MT · DB-GDATA · Verifier+Breaker+Reviewer · attempt 1 · started
+- Data gauntlet for DB-T3 (1acf987), DB-T4 (e84838d), DB-T5 (cbf7426), DB-T6 (9498b2d): verify, 12-16 breaker tests (tests/gauntlet/test_db_data_breaker.py: read-only in production wiring incl. schedule/plan_builder, no Questrade, replay isolation, money, scale+budget, part isolation), spec+code review. Log: Trader/docs/build/agents/DB-GDATA-gauntlet-a1.md
+
+### 2026-09-28 21:03 MT · DB-T11 · Builder · attempt 1 · finished
+- Result: done, acceptance tests 1-10 ticked. New Dashboard on /api/live (TopBar onRetry, expand clamped to 3), /control route + /system redirect (query kept), S12 nav + More, theme control (dark default, stored), 2 s leading+trailing throttle for dashboard/system SSE invalidations, 15 s polling of live and control while disconnected, tokens.css before styles.css (styles.css :root blocks removed), Settings "Engine controls moved" card, Day view URL filters, smoke spec (live /api/live Server-Timing median of 5 < 300 ms)
+- Commits: 02dcccf
+- Gate: gate.sh passed (pytest 4035 passed / 35 skipped / 2 xfailed, vitest 72 files / 699), web build ok, tsc clean
+- Notes: SystemPage.test moved to pages/control/SystemCarryOver.test.tsx (new file, deviation from file map). Page-level notices on the Dashboard carry the old "no stop order" and worker "Check" link (PositionRow has no stop_working flag). Migrated-test list in the plan's DB-T11 builder notes. Log: Trader/docs/build/agents/DB-T11-builder-a1.md
+
+### 2026-09-28 21:01 MT · DB-T2 · Builder · attempt 2 · finished
+- Result: done, F1/F2/N4/N5 fixed, breaker 19/19 pass (tests 6 and 14 xfail markers removed)
+- Commits: 50985fb
+- Gate: gate.sh passed (ruff, format, mypy, pytest 3999 passed / 33 skipped, vitest 72 files / 659). Targeted lane 949 passed / 33 skipped. After the rebase onto xdist + DB-T5, breaker+marks+worker_marks+test_errors 102 passed
+- Notes: F1 guards every tap logger call on failure paths and splits the roll_day and batch-start guards (still one await per method). F2 adds a FOR KEY SHARE NOWAIT pre-lock (run row, then symbols ORDER BY id). On 55P03 the pass is skipped (skipped=None, 0/0, busy_passes+1, debug log, no warning or event, streak untouched) and its observations carry over to the next pass. There is no 'busy' literal because types.py is the DB-T1 contract. test_errors uses a random SECRET-uuid sentinel. The plan builder note is corrected (nightly upsert_symbols does lock symbols FOR UPDATE). Log: Trader/docs/build/agents/DB-T2-builder-a2.md
+
+### 2026-09-28 21:00 MT · DB-T11 · Verifier+Breaker+Reviewer · attempt 1 · started
+- Gauntlet for 02dcccf (web wiring). Worktree agent-aaf77a7408b47da54. Log: Trader/docs/build/agents/DB-T11-gauntlet-a1.md
+
+### 2026-09-28 21:02 MT · DB-T10 · Builder · attempt 1 · started
+- Backend wiring in runtime.py (QuoteTap around the shared LazyQuestrade, MarkPublisher in WorkerDeps.marks, heartbeat merge, close on shutdown), busy literal ruling, D2 behavioural/static/git-diff proofs. Worktree agent-a6a4ca8b4223862da. Log: Trader/docs/build/agents/DB-T10-builder-a1.md
+
+### 2026-09-28 21:08 MT · DB-GDATA · Verifier+Breaker+Reviewer · attempt 1 · finished
+- Result: VERIFY PASS (4 commits on trunk, boxes ticked, targeted lane 276 passed). BREAK 13 tests / 35 cases on the production composition (build_services): 29 PASS, 6 FAIL committed as strict xfail (B1-B2 x3, B3 x2, B13). REVIEW: 1 must-fix, 3 should-fix, nits
+- Findings: F2 must-fix: /api/control schedule (livedata/control.py:175) and /api/live timeline (routers/live.py:117) build the plan with runtime.plan_builder: a broken plug-in config writes 2 relayable error events (strategies.registry) per page load, never deduped; plus get_live_run INSERTs and advisory locks. Fix: soak.readonly_plan for the API plan. F1 should-fix: routers/live.py:167 get_live_run INSERTs runs+sim_accounts every request (use the read-first lookup of routers/control.py:44). F3 should-fix: routers/control.py:117 part failure logs at error (log mirror writes log.api rows per request); use warning. F4 should-fix: pending proposals N+1 (live.py:135-142, 3 statements each); the normal day sits exactly at LIVE_MAX_STATEMENTS 80, 2 pending -> 86
+- Passed: no Questrade (live/stale/missing marks), replay rows on the same symbol change nothing, DST week boundary + weekend-carried position + fees/Claude/net to the cent, Thanksgiving, books 1-cent flip, unrealised/partial/S4 invariant, statements 79 constant (1 vs 20 positions, 10 vs 100 items), part isolation masked x21. Budget: serial median 99 ms today / 95 ms run+expand (equity 20-64 ms, positions 17-68, timeline 20-24); under 4-worker load 730 ms
+- Commits: 44fd758 (tests/gauntlet/test_db_data_breaker.py, log)
+- Gate: targeted lane only (no production change): 338 passed, 35 skipped, 6 xfailed. Log: Trader/docs/build/agents/DB-GDATA-gauntlet-a1.md
+
+### 2026-09-28 21:10 MT · DB-GDATA · Builder · attempt 2 · started
+- Fix round for the data gauntlet (F1 read-first live run, F2 read-only plan via soak.readonly_plan, F3 warning log, F4 batched pending views, nits). Worktree agent-ac8ffa30489e9187b. Log: Trader/docs/build/agents/DB-GDATA-builder-a2.md
+
+### 2026-09-28 21:10 MT · DB-T11 · Verifier+Breaker+Reviewer · attempt 1 · finished
+- Result: VERIFY PASS (02dcccf on trunk, boxes 1-10 ticked, tsc + vitest 72/699, build ok). BREAK 11 PASS / 3 FAIL of 14 (failures committed as it.fails so the shared gate stays green). REVIEW: 0 must-fix, 3 should-fix, nits
+- Commits: f8be0ca
+- Gate: web check 73 files / 710 passed + 3 expected fail, web build ok (no Python changed)
+- Notes: S1 (B12) D9 on the Dashboard: Reject is .btn-danger var(--bad) (styles.css:202) and a failed/missed timeline label is var(--bad) (pages/dashboard/dashboard.css:142); the .live-page mapping only remaps --tone. S2 (B13) header live dot is `light tone-ok` (Layout.tsx:113), green on every page. S3 (B8, DB-T9 wiring) a kill-switch reset on Control never refetches /api/control (KillSwitchPanel invalidates only dashboard; SSE killswitch topic has no system prefix). Migration spot-checks OK (Telegram test on Control is the open-question-6 change; the dropped 20-event cap is covered by the server's 100 bound). Log: Trader/docs/build/agents/DB-T11-gauntlet-a1.md
+
+### 2026-09-28 21:11 MT · DB-T11 · Builder · attempt 2 · started
+- Fix round 1 for the web wiring gauntlet (B8 Control refresh after kill-switch reset, B12 D9 status colours for Reject/Pause and failed timeline labels, B13 header live dot tone, nits: pre-paint theme, DayDecisions back/forward, dead code, --chart-exit). Worktree agent-a2cfde12b409f73ff. Log: Trader/docs/build/agents/DB-T11-builder-a2.md
+
+### 2026-09-28 21:19 MT · DB-T11 · Builder · attempt 2 · finished
+- Result: done, B8/B12/B13 fixed (breaker 14/14, the 3 it.fails now plain it), nits done
+- Commits: 31f29de
+- Gate: web only: tsc clean, vitest 73 files / 708 passed, web build ok (no Python changed)
+- Notes: B8 KillSwitchPanel invalidates system+dashboard, SSE killswitch topic += system (queryKeys.test + web_pages_breaker topic case updated). B12 .live-page/.control-page .btn-danger and failed timeline label -> --status-bad. B13 header live dot status-ok/muted, status-* classes global. Pre-paint theme via public/theme-init.js (CSP script-src 'self' forbids inline). DayDecisions re-reads URL filters on back/forward. --chart-exit slate in tokens.css (orchestrator-requested). Deleted: pages/system/JobRuns.tsx + JobRuns.test.tsx, StatusCards/RateLimits components + their tests (file keeps FailedSends, utcOffsetLabel, texts), unused dashboard.css rules. New tests: layout/dbT11FixRound1.test.tsx (10). Log: Trader/docs/build/agents/DB-T11-builder-a2.md
+
+### 2026-09-28 21:35 MT · DB-T10 · Builder · attempt 1 · finished
+- Result: done, 4d4b3ef. runtime: QuoteTap around the shared LazyQuestrade (engines + bot market data), MarkPublisher as WorkerDeps.marks, close() via the worker stack after shutdown, heartbeat parts (rate_limit, questrade, candle_batches, marks) each guarded. Ruling applied: PublishStep.skipped gains "busy". D2 proofs: worker day identical on/off and failing-all-day (trading rows, chat incl. edits/answers, Questrade call log with arguments); static import + mark-table reader allow-list + no Candle from marks; git-diff D2 test (TRADER_D2_BASE or parent of first DB-T1 commit; checked with 459e172: pass)
+- Gate: gate.sh passed (ruff, format, mypy; pytest 4091 passed / 35 skipped / 6 xfailed; vitest 708)
+- Notes: two old tests pinned the whole heartbeat extra and now check only rate_limit (test_runtime_phase4, gauntlet/test_p4_t18_breaker). test_d2_deploy_diff.py (DB-T12 file) written here per orchestrator. Log: Trader/docs/build/agents/DB-T10-builder-a1.md
+
+### 2026-09-28 21:29 MT · DB-T10 · Verifier+Breaker+Reviewer · attempt 1 · started
+- Gauntlet for 4d4b3ef (runtime tap/publisher wiring, D2 proofs): mutant sensitivity of test_marks_live_unchanged, SIGTERM/close, heartbeat parts, one shared client, D2 deploy diff base, --once/replay never tap. Tests in tests/gauntlet/test_db_t10_breaker.py. Worktree agent-a16bc3fcbeb528c93. Log: Trader/docs/build/agents/DB-T10-gauntlet-a1.md
+
+### 2026-09-28 21:33 MT · DB-GDATA · Builder · attempt 2 · finished
+- Result: all 6 breaker strict xfails pass (marks removed): B1-B2 x3 read-only in production wiring, B3 x2 no registry event, B13 pending adds no statements
+- Fixes: F1 routers/live.py reads the active live run (new livedata/readonly.live_run, get_live_run only on a fresh DB; Control's _live_run delegates to it). F2 live timeline + Control schedule use livedata/readonly.day_plan = soak.readonly_plan with a quiet registry over the API registry's plug-in classes (services.plan / runtime.plan_builder untouched for /api/dashboard). F3 Control part failures log at warning. F4 _pending: 1 outer-joined SELECT + 1 symbols SELECT into the identity map, then proposal_view (constant for 0/2/10 pending)
+- Nits: fallback session_day = last session; live header trading + Control engine chip on the session day (same as the lights); activity_feed(tz=) with ZoneInfo(env.tz_display); risk imports periods.session_day; strategy_cards 2 batched statements total. Equity < vs <=: kept (open DURING the minute vs held AT its end), commented; changing it broke 3 DB-T3 tests
+- Perf (serial, test DB): /api/live 74 statements (was 80, ceiling 80), median 90.4 ms today, 82.3 ms run+expand
+- Commits: 86fb541
+- Gate: full gate green (pytest 4079 passed, 35 skipped; web 699 passed); after rebase onto 4d4b3ef targeted lane 325 passed, 35 skipped. Log: Trader/docs/build/agents/DB-GDATA-builder-a2.md
+
+### 2026-09-28 21:50 MT · DB-T10 · Verifier+Breaker+Reviewer · attempt 1 · finished
+- Result: PASS. Verdict: the deploy from 459e172 is NOT a trading change under D2 (no decision-path file, settings or crontab change, golden unchanged, protected test folders only gained files). Behaviour is identical with the marks on and off in rows, chat, Questrade call arguments, per-step event-loop iterations and leftover locks.
+- Commits: a22e2ce (tests/gauntlet/test_db_t10_breaker.py, 13 tests / 21 cases: 20 pass, 1 xfail strict)
+- Gate: checker lane 817 passed, 35 skipped (contract stubs), 1 xfailed. No production change, so no full gate.
+- Notes: F1 should-fix (test): test_marks_live_unchanged misses the yield, 3 ms delay and leftover-lock mutants. The breaker's loop-iteration and lock probes catch them, so fold those probes in. F2 should-fix (shutdown only): a publisher thread stuck past statement_timeout blocks interpreter exit until the SIGKILL at stopwaitsecs 60 s. Fix with keepalive/tcp_user_timeout or a daemon executor. Nits: --once builds but never starts the publisher. The two loosened P4 tests are still meaningful. The busy ruling is accepted. Log: Trader/docs/build/agents/DB-T10-gauntlet-a1.md
+
+### 2026-09-28 21:50 MT · DB-T12 · Builder · attempt 1 · started
+- End to end: seeded normal day perf test (300 ms), no-Questrade, numbers end to end, D2 deploy diff, docs (SPEC, master plan 7.1), orchestrator F1 (fold loop-iteration + lock probes into test_marks_live_unchanged) and F2 (daemon marks executor), then LIVE deploy to trader-dev (outside 07:15-14:30 MT). Worktree agent-a8efa3988810e2006. Log: Trader/docs/build/agents/DB-T12-builder-a1.md
+
+### 2026-09-28 22:16 MT · DB-T12 · Builder · attempt 1 · finished (LIVE deploy blocked)
+- Result: code done and pushed; LIVE deploy BLOCKED by a full disk on the Docker VM 192.168.68.73 (root 19G, 100%, 0 avail): docker load and the compose recreate failed with no space left on device. trader-dev never went down (still 459e172 since 23:00:21Z, health 200); cron_gap for the attempt windows: nothing skipped or interrupted
+- Commits: 4df5444
+- Gate: gate.sh exit 0 (ruff, format, mypy clean; pytest 4123 passed / 35 skipped; vitest 708)
+- D2: TRADER_D2_BASE=459e172 (from /api/meta): deploy diff, d2 static, marks_live_unchanged, golden 17 passed, none skipped: not a trading change
+- Perf (serial, test DB): /api/live 76 statements (same trimmed), median 91.7 ms today, 83.4 ms run+expand; /api/control 71.4 ms
+- Needs Stephen: free space on .73 (a docker builder/image prune there was denied to the agent), then re-run the deploy and LIVE 3-7. Log: Trader/docs/build/agents/DB-T12-builder-a1.md
+
+### 2026-09-28 22:55 MT · DB-DENSE · Builder · attempt 1 · started
+- Dense Dashboard layout (web only): stat strip of compact tiles, equity hero + position cards (compact rows over 6), sidebar (kill-switch bars, activity stream, rejections), timeline chip row. No Python/API/server/settings changes. Worktree agent-a45734539d893c1ad. Log: Trader/docs/build/agents/DB-DENSE-builder-a1.md
+
+### 2026-09-28 23:13 MT · DB-DENSE · Builder · attempt 1 · finished
+- Result: done, dense Dashboard layout (web only, not deployed). Stat strip of tiles, equity hero card with a tall chart, positions as cards (up to 6, rows above) or a one-line FLAT bar, full-height sidebar (pending approvals, kill-switch bars, scrolling activity, rejections), timeline chips
+- Commits: 496f26a
+- Gate: web only: npm ci, tsc + vitest 74 files / 728 passed (was 73 / 708), vite build ok. No Python touched
+- Notes: tests changed: RiskPanel.test "with no cap" (progressbar query scoped to the open-risk bar, since switches now have bars) + 1 new bar test. New: pages/live/DenseDashboard.test.tsx (19). Behaviour kept: regions Session/Costs/Books/Equity/Risk/Positions/Activity/Rejected/Today/Pending, ?range/?expand clamp/?proposal, SSE, per-part Retry, safeLink, XSS text, flat zero money, 44 px targets. Pending approvals keep their old show rule (manual mode, or a proposal waiting in auto). Visual check with Playwright at 1366/1024/390 px, dark + light: no horizontal scroll. Log: Trader/docs/build/agents/DB-DENSE-builder-a1.md

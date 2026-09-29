@@ -28,7 +28,7 @@ FactorSource = Literal["symbol", "median", "default"]
 
 DEFAULT_VOLUME_FACTOR = Decimal("0.7143")  # 1 / 1.4: the middle of the probe's 1.3-1.5x
 FACTOR_MIN = Decimal("0.05")  # a measured factor outside [FACTOR_MIN, FACTOR_MAX] is not trusted
-FACTOR_MAX = Decimal("2")
+FACTOR_MAX = Decimal("1.1")  # real factors are ~0.67-0.77; a looser cap would let one bad factor inflate rvol
 FACTOR_PLACES = Decimal("0.000001")
 # Quotes are the bar only right after it closes: later, the quote's high/low are no longer the bar's.
 QUOTE_BAR_MAX_LAG = timedelta(minutes=5)

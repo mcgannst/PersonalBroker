@@ -583,6 +583,11 @@ class MarketDataService:
                     factor = measured_factor(candle_volume, todays[sid])
                     if factor is None:
                         reasons["no_volume"] += 1
+                    elif not usable_factor(factor):
+                        # Out of range (e.g. a near-zero quote volume): not trusted and not stored, so one
+                        # absurd value can't overflow NUMERIC(10,6) and lose the whole session's factors.
+                        reasons["factor_out_of_range"] += 1
+                        factor = None
                     else:
                         factors.append(factor)
             rows.append(

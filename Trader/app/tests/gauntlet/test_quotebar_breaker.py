@@ -562,11 +562,6 @@ async def test_the_same_bar_gives_the_same_decision_whatever_its_source() -> Non
 
 
 @pytest.mark.db
-@pytest.mark.xfail(
-    strict=True,
-    reason="QUOTEBAR should-fix: measured_factor is stored unclamped in NUMERIC(10,6); one symbol with a "
-    "factor >= 10,000 (a near-zero quote volume) overflows the single INSERT and loses every symbol's factor",
-)
 async def test_one_absurd_measured_factor_does_not_lose_the_whole_session(
     db_factory: sessionmaker[Session],
 ) -> None:

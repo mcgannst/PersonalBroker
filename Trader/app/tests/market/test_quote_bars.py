@@ -111,10 +111,11 @@ def test_scale_volume_rounds_half_up() -> None:
     ("factor", "usable"),
     [
         (Decimal("0.67"), True),
-        (Decimal("2"), True),
+        (Decimal("1.1"), True),
         (Decimal("0.05"), True),
         (Decimal("0.04"), False),
-        (Decimal("2.01"), False),
+        (Decimal("1.11"), False),
+        (Decimal("2"), False),
         (Decimal("0"), False),
         (None, False),
     ],

@@ -123,8 +123,11 @@ class QuoteTap:
         self, reqs: Sequence[CandleRequest], *, deadline_s: float | None = None
     ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
         before: tuple[datetime, float, dict[str, float]] | None = None
-        try:
+        try:  # its own guard: a failing day roll never drops this batch's record
             self._roll_day()
+        except Exception as exc:
+            self._failed("roll_day", exc)
+        try:
             before = (self._clock.now(), asyncio.get_running_loop().time(), self._market())
         except Exception as exc:
             self._failed("batch_start", exc)
@@ -216,10 +219,15 @@ class QuoteTap:
             self._failed("batch_end", exc)
 
     def _failed(self, where: str, exc: Exception) -> None:
+        """Logs once per failure streak; never raises (it runs inside `except` blocks, so a raising logger
+        would otherwise replace the caller's result or the inner exception)."""
         if self._failing:
             return
         self._failing = True
-        log.warning("marks.tap_bookkeeping_failed", where=where, error_type=type(exc).__name__)
+        try:
+            log.warning("marks.tap_bookkeeping_failed", where=where, error_type=type(exc).__name__)
+        except Exception:  # noqa: S110 - a broken log sink must never reach the trading caller
+            pass
 
     def _ok(self) -> None:
         self._failing = False
@@ -270,7 +278,10 @@ class QuoteTap:
         except Exception as exc:
             if not self._health_failing:
                 self._health_failing = True
-                log.warning("marks.tap_health_failed", error_type=type(exc).__name__)
+                try:  # never raises, even when the logger does
+                    log.warning("marks.tap_health_failed", error_type=type(exc).__name__)
+                except Exception:  # noqa: S110
+                    pass
             return {}
         self._health_failing = False
         return detail

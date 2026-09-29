@@ -2,6 +2,7 @@
 or a secret (SPEC §14)."""
 
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 
 import pytest
@@ -12,6 +13,9 @@ from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException
 
 from trader.api.errors import ApiError, install_error_handlers
+
+# A unique secret: logs and tracebacks carry the checkout path, which could contain any short literal.
+SECRET = f"SECRET-{uuid.uuid4().hex}"
 
 
 class _Body(BaseModel):
@@ -52,7 +56,7 @@ def _app(*, request_id: str | None = None) -> FastAPI:
 
     @app.get("/boom")
     def boom() -> None:
-        raise RuntimeError("token=abc")
+        raise RuntimeError(f"token={SECRET}")
 
     return app
 
@@ -140,7 +144,7 @@ def test_unhandled_exception_is_a_500_with_no_secret_in_body_or_log(
     assert resp.json() == {
         "error": {"code": "internal", "message": "Internal error", "fields": None, "request_id": "r-9"}
     }
-    assert "abc" not in resp.text
+    assert SECRET not in resp.text
     assert any(e.get("error_type") == "RuntimeError" for e in logs)
     captured = capsys.readouterr()
-    assert "abc" not in repr(logs) + caplog.text + captured.out + captured.err
+    assert SECRET not in repr(logs) + caplog.text + captured.out + captured.err

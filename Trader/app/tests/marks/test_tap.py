@@ -275,6 +275,48 @@ async def test_a_recording_failure_while_the_inner_call_raises_leaves_the_inner_
     assert err.__context__ is None and err.__cause__ is None
 
 
+# --- fix round 1 (gauntlet F1, N4) --------------------------------------------------------------------------
+
+
+class RaisingLog:
+    def warning(self, *_a: Any, **_k: Any) -> None:
+        raise RuntimeError("log sink broke")
+
+    info = debug = error = warning
+
+
+async def test_a_raising_logger_never_replaces_a_result_an_exception_or_a_health_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tap_mod, "log", RaisingLog())
+    inner = Inner()
+    inner.quotes_result = [quote(101)]
+    assert await QuoteTap(inner, BadClock()).quotes([101]) is inner.quotes_result
+    inner.exc = err = asyncio.CancelledError("the 9:35 guard")
+    with pytest.raises(asyncio.CancelledError) as info:
+        await QuoteTap(inner, BadClock()).candles_many([req(1)], deadline_s=45.0)
+    assert info.value is err and err.__context__ is None
+    inner.exc = None
+    assert await QuoteTap(inner, BadClock()).candles_many([req(1)], deadline_s=45.0) is inner.many_result
+    assert QuoteTap(inner, BadClock()).health_detail() == {}
+
+
+async def test_a_failing_day_roll_still_records_the_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    inner = Inner()
+    tap = QuoteTap(inner, FixedClock(et(TUE, 9, 35, 5)))
+
+    def broken(self: QuoteTap) -> None:
+        raise RuntimeError("roll broke")
+
+    monkeypatch.setattr(QuoteTap, "_roll_day", broken)
+    with capture_logs() as logs:
+        await tap.candles_many([req(1)], deadline_s=45.0)
+    monkeypatch.undo()
+    (batch,) = tap.health_detail()["candle_batches"]
+    assert batch["symbols"] == 1 and batch["raised"] is None
+    assert [e["where"] for e in _warnings(logs)] == ["roll_day"]
+
+
 # --- 3. candles_many untouched ------------------------------------------------------------------------------
 
 

@@ -6,9 +6,14 @@ observations touches no database. Otherwise the whole pass runs in the publisher
 (threads named `marks*`), never on the event loop and never in the default executor that the Questrade
 client's token fetch uses, so a stuck publisher can never hold a thread the trading path needs. The pass is
 one short transaction on one pooled connection with `statement_timeout` and `lock_timeout` set, and reads the
-trading tables with plain SELECTs only (no `FOR UPDATE`, no advisory lock), so it never waits on or blocks a
-trading row lock. It writes only `quote_marks` (the latest observation per symbol) and `mark_bars` (1-minute
-bars of observed prices), for symbols the live run holds or has working orders in.
+trading tables with plain SELECTs only (no `FOR UPDATE`, no advisory lock). The only row locks it takes
+outside its own tables are the `KEY SHARE` locks its inserts' foreign-key checks need (the live `runs` row
+and the `symbols` rows), and it takes those first, in id order, with `NOWAIT`: when a trading transaction
+holds a conflicting lock (nightly's `upsert_symbols` locks symbols rows `FOR UPDATE`) the pass is skipped at
+once and retried at the next cadence, so the publisher never waits while holding a key lock and can never
+make a trading transaction the victim of a deadlock. It writes only `quote_marks` (the latest observation per
+symbol) and `mark_bars` (1-minute bars of observed prices), for symbols the live run holds or has working
+orders in.
 
 A failing pass logs one masked warning and writes one `warning` event (through `deps.event`, in the executor)
 per failure streak, and one `info` event on the next success; it never raises. It never calls Questrade, and
@@ -26,6 +31,7 @@ from typing import Any
 import structlog
 from sqlalchemy import delete, func, select, text, union
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from trader.adapters.questrade.models import QtQuote
@@ -34,6 +40,8 @@ from trader.logging_setup import redact_text
 from trader.market.clock import Clock, et_date
 from trader.marks.types import (
     MARK_BARS_KEEP_DAYS,
+    MAX_OBSERVATIONS_PER_SYMBOL,
+    MAX_TAP_SYMBOLS,
     PUBLISH_INTERVAL_S,
     PUBLISH_STATEMENT_TIMEOUT_MS,
     EventWriter,
@@ -50,6 +58,19 @@ THREAD_PREFIX = "marks"
 # One statement sets both limits for this transaction only (SET LOCAL semantics: is_local = true).
 SET_LIMITS = "SELECT set_config('statement_timeout', :ms, true), set_config('lock_timeout', :ms, true)"
 MARK_COLUMNS = ("bid", "ask", "last", "quote_time", "observed_at", "written_at", "is_halted")
+# The rows the inserts' foreign-key checks lock (KEY SHARE), taken first, in one order and WITHOUT waiting: a
+# pass that meets a conflicting lock (nightly's upsert_symbols takes FOR UPDATE on symbols rows) gives up at
+# once instead of holding some key locks while it waits for others, so it can never close a deadlock cycle
+# with a trading transaction (DB-T2 gauntlet F2).
+LOCK_RUN = "SELECT id FROM trader.runs WHERE id = :run_id FOR KEY SHARE NOWAIT"
+LOCK_SYMBOLS = "SELECT id FROM trader.symbols WHERE id = ANY(:sids) ORDER BY id FOR KEY SHARE NOWAIT"
+LOCK_NOT_AVAILABLE = "55P03"  # SQLSTATE lock_not_available (NOWAIT)
+# A carried-over busy pass keeps at most this many observations (the tap's own bound).
+MAX_CARRY = MAX_OBSERVATIONS_PER_SYMBOL * MAX_TAP_SYMBOLS
+
+
+class _Busy(Exception):
+    """A referenced row is locked by another transaction right now: this pass is skipped, not failed."""
 
 
 @dataclass(frozen=True)
@@ -96,6 +117,8 @@ class MarkPublisher:
         # The state below is written only in the executor's thread (the health read only reads it).
         self._symbol_ids: dict[int, int] = {}  # Questrade id -> symbols.id
         self._failures = 0
+        self.busy_passes = 0  # passes skipped because a referenced row was locked (never a failure)
+        self._carry: list[ObservedQuote] = []  # a busy pass's observations, retried with the next pass
         self._pruned_day: date | None = None
         self._written_at: datetime | None = None
         self._symbols = 0
@@ -152,12 +175,26 @@ class MarkPublisher:
     def _pass(self, observed: Sequence[ObservedQuote]) -> PublishStep:
         now = EPOCH
         run_id: int | None = None
+        carried, self._carry = self._carry, []
+        if carried:  # a busy pass's observations first: observation order is kept
+            observed = [*carried, *observed]
         try:
             now = self.deps.clock.now()
             run_id = self.deps.run_id()
             if run_id is None:  # no live run: the observations are dropped
                 return PublishStep(now, "no_run", 0, 0)
             marks, bars = self._write(observed, run_id, now)
+        except _Busy:
+            # Not a failure (no warning, no event, the streak is untouched): the rows are locked by another
+            # transaction for now. The transaction was rolled back; the next cadence retries these
+            # observations.
+            self.busy_passes += 1
+            self._carry = list(observed[-MAX_CARRY:])
+            try:
+                log.debug("marks.publish_busy", busy_passes=self.busy_passes, carried=len(self._carry))
+            except Exception:  # noqa: S110 - a skipped pass never raises
+                pass
+            return PublishStep(now, None, 0, 0)
         except Exception as exc:
             self._failed(exc, run_id)
             return PublishStep(now, "error", 0, 0)
@@ -207,6 +244,19 @@ class MarkPublisher:
         wanted = {int(sid) for sid in s.execute(union(held, working)).scalars()}
         return {qid: sid for qid, sid in mapped.items() if sid in wanted}
 
+    @staticmethod
+    def _lock_keys(s: Session, run_id: int, sids: list[int]) -> None:
+        """KEY SHARE on the run row and the symbols rows the inserts reference, in id order, NOWAIT. KEY SHARE
+        conflicts only with FOR UPDATE (a delete or a key-column update), never with the trading path's
+        FOR NO KEY UPDATE / plain UPDATE of a row; a conflict raises `_Busy` at once (the pass is skipped)."""
+        try:
+            s.execute(text(LOCK_RUN), {"run_id": run_id})
+            s.execute(text(LOCK_SYMBOLS), {"sids": sids})
+        except DBAPIError as exc:
+            if getattr(exc.orig, "sqlstate", None) == LOCK_NOT_AVAILABLE:
+                raise _Busy from exc
+            raise
+
     def _apply(
         self, s: Session, observed: Sequence[ObservedQuote], run_id: int, now: datetime
     ) -> tuple[int, int]:
@@ -214,6 +264,7 @@ class MarkPublisher:
         wanted = self._wanted(s, observed, run_id)
         if not wanted:
             return (0, 0)
+        self._lock_keys(s, run_id, sorted(set(wanted.values())))
         latest: dict[int, ObservedQuote] = {}
         # (symbol_id, minute) -> [open, high, low, close, samples], in observation order
         bars: dict[tuple[int, datetime], list[Any]] = {}

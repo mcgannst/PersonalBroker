@@ -10,6 +10,7 @@
 """
 
 import asyncio
+import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -18,12 +19,14 @@ from typing import Any
 import pytest
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
+from structlog.testing import capture_logs
 
 from tests.factories import add_run, add_symbol
 from tests.marks.test_publisher import Events, Tap
 from trader.adapters.questrade.models import QtQuote
 from trader.db import models as m
 from trader.market.clock import FixedClock
+from trader.marks import publisher as pub_mod
 from trader.marks.publisher import MarkPublisher, MarkPublisherDeps
 from trader.marks.types import ObservedQuote
 
@@ -314,13 +317,82 @@ async def test_trading_rows_locked_for_update_do_not_block_the_publisher(
     try:
         other.execute(select(m.Position).where(m.Position.id == world.position).with_for_update())
         other.execute(select(m.Order).where(m.Order.id == world.order).with_for_update())
-        # (the trading path locks orders and positions, never the live run's or a symbol's row)
+        # a row update that keeps the key (FOR NO KEY UPDATE, what a plain UPDATE takes) on the run's and the
+        # symbols' rows does not conflict with the publisher's KEY SHARE either
+        other.execute(select(m.Run).where(m.Run.id == world.live).with_for_update(key_share=True))
+        other.execute(select(m.Symbol).where(m.Symbol.id == world.aaa).with_for_update(key_share=True))
         pub, _, _ = publisher(db_factory, Tap([q(101, "10.00"), q(103, "30.00")]), lambda: world.live)
         try:
             step = await asyncio.wait_for(pub.run_once(), timeout=3)
         finally:
             pub.close()
-        assert step.skipped is None and step.marks_written == 2
+        assert step.skipped is None and step.marks_written == 2 and pub.busy_passes == 0
     finally:
         other.rollback()
         other.close()
+
+
+# --- fix round 1 (gauntlet F2): a symbols or run row locked FOR UPDATE skips the pass without waiting -------
+
+
+@pytest.mark.parametrize("locked", ["symbol", "run"])
+async def test_a_referenced_row_locked_for_update_skips_the_pass_at_once_and_retries_it(
+    db_factory: sessionmaker[Session], world: World, locked: str
+) -> None:
+    # nightly's upsert_symbols (ON CONFLICT DO UPDATE SET ticker, exchange: key columns) locks symbols rows
+    # FOR UPDATE; the publisher must neither wait for it nor count it as a failure
+    tap = Tap([q(101, "10.00", T1), q(103, "30.00", T1)], [q(101, "10.50", T2)])
+    pub, events, clock = publisher(db_factory, tap, lambda: world.live)
+    other = db_factory()
+    try:
+        if locked == "symbol":
+            other.execute(select(m.Symbol).where(m.Symbol.id == world.ccc).with_for_update())
+        else:
+            other.execute(select(m.Run).where(m.Run.id == world.live).with_for_update())
+        with capture_logs() as logs:
+            step, took = await _timed(pub.run_once())
+        assert took < 1.0  # NOWAIT: no lock_timeout (5 s), no deadlock_timeout (1 s) wait
+        assert step.skipped is None and (step.marks_written, step.bars_written) == (0, 0)
+        assert pub.busy_passes == 1 and pub.health_detail()["failing"] is False
+        assert [e["event"] for e in logs if e["log_level"] != "debug"] == []  # no warning, no event
+        assert marks(db_factory) == {} and bars(db_factory) == {}  # the pass was rolled back
+        # the locker is untouched: it can still update the key it locked (no deadlock, no abort)
+        if locked == "symbol":
+            other.execute(text("UPDATE trader.symbols SET ticker = 'CCC' WHERE id = :id"), {"id": world.ccc})
+        other.commit()
+        # the next cadence writes the carried observations with the new ones
+        clock.advance(timedelta(seconds=2))
+        step = await pub.run_once()
+        assert step.skipped is None and (step.marks_written, step.bars_written) == (2, 2)
+    finally:
+        other.rollback()
+        other.close()
+        pub.close()
+    got = marks(db_factory)
+    assert got[(world.live, world.aaa)].last == Decimal("10.50")
+    assert got[(world.live, world.ccc)].last == Decimal("30.00")
+    assert bars(db_factory)[(world.live, world.aaa, MINUTE)].samples == 2
+    assert events.rows == [] and pub.busy_passes == 1
+
+
+async def test_a_lock_timeout_on_the_mark_tables_is_still_a_failure_not_a_busy_pass(
+    db_factory: sessionmaker[Session], world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pub_mod, "PUBLISH_STATEMENT_TIMEOUT_MS", 300)
+    pub, events, _ = publisher(db_factory, Tap([q(101, "10.00")]), lambda: world.live)
+    other = db_factory()
+    try:
+        other.execute(text("LOCK TABLE trader.quote_marks IN ACCESS EXCLUSIVE MODE"))
+        step = await pub.run_once()
+    finally:
+        other.rollback()
+        other.close()
+        pub.close()
+    assert step.skipped == "error" and pub.busy_passes == 0
+    assert [row[0] for row in events.rows] == ["warning"]
+
+
+async def _timed(coro: Any) -> tuple[Any, float]:
+    t0 = time.perf_counter()
+    out = await asyncio.wait_for(coro, timeout=10)
+    return out, time.perf_counter() - t0

@@ -679,11 +679,6 @@ class RaisingLog:
     info = debug = warning
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DB-T2 gauntlet finding F1: QuoteTap._failed (and health_detail's log) call the logger unguarded "
-    "inside `except Exception:`; a raising logger replaces the caller's result or exception (S1a)",
-)
 async def test_a_raising_logger_during_a_bookkeeping_failure_still_leaves_the_callers_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1185,12 +1180,6 @@ def test_no_decision_path_module_reads_the_mark_tables_and_no_mark_becomes_a_can
 
 
 @pytest.mark.db
-@pytest.mark.xfail(
-    strict=True,
-    reason="DB-T2 gauntlet finding F2: a publisher insert holds KEY SHARE on one symbols row (FK check) "
-    "while waiting on another that nightly's upsert_symbols holds FOR UPDATE (ON CONFLICT SET "
-    "ticker/exchange, unique key columns); nightly then waits on the first and is the deadlock victim",
-)
 async def test_the_nightly_symbol_upsert_is_never_the_deadlock_victim_of_a_publisher_pass(
     db_factory: sessionmaker[Session],
 ) -> None:

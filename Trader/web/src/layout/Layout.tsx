@@ -10,7 +10,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-do
 
 import { useApi } from "../api/client";
 import { qk } from "../api/queryKeys";
-import { Badge, Button, Light } from "../components/ui";
+import { Badge, Button } from "../components/ui";
 import { LiveUpdatesProvider, useLiveUpdates } from "../live/useLiveUpdates";
 import { THEME_STORAGE_KEY, type ThemeChoice } from "../theme/tokens";
 import { useAuth } from "./AuthContext";
@@ -108,9 +108,17 @@ function ThemeSwitch() {
 
 const navClass = ({ isActive }: { isActive: boolean }) => (isActive ? "nav-link is-active" : "nav-link");
 
+/** The header's live dot, in the status colours (design D9: sky when live, slate while reconnecting; never
+ * the money green). The shared Light's markup with a `status-*` class. */
 function LiveDot() {
   const { connected } = useLiveUpdates();
-  return <Light tone={connected ? "ok" : "muted"} label={connected ? "Live" : "Reconnecting"} />;
+  const label = connected ? "Live" : "Reconnecting";
+  return (
+    <span className={`light ${connected ? "status-ok" : "status-muted"}`} role="status" aria-label={label}>
+      <span className="light-dot" aria-hidden="true" />
+      <span className="light-label">{label}</span>
+    </span>
+  );
 }
 
 function MoreMenu() {

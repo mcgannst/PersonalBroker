@@ -287,7 +287,7 @@ describe("B6-B9 throttle, mutations and the polling fallback", () => {
   });
 
   // Known failure (gauntlet finding): it.fails keeps the shared gate green and fails once fixed; drop ".fails" in the fix round.
-  it.fails("B8: a kill-switch reset on Control refreshes the Control data at once (the lights come from /api/control)", async () => {
+  it("B8: a kill-switch reset on Control refreshes the Control data at once (the lights come from /api/control)", async () => {
     const api = new FakeApiClient({ killswitches: trippedDrawdown });
     renderWithProviders(<ControlPage />, { api, route: "/control" });
     const region = await screen.findByRole("region", { name: "Kill switches" });
@@ -410,7 +410,7 @@ const DIRECT_RED_GREEN = /(^|;)\s*(?!--)[a-z-]+\s*:[^;]*var\(--(ok|bad|ok-bg|bad
 
 describe("B12-B13 design D9: green and red only for money on the Dashboard", () => {
   // Known failure (gauntlet finding): it.fails keeps the shared gate green and fails once fixed; drop ".fails" in the fix round.
-  it.fails("B12: no element of the Dashboard is painted by a rule that uses the legacy green/red directly (without a .live-page override)", async () => {
+  it("B12: no element of the Dashboard is painted by a rule that uses the legacy green/red directly (without a .live-page override)", async () => {
     const timeline = [{ ...fx.timeline[0]!, status: "failed" as const }, ...fx.timeline.slice(1)];
     const api = new FakeApiClient({
       live: lfx.liveWith({ pending: [fx.pendingProposal], timeline, worker_stale: true, telegram_configured: false }),
@@ -444,7 +444,7 @@ describe("B12-B13 design D9: green and red only for money on the Dashboard", () 
   });
 
   // Known failure (gauntlet finding): it.fails keeps the shared gate green and fails once fixed; drop ".fails" in the fix round.
-  it.fails("B13: the app frame around the Dashboard (live dot, header) uses no legacy green/red tone once the stream is live", async () => {
+  it("B13: the app frame around the Dashboard (live dot, header) uses no legacy green/red tone once the stream is live", async () => {
     vi.stubGlobal(
       "EventSource",
       class extends FakeSource {

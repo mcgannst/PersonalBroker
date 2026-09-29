@@ -24,7 +24,8 @@ describe("query keys", () => {
 
   it("proposals invalidate the dashboard and proposal queries only", () => {
     expect(TOPIC_KEYS.proposals).toEqual(["dashboard", "proposals", "proposal", "position"]);
-    expect(prefixesFor(["proposals", "killswitch"])).toEqual(["dashboard", "proposals", "proposal", "position", "killswitches"]);
+    // killswitch also refreshes `system` (Control's control query, DB-T11 fix round 1)
+    expect(prefixesFor(["proposals", "killswitch"])).toEqual(["dashboard", "proposals", "proposal", "position", "killswitches", "system"]);
   });
 
   it("the live dashboard and Control keys sit under the dashboard and system prefixes (DB-T1)", () => {

@@ -1,4 +1,5 @@
-/* Dashboard and Candidates pages (P4-T13). Builds on src/styles.css tokens; phone first. */
+/* Pieces of the old Dashboard (P4-T13) still used by the live Dashboard (pending proposals, timeline, decisions)
+   and the Candidates page. Builds on src/styles.css tokens; phone first. */
 
 .text-tone {
   color: var(--tone);
@@ -22,24 +23,6 @@
 
 .ticker {
   font-size: 1.1rem;
-}
-
-.notice {
-  margin: var(--space-2) 0 0;
-  padding: var(--space-2) var(--space-3);
-  border-radius: 8px;
-  background: var(--tone-bg);
-  font-weight: 600;
-}
-
-.dash-header {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.dash-header .row {
-  justify-content: space-between;
 }
 
 /* ---------------------------------------------------------------- proposals */
@@ -87,37 +70,6 @@
   gap: var(--space-2);
 }
 
-/* ---------------------------------------------------------------- positions, tiles, switches */
-
-.position-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.position-card p {
-  margin: 0;
-}
-
-.tiles {
-  display: grid;
-  gap: var(--space-3);
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
-}
-
-.killswitch {
-  padding: var(--space-2) 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.killswitch:last-child {
-  border-bottom: none;
-}
-
-.killswitch p {
-  margin: 0;
-}
-
 /* ---------------------------------------------------------------- timeline */
 
 .timeline {
@@ -143,6 +95,12 @@
   color: var(--bad);
 }
 
+/* Design D9: a failed or missed step on the Dashboard and Control is a status (orange), not money red. */
+.live-page .timeline-item.tone-bad .timeline-label,
+.control-page .timeline-item.tone-bad .timeline-label {
+  color: var(--status-bad);
+}
+
 .timeline-item.is-next {
   background: var(--info-bg);
   border-radius: 8px;
@@ -158,29 +116,7 @@
   overflow-wrap: anywhere;
 }
 
-/* ---------------------------------------------------------------- events */
-
-.event {
-  padding: var(--space-2) 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.event:last-child {
-  border-bottom: none;
-}
-
-.event-message {
-  margin: var(--space-1) 0 0;
-  overflow-wrap: anywhere;
-}
-
 /* ---------------------------------------------------------------- candidates */
-
-.chip {
-  padding: 2px var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-}
 
 .brief {
   margin: 0;

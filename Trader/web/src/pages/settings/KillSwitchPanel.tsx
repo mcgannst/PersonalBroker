@@ -156,7 +156,10 @@ export function KillSwitchPanel({ showTradingControls = true, statusTones = fals
     onMutate: () => setNotice(null),
     onSuccess: (out, a) => {
       queryClient.setQueryData(qk.killswitches(), out);
+      // The Dashboard (`live`, under `dashboard`) and Control (`control`, under `system`) draw the switch
+      // lights from their own answers, so both refresh at once (DB-T11 fix round 1, B8).
       void queryClient.invalidateQueries({ queryKey: qk.dashboard() });
+      void queryClient.invalidateQueries({ queryKey: qk.system() });
       setResetOpen(null);
       setConfirmPause(false);
       setNotice(a.kind === "reset" ? `${a.label} reset.` : a.kind === "pause" ? "Paused: no new entries." : "Resumed.");

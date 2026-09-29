@@ -153,6 +153,28 @@ pre {
   --tone-bg: var(--muted-bg);
 }
 
+/* The status family (design D9: sky, amber, orange, slate; never the money green/red), usable anywhere, for
+   example the header's live dot. */
+.status-ok {
+  --tone: var(--status-ok);
+  --tone-bg: transparent;
+}
+
+.status-warn {
+  --tone: var(--status-warn);
+  --tone-bg: transparent;
+}
+
+.status-bad {
+  --tone: var(--status-bad);
+  --tone-bg: transparent;
+}
+
+.status-muted {
+  --tone: var(--status-muted);
+  --tone-bg: transparent;
+}
+
 .badge {
   display: inline-block;
   padding: 2px var(--space-2);
@@ -419,5 +441,14 @@ label.check-row,
 .live-page .error-box {
   border-color: var(--status-bad);
   background: transparent;
+  color: var(--status-bad);
+}
+
+/* Design D9 for the danger buttons (Reject, Pause, Reset) on the Dashboard and Control: an orange outline in the
+   status colour, never the money red. */
+.live-page .btn-danger,
+.control-page .btn-danger {
+  background: transparent;
+  border-color: var(--status-bad);
   color: var(--status-bad);
 }

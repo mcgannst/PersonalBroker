@@ -59,7 +59,8 @@ export const TOPIC_KEYS: Record<Topic, readonly string[]> = {
   // A closed trade also changes the journal day's trade count and realized P&L (`JournalDayOut`).
   trades: ["dashboard", "positions", "position", "trades", "metrics", "equity", "journal"],
   candidates: ["dashboard", "candidates"],
-  killswitch: ["dashboard", "killswitches"],
+  // `system` holds the Control page's `control` query, whose kill-switch lights come from /api/control.
+  killswitch: ["dashboard", "killswitches", "system"],
   events: ["dashboard", "events", "system"],
   journal: ["journal", "metrics"],
   jobs: ["dashboard", "jobs", "system", "candidates"],

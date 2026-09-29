@@ -5,7 +5,7 @@
 // checks and data, and a "Download CSV" link. Every stored text (reasons, Claude's rationale, notes) is
 // rendered as plain text: React escapes it, nothing is ever inserted as HTML.
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { useApi, type DecisionDayQuery, type DecisionDaysQuery } from "../../api/client";
@@ -287,6 +287,11 @@ function withFilters(params: URLSearchParams, f: Filters): URLSearchParams {
   return next;
 }
 
+/** The filter parameters of a URL as one comparable string (raw, before validation). */
+function filterKey(params: URLSearchParams): string {
+  return JSON.stringify([params.get("stage") ?? "", params.get("outcome") ?? "", params.get("ticker") ?? ""]);
+}
+
 function FilterBar({ filters, onChange }: { filters: Filters; onChange: (f: Filters) => void }) {
   return (
     <div className="row" style={{ gap: 12, flexWrap: "wrap" }} role="group" aria-label="Filters">
@@ -332,6 +337,17 @@ function DayBody({ day, runId }: { day: IsoDate; runId: number | null }) {
   const [params, setParams] = useSearchParams();
   const [filters, setFilters] = useState<Filters>(() => filtersFromParams(params));
   const [offset, setOffset] = useState(0);
+  // The URL's filter parameters as this view last wrote or read them. When the URL changes them by itself
+  // (back/forward, a link), the filters are read again; the view's own writes are not read back, so a ticker
+  // being typed (not yet a valid URL ticker) is never reset (DB-T11 fix round 1).
+  const urlFilters = filterKey(params);
+  const seenFilters = useRef(urlFilters);
+  useEffect(() => {
+    if (urlFilters === seenFilters.current) return;
+    seenFilters.current = urlFilters;
+    setFilters(filtersFromParams(params));
+    setOffset(0);
+  }, [urlFilters, params]);
   const ticker = filters.ticker.trim();
   const q: DecisionDayQuery = {
     date: day,
@@ -349,7 +365,9 @@ function DayBody({ day, runId }: { day: IsoDate; runId: number | null }) {
   const changeFilters = (f: Filters) => {
     setFilters(f);
     setOffset(0);
-    setParams(withFilters(params, f), { replace: true });
+    const next = withFilters(params, f);
+    seenFilters.current = filterKey(next);
+    setParams(next, { replace: true });
   };
 
   if (dayQuery.isPending) return <Loading />;

@@ -1238,7 +1238,8 @@ describe("live updates (T12)", () => {
 
     seed();
     act(() => es.emit("invalidate", { topics: ["killswitch"] }));
-    expect(invalidated()).toEqual(["dashboard", "killswitches"]);
+    // DB-T11 fix round 1 (B8): the Control page's lights come from /api/control (under `system`)
+    expect(invalidated()).toEqual(["dashboard", "killswitches", "system"]);
 
     seed();
     act(() => es.emit("invalidate", { topics: ["__proto__", "constructor", "toString", "hasOwnProperty", 42, null] }));

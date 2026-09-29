@@ -7,7 +7,9 @@ Only complete bars (end <= clock.now()) are ever written to the candle cache.
 
 import asyncio
 import dataclasses
+from collections import Counter
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any, Protocol
@@ -16,7 +18,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from trader.adapters.questrade.client import QuestradeApiError
+from trader.adapters.questrade.client import QuestradeApiError, missing_reason, reason_key
 from trader.adapters.questrade.models import CandleRequest, QtQuote
 from trader.db import models as m
 from trader.db.session import session_scope
@@ -63,6 +65,38 @@ class QuoteClient(Protocol):
     ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]: ...
 
 
+@dataclass(frozen=True)
+class OpeningScan:
+    """FIX-401: the health of one `opening_bars` call. `reasons` counts the missing reasons without
+    Questrade's code and message ("questrade_error: HTTP 401", "timeout", ...)."""
+
+    session_date: date
+    universe: int
+    bars: int
+    missing: int
+    reasons: dict[str, int] = field(default_factory=dict)
+
+    def detail(self) -> dict[str, Any]:
+        """The job-detail keys: universe, bars, missing, missing_reasons."""
+        return {
+            "universe": self.universe,
+            "bars": self.bars,
+            "missing": self.missing,
+            "missing_reasons": dict(self.reasons),
+        }
+
+    @property
+    def top_reason(self) -> str | None:
+        if not self.reasons:
+            return None
+        return min(self.reasons.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+
+    @property
+    def unhealthy(self) -> bool:
+        """At least half of the universe has no opening bar (or there is no bar at all)."""
+        return self.universe > 0 and (self.bars == 0 or 2 * self.missing >= self.universe)
+
+
 def _from_row(row: m.IntradayCandle, step: timedelta) -> Candle:
     return Candle(row.ts, row.ts + step, row.open, row.high, row.low, row.close, row.volume, row.vwap)
 
@@ -85,6 +119,7 @@ class MarketDataService:
         # symbols.id -> questrade_id for quotes(), kept for the process lifetime; an entry is dropped when
         # Questrade returns no quote for it, so a re-mapped symbol is re-read from the database.
         self._quote_qids: dict[int, int] = {}
+        self._opening_scan: OpeningScan | None = None
 
     async def _db[T](self, step: Callable[..., T], *args: Any) -> T:
         """Runs one synchronous database step of `quotes()` or `candles()`. Inline here (the worker and the
@@ -230,7 +265,7 @@ class MarketDataService:
             if result is None:
                 missing[sid] = "timeout"
             elif isinstance(result, QuestradeApiError):
-                missing[sid] = f"questrade_error: HTTP {result.status}"
+                missing[sid] = missing_reason(result)
             else:
                 found = opening_bar(result, self._cal, session_date)
                 if found is None:
@@ -244,7 +279,14 @@ class MarketDataService:
                 for sid, found in fetched.items():
                     repo.upsert_intraday_candles(s, sid, OPENING_BAR_CODE, [found])
         bars.update(fetched)
+        reasons = Counter(reason_key(r) for r in missing.values())
+        self._opening_scan = OpeningScan(session_date, len(ids), len(bars), len(missing), dict(reasons))
         return OpeningBars(bars, missing)
+
+    def pop_opening_scan(self) -> OpeningScan | None:
+        """The counts of the last `opening_bars` call, once (the engine takes them after each event)."""
+        scan, self._opening_scan = self._opening_scan, None
+        return scan
 
     def _market_stats(self) -> dict[str, float] | None:
         """The client's market-category counters (requests, 429s, pause seconds...), when it keeps them."""

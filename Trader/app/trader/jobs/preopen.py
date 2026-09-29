@@ -17,6 +17,7 @@ import structlog
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from trader.adapters.questrade.client import QuestradeApiError
 from trader.db import models as m
 from trader.engine.killswitch import KillSwitches
 from trader.logging_setup import redact_text
@@ -46,6 +47,10 @@ class PreopenDeps:
     run_id: int
     notifier: Notifier
     render: Renderer
+    # FIX-401: ONE real market-data call through the app's client (a quote for SPY, else the first universe
+    # symbol); returns the ticker quoted, None when no symbol has a Questrade id, and raises the
+    # QuestradeApiError Questrade answered with. None: no `market_data` check.
+    market_check: Callable[[date], Awaitable[str | None]] | None = None
 
 
 def _ok(name: str, detail: str) -> Check:
@@ -83,6 +88,21 @@ async def _token(deps: PreopenDeps, session_date: date, settings: RuntimeSetting
     except Exception as exc:  # any failure means the token is unusable
         return _error("token", f"Questrade token refresh failed: {_exc_text(exc)}")
     return _ok("token", "Questrade token OK")
+
+
+async def _market_data(deps: PreopenDeps, session_date: date, settings: RuntimeSettings) -> Check:
+    """FIX-401: a minted token is not proof that Questrade serves market data (on 09-29 it refused every
+    call with HTTP 401). One real quote; a 401/403 (or any other failure) fails the check and alerts."""
+    assert deps.market_check is not None
+    try:
+        ticker = await deps.market_check(session_date)
+    except QuestradeApiError as exc:
+        if exc.status in (401, 403):
+            return _error("market_data", f"Questrade refused market data: {_one_line(exc.summary)}")
+        return _error("market_data", f"Questrade market data call failed: {_one_line(exc.summary)}")
+    if ticker is None:
+        return _warning("market_data", "no symbol with a Questrade id to quote (market data not checked)")
+    return _ok("market_data", f"Questrade market data OK (HTTP 200, quote {ticker})")
 
 
 async def _universe(deps: PreopenDeps, session_date: date, settings: RuntimeSettings) -> Check:
@@ -170,7 +190,10 @@ async def run_preopen(deps: PreopenDeps, session_date: date) -> dict[str, Any]:
         return dict(NOT_A_SESSION)
     settings = deps.settings()
     checks: list[Check] = []
-    for name, check in CHECKS:
+    planned = list(CHECKS)
+    if deps.market_check is not None:
+        planned.insert(1, ("market_data", _market_data))  # right after the token
+    for name, check in planned:
         try:
             checks.append(await check(deps, session_date, settings))
         except Exception as exc:  # a broken check is reported, never fatal

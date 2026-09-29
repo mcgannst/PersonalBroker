@@ -39,7 +39,7 @@ from trader.engine.runs import get_live_run
 from trader.events import log_event
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock, et_date
-from trader.market.data_service import MarketDataService, QuoteClient
+from trader.market.data_service import MarketDataService, OpeningScan, QuoteClient
 from trader.market.types import Candle
 from trader.settings_store import Market, RuntimeSettings, SettingsStore
 from trader.strategies.base import (
@@ -104,6 +104,9 @@ class EventResult:
     outcomes: list[IntentOutcome] = field(default_factory=list)
     # strategies whose on_event (or its handling) raised, or that own positions but could not start
     failed: list[str] = field(default_factory=list)
+    # FIX-401: the opening-bar counts of a scan this event ran (universe, bars, missing, missing_reasons),
+    # recorded in the event's job detail; None when the event fetched no opening bars.
+    scan: dict[str, Any] | None = None
 
 
 class Engine:
@@ -139,6 +142,37 @@ class Engine:
     # --- public entry points ---------------------------------------------------------------------------
     async def run_event(self, event_key: str, session_date: date) -> EventResult:
         result = EventResult(event_key, session_date)
+        self._take_opening_scan()  # a scan left by anything before this event is not this event's
+        try:
+            return await self._run_event(event_key, session_date, result)
+        finally:
+            self._report_scan(result)
+
+    def _take_opening_scan(self) -> OpeningScan | None:
+        pop = getattr(self._data, "pop_opening_scan", None)
+        scan = pop() if callable(pop) else None
+        return scan if isinstance(scan, OpeningScan) else None
+
+    def _report_scan(self, result: EventResult) -> None:
+        """FIX-401 (e): the scan's counts go into the result (and so the job detail); a scan missing at
+        least half of its universe writes one ERROR event, relayed to Telegram, right after the scan."""
+        scan = self._take_opening_scan()
+        if scan is None:
+            return
+        result.scan = scan.detail()
+        if scan.unhealthy:
+            top = scan.top_reason or "unknown"
+            self._alert(
+                "error",
+                f"9:35 scan: {scan.missing} of {scan.universe} opening bars missing (top reason {top})",
+                {
+                    "event_key": result.event_key,
+                    "session_date": result.session_date,
+                    **scan.detail(),
+                },
+            )
+
+    async def _run_event(self, event_key: str, session_date: date, result: EventResult) -> EventResult:
         for strategy, cfg, exits_only in self._event_strategies(event_key, result):
             try:
                 event = next((e for e in strategy.schedule(self._cal) if e.key == event_key), None)

@@ -68,6 +68,7 @@ RELAY_STOP_SECONDS = 15.0  # the relay's last pump on stop may take this long (r
 MAX_ERROR_CHARS = 500
 EXIT_LOCK_LOST = 3  # `run` exits with this code when another worker took the lock
 EXIT_SETUP_FAILED = 1  # `main`: building the worker failed (one log line, no traceback)
+LIVE_RUN_CHECK_SECONDS = 60.0  # idle steps re-read the live run this often (clock seconds), FIX-401 (g)
 
 
 class WorkerEngine(Protocol):
@@ -187,8 +188,13 @@ def _install_signal_handlers(stop: asyncio.Event) -> list[Callable[[], object]]:
 
 
 class Worker:
-    def __init__(self, deps: WorkerDeps) -> None:
+    def __init__(self, deps: WorkerDeps, *, live_run_check: Callable[[], bool] | None = None) -> None:
+        """`live_run_check` (FIX-401 g) re-reads the active live run: False when it changed (it then sets
+        the stop event itself and the worker exits 4). Idle steps call it every LIVE_RUN_CHECK_SECONDS by
+        the clock; in the session the runtime's `fired` and `engine_for` carry the check. None: no idle
+        check. A constructor argument, so `marks` stays the last WorkerDeps field (DB-T2 contract)."""
         self.deps = deps
+        self._live_run_check = live_run_check
         self._engine: WorkerEngine | None = None
         self._engine_session: date | None = None
         self._plan: DayPlan | None = None
@@ -206,6 +212,7 @@ class Worker:
         self._lock: Connection | None = None
         self._lock_lost = False
         self._exit_code: int | None = None
+        self._live_run_checked_at: datetime | None = None
 
     # --- one iteration --------------------------------------------------------------------------------
 
@@ -232,7 +239,25 @@ class Worker:
         else:
             self._hb_phase = "idle"
             self._hb_session = day if phase != "closed_day" else None
+            self._idle_live_run_check(now)
         return StepReport(now, phase, fired, fills, False, ended)
+
+    def _idle_live_run_check(self, now: datetime) -> None:
+        """FIX-401 (g): a live-run switch made while the worker idles (overnight, a weekend) is noticed
+        within LIVE_RUN_CHECK_SECONDS, not at the next session. The check sets the stop event itself."""
+        check = self._live_run_check
+        if check is None:
+            return
+        last = self._live_run_checked_at
+        if last is not None and (now - last).total_seconds() < LIVE_RUN_CHECK_SECONDS:
+            return
+        self._live_run_checked_at = now
+        try:
+            check()
+        except Exception as exc:
+            self._failed("live_run_check", exc)
+        else:
+            self._ok("live_run_check")
 
     async def _open_engine(self, day: date) -> WorkerEngine:
         """Today's engine, built once per session (rebuilt each session so settings changes apply)."""
@@ -603,6 +628,8 @@ class Worker:
         if self._hb_phase == "session":
             return float(settings.quote_poll_seconds)
         idle = float(settings.worker_idle_poll_seconds)
+        if self._live_run_check is not None:  # wake for the idle live-run check (FIX-401)
+            idle = min(idle, LIVE_RUN_CHECK_SECONDS)
         now = self.deps.clock.now()
         cal = self.deps.calendar
         day = et_date(now)

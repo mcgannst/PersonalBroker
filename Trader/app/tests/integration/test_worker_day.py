@@ -432,6 +432,7 @@ async def pre_open(d: Driver, day: date) -> None:
     assert out.detail["ok"] is True, out.detail["checks"]
     assert [c["name"] for c in out.detail["checks"]] == [
         "token",
+        "market_data",  # FIX-401: one real quote through the app's client
         "universe",
         "open_bar_stats",
         "premarket",

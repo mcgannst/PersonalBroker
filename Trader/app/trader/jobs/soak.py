@@ -122,6 +122,7 @@ class JobRunRow:
     started_at: datetime
     finished_at: datetime | None
     error: str | None
+    detail: Mapping[str, Any] | None = None  # FIX-401: read for the 9:35 scan's opening-bar counts
 
 
 @dataclass(frozen=True)
@@ -357,6 +358,47 @@ def _token_check(
 FINAL_BAD: frozenset[str] = frozenset({"late", "failed", "missing", "missed"})
 
 
+def _count(detail: Mapping[str, Any], key: str) -> int | None:
+    value = detail.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def scan_problem(detail: Mapping[str, Any] | None) -> str | None:
+    """FIX-401: why a 9:35 scan's job detail shows a failed scan (no opening bar at all, or at least half of
+    the universe missing), or None (a healthy scan, or a detail without readable counts: rows written
+    before FIX-401 are judged by their status alone)."""
+    if not isinstance(detail, Mapping):
+        return None
+    bars, missing, universe = _count(detail, "bars"), _count(detail, "missing"), _count(detail, "universe")
+    if bars is None or missing is None:
+        return None
+    total = universe if universe is not None else bars + missing
+    if total > 0 and 2 * missing >= total:
+        reasons = detail.get("missing_reasons")
+        top = None
+        if isinstance(reasons, Mapping):
+            counted = [
+                (str(k), v) for k, v in reasons.items() if isinstance(v, int) and not isinstance(v, bool)
+            ]
+            if counted:
+                top = min(counted, key=lambda kv: (-kv[1], kv[0]))[0]
+        return f"9:35 scan: {missing} of {total} opening bars missing (top reason {top or 'unknown'})"
+    if bars == 0:
+        return f"9:35 scan: 0 opening bars (universe {total})"
+    return None
+
+
+def _scan_judged(r: JobRunRow) -> JobRunRow:
+    """A succeeded 9:35 scan whose detail shows a failed scan counts as a failed run: it spoils the day and
+    is no proof that the Questrade token works (FIX-401)."""
+    if r.job != ORB_JOB or r.status != "succeeded":
+        return r
+    problem = scan_problem(r.detail)
+    if problem is None:
+        return r
+    return dataclasses.replace(r, status="failed", error=problem)
+
+
 def evaluate_day(
     session_date: date,
     expected: Sequence[ExpectedJob],
@@ -370,7 +412,9 @@ def evaluate_day(
     """The D1 verdict of one session from its rows (pure). `token_failures` are the `questrade.token` error
     event times of D's token window; `outage` the reason of an outage mark; `retry_attempts` the
     in-process attempts of the retried day-level jobs (`jobs.retry_attempts`). A day that is not clean only
-    through provisional failures is `not_clean` with `provisional` set (not final)."""
+    through provisional failures is `not_clean` with `provisional` set (not final). A 9:35 scan row whose
+    detail shows a failed scan (`scan_problem`) is judged as a failed run (FIX-401)."""
+    rows = [_scan_judged(r) for r in rows]
     checks: list[JobCheck] = []
     for exp in expected:
         if exp.job == TOKEN_JOB:
@@ -600,10 +644,13 @@ def _rows(factory: sessionmaker[Session], days: Sequence[date]) -> dict[date, li
                 m.JobRun.started_at,
                 m.JobRun.finished_at,
                 m.JobRun.error,
+                m.JobRun.detail,
             ).where(m.JobRun.session_date.in_(list(days)))
         ).all()
-    for session_date, job, status, started, finished, error in found:
-        out[session_date].append(JobRunRow(job, status, started, finished, error))
+    for session_date, job, status, started, finished, error, detail in found:
+        # only the 9:35 scan's detail is read (its opening-bar counts); others stay None
+        kept = detail if job == ORB_JOB and isinstance(detail, dict) else None
+        out[session_date].append(JobRunRow(job, status, started, finished, error, kept))
     return out
 
 

@@ -5,6 +5,7 @@ share this token, so every exchange happens under a row lock, re-checks freshnes
 and commits the rotated token before anyone uses the access token.
 """
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
@@ -16,6 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from trader.crypto import Crypto
 from trader.db.models import ApiCredential
+from trader.logging_setup import current_process
 from trader.market.clock import Clock
 
 log = structlog.get_logger("questrade.auth")
@@ -49,7 +51,9 @@ class TokenHealth:
 
 class TokenSource(Protocol):
     def access(self) -> AccessToken: ...
-    def force_refresh(self) -> AccessToken: ...
+
+    # `rejected`: the access token string Questrade just refused (FIX-401), so it is never handed back.
+    def force_refresh(self, rejected: str | None = None) -> AccessToken: ...
 
 
 def api_base(api_server: str | None) -> str:
@@ -97,8 +101,13 @@ class QuestradeAuth:
                 return self._token(row)
         return self._refresh(forced=False)
 
-    def force_refresh(self) -> AccessToken:
-        return self._refresh(forced=True)
+    def force_refresh(self, rejected: str | None = None) -> AccessToken:
+        """A new access token after a 401. With `rejected` (the token string Questrade refused): a stored
+        token that differs from it is returned as it is (another request or process already replaced it);
+        one equal to it is exchanged, even inside FORCED_REFRESH_COOLDOWN (FIX-401: the cooldown used to
+        hand the rejected token straight back). The row lock makes that at most one exchange per rejected
+        token. Without `rejected` the cooldown applies as before."""
+        return self._refresh(forced=True, rejected=rejected)
 
     def keep_alive(self, min_age: timedelta = timedelta(hours=1)) -> AccessToken:
         """Daily job: extend the refresh-token chain unless it was extended recently.
@@ -120,7 +129,7 @@ class QuestradeAuth:
                 and self._clock.now() - row.last_refresh_at < min_age
             ):
                 return self._token(row)
-        return self._refresh(forced=True, cooldown=timedelta(0))
+        return self._refresh(forced=True, cooldown=timedelta(0), kind="keep_alive")
 
     def health(self) -> TokenHealth:
         with self._factory() as s:
@@ -146,7 +155,14 @@ class QuestradeAuth:
             raise QuestradeAuthError("No usable access token stored.")
         return AccessToken(token, api_base(row.api_server), row.expires_at)
 
-    def _refresh(self, forced: bool, cooldown: timedelta = FORCED_REFRESH_COOLDOWN) -> AccessToken:
+    def _refresh(
+        self,
+        forced: bool,
+        cooldown: timedelta = FORCED_REFRESH_COOLDOWN,
+        *,
+        rejected: str | None = None,
+        kind: str | None = None,
+    ) -> AccessToken:
         now = self._clock.now()
         with self._factory() as s:
             # populate_existing is load-bearing: without it a process that waited on the lock
@@ -161,13 +177,19 @@ class QuestradeAuth:
                 raise QuestradeAuthError("Questrade isn't set up. Paste a refresh token in Settings.")
             if not forced and self._is_fresh(row):
                 return self._token(row)
-            if (
+            stored_rejected = rejected is not None and self._crypto.decrypt(row.access_token_enc) == rejected
+            if forced and rejected is not None and not stored_rejected and self._is_fresh(row):
+                return self._token(row)  # already replaced since that token was used: never exchange twice
+            in_cooldown = (
                 forced
                 and row.last_refresh_at is not None
                 and now - row.last_refresh_at < cooldown
                 and self._is_fresh(row)
-            ):
+            )
+            if in_cooldown and not stored_rejected:
                 return self._token(row)
+            if kind is None:
+                kind = ("cooldown" if in_cooldown else "forced") if forced else "initial"
             if row.last_error and row.updated_at and now - row.updated_at < FAILED_REFRESH_COOLDOWN:
                 raise QuestradeAuthError(row.last_error)
             refresh = self._crypto.decrypt(row.refresh_token_enc)
@@ -218,6 +240,14 @@ class QuestradeAuth:
                     "The token was refreshed but couldn't be saved, so the connection is broken. "
                     "Paste a new manual token."
                 ) from None
+            # FIX-401: one line per real exchange (which process, why), never a token.
+            log.info(
+                "questrade.token_exchanged",
+                process=current_process(),
+                pid=os.getpid(),
+                kind=kind,
+                expires_in=expires_in,
+            )
             return self._token(row)
 
     @staticmethod

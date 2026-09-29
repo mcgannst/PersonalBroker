@@ -440,10 +440,14 @@ async def fire_event(deps: FireDeps, key: str, session_date: date, *, force: boo
     async def body() -> dict[str, Any]:
         runner = await deps.runner()
         result = await runner.run_event(key, session_date)
-        return {
+        detail: dict[str, Any] = {
             "strategies": list(getattr(result, "strategies", [])),
             "outcomes": len(getattr(result, "outcomes", [])),
         }
+        scan = getattr(result, "scan", None)
+        if isinstance(scan, dict):  # FIX-401: universe, bars, missing, missing_reasons (the soak reads them)
+            detail.update(scan)
+        return detail
 
     outcome = await run_job_async(
         deps.factory,

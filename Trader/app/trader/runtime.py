@@ -140,6 +140,7 @@ from trader.reports.weekly import WeekWindow
 from trader.settings_store import RuntimeSettings
 from trader.strategies.base import CatalystSource
 from trader.strategies.registry import StrategyRegistry
+from trader.worker import LIVE_RUN_CHECK_SECONDS as LIVE_RUN_CHECK_SECONDS  # re-exported (one definition)
 from trader.worker import Worker, WorkerDeps, WorkerEngine
 
 log = structlog.get_logger("runtime")
@@ -150,7 +151,6 @@ SETTINGS_SOURCE = "settings"
 TEST_BUTTON_DATA = "test"  # unsigned: a running bot answers "Invalid button", as it should
 MAX_EVENT_MESSAGE = 500
 EXIT_LIVE_RUN_CHANGED = 4  # run_worker: the live run changed; supervisord restarts the worker on the new one
-LIVE_RUN_CHECK_SECONDS = 60.0  # the worker re-reads the live run at least this often (clock seconds)
 FINVIZ_CACHE_ENV = "TRADER_FINVIZ_CACHE_DIR"
 # The retries of a day-level job never wait past these ET times of its session: the pre-market scan's
 # stop before the 09:20 pre-open check starts, the pre-open's before the open (P5-T15 fix round 1).
@@ -874,7 +874,10 @@ async def _run_worker(core: Core, settings: GuardedSettings, once: bool) -> int:
                 heartbeat_extra=heartbeat_extra,
                 decisions=decisions_loop(core, lambda: run_id),
                 marks=publisher,
-            )
+            ),
+            # FIX-401 (g): idle steps re-read the live run every LIVE_RUN_CHECK_SECONDS (the worker
+            # throttles), so a switch made at any time stops the worker within a minute (exit 4).
+            live_run_check=lambda: watch.check(force=True),
         )
         try:
             await worker.run(stop, once=once)
@@ -1027,6 +1030,43 @@ def premarket_retry(settings: RuntimeSettings, session_date: date) -> RetryPolic
     )
 
 
+PROBE_TICKER = "SPY"
+
+
+def probe_symbol(factory: sessionmaker[Session], session_date: date) -> tuple[str, int] | None:
+    """(ticker, Questrade id) the pre-open quotes: SPY when it has a Questrade id, else the session's first
+    universe symbol (by ticker) that has one; None when there is none."""
+    with factory() as s:
+        spy = s.execute(
+            select(m.Symbol.ticker, m.Symbol.questrade_id)
+            .where(m.Symbol.ticker == PROBE_TICKER, m.Symbol.questrade_id.is_not(None))
+            .order_by(m.Symbol.id)
+            .limit(1)
+        ).first()
+        if spy is not None:
+            return str(spy[0]), int(spy[1])
+        first = s.execute(
+            select(m.Symbol.ticker, m.Symbol.questrade_id)
+            .join(m.UniverseSnapshot, m.UniverseSnapshot.symbol_id == m.Symbol.id)
+            .where(m.UniverseSnapshot.session_date == session_date, m.Symbol.questrade_id.is_not(None))
+            .order_by(m.Symbol.ticker, m.Symbol.id)
+            .limit(1)
+        ).first()
+    return (str(first[0]), int(first[1])) if first is not None else None
+
+
+async def probe_market_data(core: Core, client: QuoteClient, session_date: date) -> str | None:
+    """FIX-401 (d): ONE real market-data call (a quote) through the app's client, for the pre-open check.
+    Returns the ticker quoted (Questrade answered HTTP 200), None when there is nothing to quote (no call
+    made); a refusal raises the client's QuestradeApiError."""
+    target = await asyncio.to_thread(probe_symbol, core.factory, session_date)
+    if target is None:
+        return None
+    ticker, qid = target
+    await client.quotes([qid])
+    return ticker
+
+
 async def preopen_job(core: Core, session_date: date, *, force: bool) -> JobOutcome:
     """The 09:20 pre-open check (sent directly, so it arrives even when the worker is down). An unusable
     settings row never stops it: the defaults are used, one `error` event is written, and the message and
@@ -1041,6 +1081,9 @@ async def preopen_job(core: Core, session_date: date, *, force: bool) -> JobOutc
         async def token_check() -> None:
             await asyncio.to_thread(auth.access)
 
+        async def market_check(d: date) -> str | None:
+            return await probe_market_data(core, client, d)
+
         deps = PreopenDeps(
             factory=core.factory,
             clock=core.clock,
@@ -1054,6 +1097,7 @@ async def preopen_job(core: Core, session_date: date, *, force: bool) -> JobOutc
             run_id=run.id,
             notifier=build_notifier(core, api),
             render=SettingsCheckRenderer(core, lambda: settings.problem),
+            market_check=market_check,
         )
 
         async def body() -> dict[str, Any]:

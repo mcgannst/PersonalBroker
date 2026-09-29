@@ -6,6 +6,7 @@ entirely before it return HTTP 400, so start times are clamped; candles include 
 """
 
 import asyncio
+import inspect
 import json
 import math
 import time
@@ -16,9 +17,11 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Self
 
 import httpx
+import structlog
 
 from trader.adapters.questrade.auth import AccessToken, TokenSource
 from trader.adapters.questrade.models import CandleRequest, QtQuote, QtSymbol
+from trader.logging_setup import redact_text
 from trader.market.clock import Clock
 from trader.market.types import Candle, Interval
 
@@ -41,7 +44,13 @@ WINDOW_429_MAX_PAUSE = 2.0
 STALE_429_RESET = 1.0
 # A cached access token is reused until this long before it expires (by the client's clock).
 TOKEN_REUSE_MARGIN = timedelta(seconds=120)
+# FIX-401: when the first FAIL_FAST_401 completed results of a candles_many batch are all HTTP 401 (each
+# already after a forced token refresh), the rest are cancelled and reported with that 401 at once,
+# instead of burning the whole deadline on requests Questrade will refuse (Tue 2026-09-29: 757 x 401).
+FAIL_FAST_401 = 20
 Category = Literal["market", "account"]
+
+log = structlog.get_logger("questrade.client")
 
 INTERVAL_LENGTH: dict[Interval, timedelta] = {
     "OneMinute": timedelta(minutes=1),
@@ -53,11 +62,72 @@ INTERVAL_LENGTH: dict[Interval, timedelta] = {
 
 
 class QuestradeApiError(Exception):
-    """A Questrade call failed. `status` is the HTTP status, or 0 for a transport or parse failure."""
+    """A Questrade call failed. `status` is the HTTP status, or 0 for a transport or parse failure.
 
-    def __init__(self, status: int, message: str) -> None:
+    FIX-401: `code` and `qt_message` are Questrade's own error code and message from a JSON error body
+    ({"code": 1017, "message": "Access token is invalid"}), the message masked, on one line and at most
+    MAX_QT_MESSAGE characters; both None when the body carried none. `summary` is the short form used in
+    logs and missing reasons: "HTTP 401 1017 Access token is invalid", or just "HTTP 404"."""
+
+    def __init__(
+        self, status: int, message: str, *, code: int | None = None, qt_message: str | None = None
+    ) -> None:
         super().__init__(f"HTTP {status}: {message}")
         self.status = status
+        self.code = code
+        self.qt_message = _short_message(qt_message) if qt_message else None
+
+    @classmethod
+    def from_response(cls, resp: httpx.Response) -> "QuestradeApiError":
+        code, message = _questrade_error(resp)
+        return cls(resp.status_code, resp.text[:300], code=code, qt_message=message)
+
+    @property
+    def summary(self) -> str:
+        parts = [f"HTTP {self.status}"]
+        if self.code is not None:
+            parts.append(str(self.code))
+        if self.qt_message:
+            parts.append(self.qt_message)
+        return " ".join(parts)[:MAX_REASON]
+
+
+MAX_QT_MESSAGE = 120
+MAX_REASON = 200
+MISSING_PREFIX = "questrade_error: "
+
+
+def _short_message(text: str) -> str:
+    flat = " ".join(redact_text(text).split())
+    return flat if len(flat) <= MAX_QT_MESSAGE else flat[: MAX_QT_MESSAGE - 1] + "…"
+
+
+def _questrade_error(resp: httpx.Response) -> tuple[int | None, str | None]:
+    """Questrade's {"code": ..., "message": ...} error body, or (None, None) when it isn't one."""
+    try:
+        data = json.loads(resp.text)
+    except ValueError:
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    raw_code, raw_message = data.get("code"), data.get("message")
+    code = raw_code if isinstance(raw_code, int) and not isinstance(raw_code, bool) else None
+    message = raw_message if isinstance(raw_message, str) and raw_message.strip() else None
+    return code, message
+
+
+def missing_reason(exc: "QuestradeApiError") -> str:
+    """An opening-bar missing reason: "questrade_error: HTTP 401 1017 Access token is invalid" (at most 200
+    characters), or "questrade_error: HTTP 500" when Questrade sent no code or message."""
+    return (MISSING_PREFIX + exc.summary)[:MAX_REASON]
+
+
+def reason_key(reason: str) -> str:
+    """A missing reason without Questrade's code and message ("questrade_error: HTTP 401"), for counting."""
+    if not reason.startswith(MISSING_PREFIX):
+        return reason
+    words = reason.removeprefix(MISSING_PREFIX).split()
+    return MISSING_PREFIX + " ".join(words[:2])
 
 
 @dataclass
@@ -158,6 +228,16 @@ def _query_time(value: datetime) -> str:
     return value.isoformat(timespec="seconds")
 
 
+def _takes_rejected(tokens: TokenSource) -> bool:
+    """Whether `tokens.force_refresh` accepts the rejected token (FIX-401). A TokenSource written before it
+    (test doubles among them) takes no argument and is called without one."""
+    try:
+        params = inspect.signature(tokens.force_refresh).parameters
+    except (TypeError, ValueError):
+        return False
+    return "rejected" in params or any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in params.values())
+
+
 class QuestradeClient:
     """Questrade market-data calls, rate limited per category and retried on 401/429/5xx/transport errors.
 
@@ -197,6 +277,7 @@ class QuestradeClient:
         self._token: AccessToken | None = None
         self._replaced_token: AccessToken | None = None
         self._token_lock = asyncio.Lock()
+        self._refresh_takes_rejected = _takes_rejected(tokens)
 
     async def __aenter__(self) -> Self:
         return self
@@ -250,15 +331,22 @@ class QuestradeClient:
 
     async def _refresh_after_401(self, rejected: AccessToken) -> None:
         """Force a refresh and cache the new token, unless another request already replaced the
-        rejected one (then that newer token is used instead)."""
+        rejected one (then that newer token is used instead). Tokens are compared by their string, never
+        by object identity: a TokenSource hands out a new object for the same token (FIX-401). The
+        rejected string goes to `force_refresh`, so the TokenSource never hands the same token back."""
         async with self._token_lock:
-            if self._token is None or self._token is rejected:
-                self._cache_token(await asyncio.to_thread(self._tokens.force_refresh))
+            if self._token is None or self._token.token == rejected.token:
+                if self._refresh_takes_rejected:
+                    fresh = await asyncio.to_thread(self._tokens.force_refresh, rejected.token)
+                else:  # a TokenSource written before FIX-401
+                    fresh = await asyncio.to_thread(self._tokens.force_refresh)
+                self._cache_token(fresh)
 
     async def _get(self, path: str, params: dict[str, str], category: Category) -> Any:
         refreshed = False
         last_status: int = 0
         last_text: str = ""
+        last_resp: httpx.Response | None = None
         stats = self.stats[category]
         for attempt in range(MAX_ATTEMPTS):
             final: bool = attempt == MAX_ATTEMPTS - 1
@@ -273,14 +361,14 @@ class QuestradeClient:
                 )
             except httpx.TransportError as exc:
                 stats.transport_errors += 1
-                last_status, last_text = 0, self._transport_message(exc, token)
+                last_status, last_text, last_resp = 0, self._transport_message(exc, token), None
                 if not final:
                     await self._sleep(0.5 * 2**attempt)
                 continue
             remaining: int | None = _int_or_none(resp.headers.get("X-RateLimit-Remaining"))
             if remaining is not None:
                 self.rate_limit_remaining[category] = remaining
-            last_status, last_text = resp.status_code, resp.text[:300]
+            last_status, last_text, last_resp = resp.status_code, resp.text[:300], resp
             if resp.status_code == 200:
                 return json.loads(resp.text, parse_float=Decimal)
             if resp.status_code == 401 and not refreshed:
@@ -297,7 +385,9 @@ class QuestradeClient:
                 if not final:
                     await self._sleep(0.5 * 2**attempt)
                 continue
-            raise QuestradeApiError(resp.status_code, last_text)
+            raise QuestradeApiError.from_response(resp)
+        if last_resp is not None and last_resp.status_code == last_status:
+            raise QuestradeApiError.from_response(last_resp)
         raise QuestradeApiError(last_status, last_text)
 
     async def server_time(self) -> datetime:
@@ -407,13 +497,21 @@ class QuestradeClient:
         return out
 
     async def candles_many(
-        self, reqs: Sequence[CandleRequest], *, deadline_s: float | None = None
+        self,
+        reqs: Sequence[CandleRequest],
+        *,
+        deadline_s: float | None = None,
+        fail_fast_401: int | None = FAIL_FAST_401,
     ) -> dict[CandleRequest, list[Candle] | QuestradeApiError]:
         """Every completed request gets its own result: candles, or the error for that request alone.
 
         With `deadline_s`, requests still outstanding when it passes are cancelled (and awaited, so none
         outlives the call) and left out of the result; every request that completed keeps its result.
-        Without it, every request is waited for. Cancelling the call itself cancels every request."""
+        Without it, every request is waited for. Cancelling the call itself cancels every request.
+
+        FIX-401 fail fast: when the first `fail_fast_401` completed results are all HTTP 401 (a 401 is only
+        returned after the request's forced token refresh), the outstanding requests are cancelled and
+        each gets that 401 error too, so the batch returns at once; one error line is logged. None: off."""
 
         async def one(r: CandleRequest) -> list[Candle] | QuestradeApiError:
             try:
@@ -432,13 +530,65 @@ class QuestradeClient:
         tasks: dict[CandleRequest, asyncio.Task[list[Candle] | QuestradeApiError]] = {
             r: asyncio.create_task(one(r)) for r in unique
         }
+        failed_fast: QuestradeApiError | None = None
+        completed = 0
         try:
             if tasks:
-                await asyncio.wait(tasks.values(), timeout=deadline_s)
+                failed_fast, completed = await self._wait_batch(
+                    list(tasks.values()), deadline_s, fail_fast_401
+                )
         finally:
             outstanding = [t for t in tasks.values() if not t.done()]
             for t in outstanding:
                 t.cancel()
             if outstanding:
                 await asyncio.gather(*outstanding, return_exceptions=True)
-        return {r: t.result() for r, t in tasks.items() if not t.cancelled()}
+        out: dict[CandleRequest, list[Candle] | QuestradeApiError] = {
+            r: t.result() for r, t in tasks.items() if not t.cancelled()
+        }
+        if failed_fast is not None:
+            for r in tasks:
+                out.setdefault(r, failed_fast)
+            log.error(
+                "questrade.candles_fail_fast",
+                requests=len(tasks),
+                completed=completed,
+                cancelled=len(tasks) - completed,
+                reason=failed_fast.summary,
+            )
+        return out
+
+    @staticmethod
+    async def _wait_batch(
+        tasks: list[asyncio.Task[list[Candle] | QuestradeApiError]],
+        deadline_s: float | None,
+        fail_fast_401: int | None,
+    ) -> tuple[QuestradeApiError | None, int]:
+        """Wait for the batch until the deadline. While fail fast is still undecided, results are taken as
+        they complete: (the first 401, completed count) when the first `fail_fast_401` are all 401, else
+        (None, completed) once a non-401 result shows up (then the rest is waited for in one go)."""
+        if fail_fast_401 is None or fail_fast_401 < 1 or len(tasks) <= fail_fast_401:
+            await asyncio.wait(tasks, timeout=deadline_s)
+            return None, sum(1 for t in tasks if t.done())
+        loop = asyncio.get_running_loop()
+        until = None if deadline_s is None else loop.time() + deadline_s
+        pending: set[asyncio.Task[list[Candle] | QuestradeApiError]] = set(tasks)
+        completed = 0
+        first_401: QuestradeApiError | None = None
+        while pending:
+            timeout = None if until is None else max(0.0, until - loop.time())
+            done, pending = await asyncio.wait(pending, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+            if not done:  # the deadline passed
+                return None, completed
+            completed += len(done)
+            for t in done:
+                result = t.result()
+                if not (isinstance(result, QuestradeApiError) and result.status == 401):
+                    if pending:
+                        remaining = None if until is None else max(0.0, until - loop.time())
+                        await asyncio.wait(pending, timeout=remaining)
+                    return None, sum(1 for x in tasks if x.done())
+                first_401 = first_401 or result
+            if completed >= fail_fast_401:
+                return first_401, completed
+        return None, completed

@@ -9,6 +9,7 @@ the rendered line itself goes through the same patterns once more, as a final ne
 """
 
 import logging
+import os
 import re
 import sys
 from collections.abc import Mapping, MutableMapping
@@ -141,6 +142,16 @@ def _redacting(renderer: Processor) -> Processor:
     return render
 
 
+_process_name: str | None = None
+
+
+def current_process() -> str:
+    """The process name the first `configure_logging` call gave (worker, api, a CLI command...), or the
+    Python process's pid as text before any: for fields that must name the process in tests too, where
+    the `process` field the processor adds is absent."""
+    return _process_name or f"pid-{os.getpid()}"
+
+
 def _add_process(process: str) -> Processor:
     def add_process(
         _logger: WrappedLogger, _method: str, event_dict: MutableMapping[str, Any]
@@ -176,9 +187,11 @@ def configure_logging(process: str, *, json: bool = True, level: str = "INFO") -
     Every line carries timestamp (ISO UTC), level, logger, event and process. A second call changes
     nothing (the first configuration wins) and adds no second handler.
     """
+    global _process_name
     root = logging.getLogger()
     if any(isinstance(h, _TraderLogHandler) for h in root.handlers):
         return
+    _process_name = process
     for existing in list(root.handlers):
         if type(existing) in _BASIC_HANDLER_TYPES:
             root.removeHandler(existing)

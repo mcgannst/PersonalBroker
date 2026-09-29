@@ -4,6 +4,7 @@ import { API_METHODS, ApiError, queryString, type ApiClient, type ApiMethod } fr
 import type { SettingOut } from "../api/types";
 import { FakeApiClient } from "./fakeApi";
 import * as fx from "./fixtures";
+import * as lfx from "./liveFixtures";
 
 describe("FakeApiClient (acceptance test 5)", () => {
   it("satisfies ApiClient and API_METHODS lists every method", () => {
@@ -62,6 +63,20 @@ describe("FakeApiClient (acceptance test 5)", () => {
     expect((await api.position(3)).trade?.id).toBe(fx.trade.id);
     expect((await api.position(4)).trade).toBeNull();
     await expect(api.proposal(999)).rejects.toMatchObject({ status: 404, code: "not_found" });
+  });
+
+  it("answers live and control with the live fixtures by default (DB-T1)", async () => {
+    const api = new FakeApiClient();
+    const live = await api.live({ range: "today" });
+    expect(live).toEqual(lfx.liveOut);
+    expect(live.positions).toHaveLength(1);
+    expect(await api.control()).toEqual(lfx.controlOut);
+    expect(api.calls).toEqual([
+      ["live", [{ range: "today" }]],
+      ["control", []],
+    ]);
+    api.set("live", lfx.liveEmptyDay);
+    expect((await api.live({})).positions).toEqual([]);
   });
 
   it("builds same-origin URLs", () => {

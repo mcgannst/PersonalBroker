@@ -123,7 +123,7 @@ def test_system_on_seeded_data(db_factory: sessionmaker[Session]) -> None:
 
     assert body["rate_limit"] == {"market_remaining": 17, "account_remaining": 29}
     assert body["telegram_configured"] is False
-    assert body["alembic_revision"] == "0007"  # the head (P6-T9 added 0007)
+    assert body["alembic_revision"] == "0008"  # the head (DB-T1 added 0008)
     assert body["worker"]["ok"] is True and body["worker"]["phase"] == "idle"
     assert body["token"]["ok"] is True
     assert body["manual_jobs"] == [

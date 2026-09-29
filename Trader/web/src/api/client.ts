@@ -5,6 +5,7 @@ import { createContext, createElement, useContext, type ReactNode } from "react"
 
 import type {
   CandidatesOut,
+  ControlOut,
   DashboardOut,
   DecisionDayOut,
   DecisionDaysOut,
@@ -24,6 +25,8 @@ import type {
   JournalDayOut,
   JournalIn,
   KillSwitchesOut,
+  LiveOut,
+  LiveRange,
   LoginIn,
   ManualJob,
   MetaOut,
@@ -169,6 +172,12 @@ export interface DecisionsCsvQuery {
   run_id?: number;
 }
 
+/** The live dashboard (DB-T1): `range` picks the equity series, `expand` is up to 3 comma-separated position ids. */
+export interface LiveQuery {
+  range?: LiveRange;
+  expand?: string;
+}
+
 /** One method per /api route (SPEC §11, P4 plan T3–T11). Every method rejects with an `ApiError`. */
 export interface ApiClient {
   // auth (T4)
@@ -237,6 +246,9 @@ export interface ApiClient {
   decisionDay(q: DecisionDayQuery): Promise<DecisionDayOut | null>;
   /** Same-origin URL of `GET /api/export/decisions.csv` (a download link, not a fetch). */
   decisionsCsvUrl(q: DecisionsCsvQuery): string;
+  // live dashboard and control (DB-T1)
+  live(q: LiveQuery): Promise<LiveOut>;
+  control(): Promise<ControlOut>;
   // live updates (T11)
   /** Same-origin URL of `GET /api/stream` (for `EventSource`). */
   streamUrl(): string;
@@ -295,6 +307,8 @@ export const API_METHODS = [
   "decisionDays",
   "decisionDay",
   "decisionsCsvUrl",
+  "live",
+  "control",
   "streamUrl",
 ] as const satisfies readonly (keyof ApiClient)[];
 

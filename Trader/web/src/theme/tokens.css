@@ -1,0 +1,242 @@
+/* Theme tokens for the whole web app (live dashboard plan S11, design D9). DB-T1, final: later tasks never edit
+   this file (a needed change goes to the orchestrator). Generated from one table, so every theme block defines
+   the same names; tokens.test.ts checks it.
+
+   Themes: `data-theme="dark"` (the default, also with no attribute), `data-theme="light"`, and
+   `data-theme="auto"`, which follows `prefers-color-scheme`. Dark slate surfaces, 1 px slate borders, one
+   accent (sky). Green and red are for money only (`--money-*`, through the `.money` classes); lights and
+   badges use `--status-*` (accent, amber, orange, slate: never green or red). Flat panels: no shadows,
+   gradients or glow. Numbers use `--font-num` with tabular figures. The older names (`--ok`, `--bad`, ...)
+   stay defined so existing pages re-theme without edits. */
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f172a;
+  --surface: #1e293b;
+  --surface-2: #263348;
+  --text: #e2e8f0;
+  --text-muted: #94a3b8;
+  --border: #334155;
+  --accent: #38bdf8;
+  --accent-text: #0f172a;
+  --money-up: #4ade80;
+  --money-down: #f87171;
+  --money-flat: #94a3b8;
+  --status-ok: #38bdf8;
+  --status-warn: #fbbf24;
+  --status-bad: #fb923c;
+  --status-muted: #64748b;
+  --ok: #4ade80;
+  --ok-bg: #14301f;
+  --warn: #fbbf24;
+  --warn-bg: #33270b;
+  --bad: #f87171;
+  --bad-bg: #3b1a1d;
+  --info: #38bdf8;
+  --info-bg: #0c2a3d;
+  --muted: #94a3b8;
+  --muted-bg: #1e293b;
+  --chart-grid: #334155;
+  --chart-line: #e2e8f0;
+  --chart-entry: #38bdf8;
+  --chart-stop: #fb923c;
+  --chart-target: #a78bfa;
+  --chart-fill: #0c4a6e;
+  --chart-range: #1e3a5f;
+  --chart-stop-fill: #431407;
+  --chart-exit: #4ade80;
+  --chart-bar: #818cf8;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --radius: 6px;
+  --panel-radius: 6px;
+  --panel-border: 1px solid var(--border);
+  --touch: 44px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-num: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --text: #0f172a;
+  --text-muted: #475569;
+  --border: #cbd5e1;
+  --accent: #0284c7;
+  --accent-text: #ffffff;
+  --money-up: #15803d;
+  --money-down: #dc2626;
+  --money-flat: #64748b;
+  --status-ok: #0284c7;
+  --status-warn: #b45309;
+  --status-bad: #c2570c;
+  --status-muted: #64748b;
+  --ok: #15803d;
+  --ok-bg: #dcfce7;
+  --warn: #b45309;
+  --warn-bg: #fef3c7;
+  --bad: #dc2626;
+  --bad-bg: #fee2e2;
+  --info: #0284c7;
+  --info-bg: #e0f2fe;
+  --muted: #64748b;
+  --muted-bg: #e2e8f0;
+  --chart-grid: #e2e8f0;
+  --chart-line: #1e293b;
+  --chart-entry: #0284c7;
+  --chart-stop: #c2570c;
+  --chart-target: #7c3aed;
+  --chart-fill: #e0f2fe;
+  --chart-range: #bae6fd;
+  --chart-stop-fill: #ffedd5;
+  --chart-exit: #15803d;
+  --chart-bar: #6366f1;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --radius: 6px;
+  --panel-radius: 6px;
+  --panel-border: 1px solid var(--border);
+  --touch: 44px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-num: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="auto"] {
+    color-scheme: dark;
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --surface-2: #263348;
+    --text: #e2e8f0;
+    --text-muted: #94a3b8;
+    --border: #334155;
+    --accent: #38bdf8;
+    --accent-text: #0f172a;
+    --money-up: #4ade80;
+    --money-down: #f87171;
+    --money-flat: #94a3b8;
+    --status-ok: #38bdf8;
+    --status-warn: #fbbf24;
+    --status-bad: #fb923c;
+    --status-muted: #64748b;
+    --ok: #4ade80;
+    --ok-bg: #14301f;
+    --warn: #fbbf24;
+    --warn-bg: #33270b;
+    --bad: #f87171;
+    --bad-bg: #3b1a1d;
+    --info: #38bdf8;
+    --info-bg: #0c2a3d;
+    --muted: #94a3b8;
+    --muted-bg: #1e293b;
+    --chart-grid: #334155;
+    --chart-line: #e2e8f0;
+    --chart-entry: #38bdf8;
+    --chart-stop: #fb923c;
+    --chart-target: #a78bfa;
+    --chart-fill: #0c4a6e;
+    --chart-range: #1e3a5f;
+    --chart-stop-fill: #431407;
+    --chart-exit: #4ade80;
+    --chart-bar: #818cf8;
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+    --radius: 6px;
+    --panel-radius: 6px;
+    --panel-border: 1px solid var(--border);
+    --touch: 44px;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-num: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="auto"] {
+    color-scheme: light;
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --surface-2: #f1f5f9;
+    --text: #0f172a;
+    --text-muted: #475569;
+    --border: #cbd5e1;
+    --accent: #0284c7;
+    --accent-text: #ffffff;
+    --money-up: #15803d;
+    --money-down: #dc2626;
+    --money-flat: #64748b;
+    --status-ok: #0284c7;
+    --status-warn: #b45309;
+    --status-bad: #c2570c;
+    --status-muted: #64748b;
+    --ok: #15803d;
+    --ok-bg: #dcfce7;
+    --warn: #b45309;
+    --warn-bg: #fef3c7;
+    --bad: #dc2626;
+    --bad-bg: #fee2e2;
+    --info: #0284c7;
+    --info-bg: #e0f2fe;
+    --muted: #64748b;
+    --muted-bg: #e2e8f0;
+    --chart-grid: #e2e8f0;
+    --chart-line: #1e293b;
+    --chart-entry: #0284c7;
+    --chart-stop: #c2570c;
+    --chart-target: #7c3aed;
+    --chart-fill: #e0f2fe;
+    --chart-range: #bae6fd;
+    --chart-stop-fill: #ffedd5;
+    --chart-exit: #15803d;
+    --chart-bar: #6366f1;
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+    --radius: 6px;
+    --panel-radius: 6px;
+    --panel-border: 1px solid var(--border);
+    --touch: 44px;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-num: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+}
+
+/* Numbers and money: tabular figures; money coloured by its sign (`moneyTone` in tokens.ts). */
+.num,
+.money {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+.money.up {
+  color: var(--money-up);
+}
+
+.money.down {
+  color: var(--money-down);
+}
+
+.money.flat {
+  color: var(--money-flat);
+}

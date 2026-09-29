@@ -145,6 +145,8 @@ ROUTER_ORDER = [
     "replays",  # P5-T1
     "reports",  # P5-T1
     "decisions",  # P6-T12
+    "live",  # DB-T1
+    "control",  # DB-T1
     "stream",
 ]
 
@@ -224,7 +226,9 @@ def test_every_contract_module_imports_with_its_names(module: str) -> None:
 
 
 def test_routers_are_the_seventeen_in_order() -> None:
-    assert len(ROUTERS) == 18  # Phase 5 added replays and reports (P5-T1), P6-T12 decisions
+    assert (
+        len(ROUTERS) == 20
+    )  # Phase 5 added replays and reports (P5-T1), P6-T12 decisions, DB-T1 live/control
     assert all(isinstance(r, APIRouter) for r in ROUTERS)
     for name, router in zip(ROUTER_ORDER, ROUTERS, strict=True):
         assert router is importlib.import_module(f"trader.api.routers.{name}").router
@@ -250,6 +254,8 @@ def test_schema_models_and_literals() -> None:
         "system",
         "replays",  # P5-T1
         "reports",  # P5-T1
+        "marks",  # DB-T1
+        "activity",  # DB-T1
     )
     assert schemas.ManualJob.__args__ == (  # type: ignore[attr-defined]
         "nightly",

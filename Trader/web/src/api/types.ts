@@ -41,7 +41,9 @@ export type Topic =
   | "strategies"
   | "system"
   | "replays"
-  | "reports";
+  | "reports"
+  | "marks"
+  | "activity";
 export type ManualJob = "nightly" | "premarket" | "preopen" | "postclose" | "token-refresh" | "weekly";
 /** `trader.replay.types.ReplayStatus` (re-exported by the schemas). */
 export type ReplayStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -86,6 +88,32 @@ export type DecisionOutcome =
   | "error";
 /** `trader.decisions.types.CheckOp`. */
 export type CheckOp = ">=" | "<=" | "between" | "==" | "!=" | "present" | "absent";
+/** Live dashboard and Control page literals (DB-T1). */
+export type PeriodKey = "today" | "week" | "run";
+export type LiveRange = "today" | "run";
+export type MarkState = "live" | "stale" | "missing";
+/** `paused`: a manual pause; `blocked`: an automatic kill switch. */
+export type TradingState = "running" | "paused" | "blocked";
+export type ActivityKind =
+  | "order_placed"
+  | "order_cancelled"
+  | "fill"
+  | "exit"
+  | "proposal_created"
+  | "proposal_approved"
+  | "proposal_rejected"
+  | "proposal_expired"
+  | "kill_switch_tripped"
+  | "kill_switch_reset"
+  | "job_failed"
+  | "alert"
+  | "scan";
+export type ActivityChip = "trades" | "proposals" | "alerts" | "scan";
+export type ActivityTone = "neutral" | "up" | "down" | "warn";
+export type EquitySource = "snapshot" | "marks" | "now";
+export type BarSource = "candle" | "marks";
+export type KillSwitchUnit = "pct" | "r" | "none";
+export type RejectionSource = "decision_log" | "candidates" | "none";
 
 /** Every `DecisionStage`, in the journal's stage order. */
 export const DECISION_STAGES: readonly DecisionStage[] = [
@@ -121,6 +149,8 @@ export const TOPICS: readonly Topic[] = [
   "system",
   "replays",
   "reports",
+  "marks",
+  "activity",
 ];
 
 /** Every `ManualJob`, in the schema's order. */
@@ -921,6 +951,331 @@ export interface DecisionDayItemOut {
 
 export interface DecisionDaysOut {
   days: DecisionDayItemOut[];
+}
+
+// ---------------------------------------------------------------- live dashboard and control (DB-T1)
+// GET /api/live -> LiveOut, GET /api/control -> ControlOut. A null part failed; `part_errors` says why.
+
+export interface PartErrorOut {
+  part: string;
+  message: string;
+}
+
+export interface PeriodPnlOut {
+  period: PeriodKey;
+  date_from: IsoDate;
+  date_to: IsoDate;
+  realized: Money;
+  unrealized: Money | null;
+  unrealized_partial: boolean;
+  pnl_after_fees: Money;
+  fees: Money;
+  claude_usd: Money;
+  net_after_ai: Money;
+  trades: number;
+  wins: number;
+  losses: number;
+  win_rate: Money | null;
+  expectancy_r: Money | null;
+  trades_without_r: number;
+}
+
+export interface ClaudeTodayOut {
+  date: IsoDate;
+  spent_usd: Money;
+  cap_usd: Money;
+  used_fraction: Money | null;
+}
+
+export interface BooksCheckOut {
+  ok: boolean;
+  cash: Money;
+  positions_at_cost: Money;
+  actual: Money;
+  starting_cash: Money;
+  realized_gross: Money;
+  fees_paid: Money;
+  expected: Money;
+  difference: Money;
+  realized_recorded: Money;
+  open_positions: number;
+}
+
+export interface EquityPointLiveOut {
+  ts: IsoTime;
+  equity: Money;
+  source: EquitySource;
+}
+
+export interface FillMarkerOut {
+  fill_id: number;
+  ts: IsoTime;
+  ticker: string;
+  side: string;
+  purpose: string;
+  qty: number;
+  price: Money;
+  position_id: number | null;
+}
+
+export interface EquitySeriesOut {
+  range: LiveRange;
+  start_equity: Money | null;
+  points: EquityPointLiveOut[];
+  fills: FillMarkerOut[];
+  downsampled: boolean;
+}
+
+export interface KillSwitchLightOut {
+  switch: string;
+  label: string;
+  tripped: boolean;
+  tripped_at: IsoTime | null;
+  value: Money | null;
+  threshold: Money | null;
+  unit: KillSwitchUnit;
+  count: number | null;
+  count_min: number | null;
+  trip_value: Money | null;
+  trip_threshold: Money | null;
+  automatic: boolean;
+  needs_web_reset: boolean;
+  clears: string;
+}
+
+export interface RiskOut {
+  killswitches: KillSwitchLightOut[];
+  equity: Money;
+  open_risk: Money;
+  open_risk_cap: Money | null;
+  slots_used: number;
+  slots_max: number;
+  open_positions: number;
+}
+
+export interface SparkPointOut {
+  ts: IsoTime;
+  price: Money;
+}
+
+export interface BarOut {
+  start: IsoTime;
+  open: Money;
+  high: Money;
+  low: Money;
+  close: Money;
+  source: BarSource;
+}
+
+export interface LivePositionOut {
+  id: number;
+  symbol_id: number;
+  ticker: string;
+  strategy_key: string;
+  side: "long";
+  qty: number;
+  entry: Money;
+  mark: Money | null;
+  bid: Money | null;
+  ask: Money | null;
+  mark_at: IsoTime | null;
+  mark_state: MarkState;
+  stop: Money | null;
+  stop_working: boolean;
+  target: Money | null;
+  planned_risk: Money | null;
+  unrealized: Money | null;
+  unrealized_r: Money | null;
+  distance_to_stop_r: Money | null;
+  near_stop: boolean;
+  opened_at: IsoTime;
+  held_seconds: number;
+  unprotected_seconds: number;
+  spark: SparkPointOut[];
+  /** Only for the expanded positions (`expand`), else null. */
+  bars: BarOut[] | null;
+  fills: FillMarkerOut[];
+  link: string;
+}
+
+export interface ActivityItemOut {
+  id: string;
+  ts: IsoTime;
+  kind: ActivityKind;
+  chip: ActivityChip;
+  ticker: string | null;
+  text: string;
+  amount: Money | null;
+  tone: ActivityTone;
+  link: string | null;
+}
+
+export interface RejectionRuleOut {
+  stage: DecisionStage;
+  rule: string;
+  count: number;
+  tickers: string[];
+  truncated: boolean;
+  link: string;
+}
+
+export interface RejectionsOut {
+  session_date: IsoDate;
+  source: RejectionSource;
+  total: number;
+  rules: RejectionRuleOut[];
+  final: boolean;
+  recorded_at: IsoTime | null;
+}
+
+export interface LiveOut {
+  server_time: IsoTime;
+  run_id: number;
+  run_started_at: IsoTime;
+  session: SessionInfoOut;
+  session_day: IsoDate;
+  approval_mode: "manual" | "auto";
+  trading: TradingState;
+  telegram_configured: boolean;
+  worker: WorkerOut;
+  worker_stale: boolean;
+  marks_stale_seconds: number;
+  closed_today: number;
+  periods: PeriodPnlOut[] | null;
+  claude_today: ClaudeTodayOut | null;
+  books: BooksCheckOut | null;
+  equity: EquitySeriesOut | null;
+  risk: RiskOut | null;
+  positions: LivePositionOut[] | null;
+  activity: ActivityItemOut[] | null;
+  rejections: RejectionsOut | null;
+  timeline: TimelineItemOut[] | null;
+  pending: ProposalOut[] | null;
+  part_errors: PartErrorOut[];
+}
+
+export interface EngineOut {
+  approval_mode: "manual" | "auto";
+  trading: TradingState;
+  paused_at: IsoTime | null;
+  run_id: number;
+  run_started_at: IsoTime;
+  run_start_date: IsoDate;
+  version: string;
+  app_env: string;
+  alembic_revision: string | null;
+}
+
+export interface StrategyCardOut {
+  key: string;
+  kind: "entry" | "overlay";
+  enabled: boolean;
+  revision: number;
+  version: string;
+  updated_at: IsoTime;
+  updated_by: string | null;
+  owns_open_positions: boolean;
+  max_positions: number | null;
+  settings_link: string;
+}
+
+export interface ScheduleItemOut {
+  key: string;
+  label: string;
+  kind: "job" | "event";
+  at: IsoTime;
+  status: TimelineStatus;
+  detail: string | null;
+  started_at: IsoTime | null;
+  finished_at: IsoTime | null;
+  duration_seconds: number | null;
+  attempts: number;
+  summary: string | null;
+  rerun: ManualJob | null;
+}
+
+export interface QuestradeCountsOut {
+  requests: number;
+  http_429: number;
+  pause_s: number;
+  http_5xx: number;
+  transport_errors: number;
+}
+
+export interface QuestradeStatsOut {
+  day: IsoDate;
+  since: IsoTime;
+  market: QuestradeCountsOut;
+  account: QuestradeCountsOut;
+  rate_limit: Record<string, number> | null;
+}
+
+export interface OpeningBarsOut {
+  session_date: IsoDate;
+  started_at: IsoTime;
+  symbols: number;
+  completed: number;
+  errors: number;
+  outstanding: number;
+  elapsed_s: number;
+  deadline_s: number | null;
+  http_429: number;
+  pause_s: number;
+  complete: boolean;
+  raised: string | null;
+}
+
+export interface MarksHealthOut {
+  written_at: IsoTime | null;
+  symbols: number;
+  failing: boolean;
+}
+
+export interface HealthPanelOut {
+  worker: WorkerOut;
+  worker_stale: boolean;
+  token: TokenOut;
+  db_ok: boolean;
+  db_latency_ms: number | null;
+  telegram_configured: boolean;
+  questrade: QuestradeStatsOut | null;
+  opening_bars: OpeningBarsOut | null;
+  marks: MarksHealthOut | null;
+  notifications_failed: NotificationOut[];
+  tz_iana_version: string | null;
+}
+
+export interface SoakTodayOut {
+  session_date: IsoDate;
+  verdict: string;
+  failed: string[];
+  provisional: boolean;
+}
+
+export interface SoakSummaryOut {
+  target: number;
+  consecutive_clean: number;
+  total_clean: number;
+  day_one: IsoDate | null;
+  earliest_finish: IsoDate | null;
+  last_final: IsoDate | null;
+  today: SoakTodayOut | null;
+  generated_at: IsoTime;
+}
+
+export interface ControlOut {
+  server_time: IsoTime;
+  session: SessionInfoOut;
+  manual_jobs: ManualJob[];
+  engine: EngineOut | null;
+  killswitches: KillSwitchLightOut[] | null;
+  killswitch_history: KillSwitchEventOut[] | null;
+  strategies: StrategyCardOut[] | null;
+  schedule: ScheduleItemOut[] | null;
+  health: HealthPanelOut | null;
+  soak: SoakSummaryOut | null;
+  errors: EventOut[] | null;
+  part_errors: PartErrorOut[];
 }
 
 // ---------------------------------------------------------------- stream (SSE `data:` payloads)

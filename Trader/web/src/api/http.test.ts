@@ -43,6 +43,22 @@ async function loggedIn(opts: Parameters<typeof createHttpClient>[0] = {}) {
 }
 
 describe("createHttpClient: requests (test 1)", () => {
+  it("live and control request their routes (DB-T1)", async () => {
+    const client = await loggedIn();
+    fetchMock.mockResolvedValueOnce(json({}));
+    await client.live({ range: "run", expand: "12,15" });
+    fetchMock.mockResolvedValueOnce(json({}));
+    await client.control();
+    fetchMock.mockResolvedValueOnce(json({}));
+    await client.live({});
+    expect(calls().map(([url, init]) => [url, init.method])).toEqual([
+      ["/api/live?range=run&expand=12%2C15", "GET"],
+      ["/api/control", "GET"],
+      ["/api/live", "GET"],
+    ]);
+    expect(headerOf(calls()[0]![1], "X-CSRF-Token")).toBeNull();
+  });
+
   it("approve(5) posts to /api/proposals/5/approve with the CSRF header and same-origin credentials", async () => {
     const client = await loggedIn();
     fetchMock.mockResolvedValueOnce(json({ proposal: {}, status: "approved", message: "Approved" }));

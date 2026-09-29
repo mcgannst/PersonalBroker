@@ -9,12 +9,14 @@ from fastapi import APIRouter
 
 from trader.api.routers import (
     auth,
+    control,
     credentials,
     dashboard,
     decisions,
     jobs,
     journal,
     killswitch,
+    live,
     meta,
     performance,
     proposals,
@@ -46,5 +48,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     replays.router,
     reports.router,
     decisions.router,  # P6-T12
+    live.router,  # DB-T1 (live dashboard)
+    control.router,  # DB-T1 (Control page)
     stream.router,
 )

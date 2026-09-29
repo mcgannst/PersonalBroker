@@ -7,6 +7,7 @@
 import { ApiError, queryString, type ApiClient } from "./client";
 import type {
   CandidatesOut,
+  ControlOut,
   DashboardOut,
   DecisionDayOut,
   DecisionDaysOut,
@@ -22,6 +23,7 @@ import type {
   JobRunOut,
   JournalDayOut,
   KillSwitchesOut,
+  LiveOut,
   MetaOut,
   MetricsOut,
   OkOut,
@@ -294,6 +296,10 @@ export function createHttpClient(opts: HttpClientOptions = {}): HttpApiClient {
       }
     },
     decisionsCsvUrl: (q) => url(`/export/decisions.csv${queryString(q)}`),
+
+    // live dashboard and control (DB-T1)
+    live: (q) => get<LiveOut>(`/live${queryString(q)}`),
+    control: () => get<ControlOut>("/control"),
 
     // live updates
     streamUrl: () => url("/stream"),

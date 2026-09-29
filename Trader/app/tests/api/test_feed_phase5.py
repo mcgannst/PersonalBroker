@@ -44,7 +44,7 @@ TRADING: tuple[Topic, ...] = (
 
 
 def test_the_new_topics_are_watermarked() -> None:
-    assert WATERMARK_TOPICS[-2:] == ("replays", "reports")
+    assert WATERMARK_TOPICS[-4:-2] == ("replays", "reports")  # DB-T1 appended marks, activity
     assert set(TRADING) <= set(WATERMARK_TOPICS)
 
 

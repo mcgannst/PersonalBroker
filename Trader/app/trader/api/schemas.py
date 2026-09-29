@@ -52,6 +52,8 @@ Topic = Literal[
     "system",
     "replays",
     "reports",
+    "marks",  # DB-T1: the worker's quote marks (live dashboard)
+    "activity",  # DB-T1: the live run's decision log (live dashboard feed)
 ]
 ManualJob = Literal["nightly", "premarket", "preopen", "postclose", "token-refresh", "weekly"]
 # The weekly report's commentary outcome (P5-T9): written, switched off, over budget, withheld by the number
@@ -930,6 +932,358 @@ class DecisionDayItemOut(ApiModel):
 
 class DecisionDaysOut(ApiModel):
     days: list[DecisionDayItemOut]
+
+
+# --- live dashboard and control (DB-T1) -----------------------------------------------------------------
+# GET /api/live -> LiveOut (the read-only monitor) and GET /api/control -> ControlOut (the Control page). Each
+# optional part is null when it failed, with a `PartErrorOut` in `part_errors` (live dashboard plan S15).
+
+PeriodKey = Literal["today", "week", "run"]
+LiveRange = Literal["today", "run"]
+MarkState = Literal["live", "stale", "missing"]
+TradingState = Literal["running", "paused", "blocked"]  # paused: manual pause; blocked: an automatic switch
+ActivityKind = Literal[
+    "order_placed",
+    "order_cancelled",
+    "fill",
+    "exit",
+    "proposal_created",
+    "proposal_approved",
+    "proposal_rejected",
+    "proposal_expired",
+    "kill_switch_tripped",
+    "kill_switch_reset",
+    "job_failed",
+    "alert",
+    "scan",
+]
+ActivityChip = Literal["trades", "proposals", "alerts", "scan"]
+ActivityTone = Literal["neutral", "up", "down", "warn"]
+EquitySource = Literal["snapshot", "marks", "now"]
+BarSource = Literal["candle", "marks"]
+KillSwitchUnit = Literal["pct", "r", "none"]
+RejectionSource = Literal["decision_log", "candidates", "none"]
+
+
+class PartErrorOut(ApiModel):
+    part: str
+    message: str
+
+
+class PeriodPnlOut(ApiModel):
+    period: PeriodKey
+    date_from: date
+    date_to: date
+    realized: Decimal
+    unrealized: Decimal | None = None
+    unrealized_partial: bool
+    pnl_after_fees: Decimal
+    fees: Decimal
+    claude_usd: Decimal
+    net_after_ai: Decimal
+    trades: int
+    wins: int
+    losses: int
+    win_rate: Decimal | None = None
+    expectancy_r: Decimal | None = None
+    trades_without_r: int
+
+
+class ClaudeTodayOut(ApiModel):
+    date: dt.date
+    spent_usd: Decimal
+    cap_usd: Decimal
+    used_fraction: Decimal | None = None
+
+
+class BooksCheckOut(ApiModel):
+    ok: bool
+    cash: Decimal
+    positions_at_cost: Decimal
+    actual: Decimal
+    starting_cash: Decimal
+    realized_gross: Decimal
+    fees_paid: Decimal
+    expected: Decimal
+    difference: Decimal
+    realized_recorded: Decimal
+    open_positions: int
+
+
+class EquityPointLiveOut(ApiModel):
+    ts: UtcDateTime
+    equity: Decimal
+    source: EquitySource
+
+
+class FillMarkerOut(ApiModel):
+    fill_id: int
+    ts: UtcDateTime
+    ticker: str
+    side: str
+    purpose: str
+    qty: int
+    price: Decimal
+    position_id: int | None = None
+
+
+class EquitySeriesOut(ApiModel):
+    range: LiveRange
+    start_equity: Decimal | None = None
+    points: list[EquityPointLiveOut]
+    fills: list[FillMarkerOut]
+    downsampled: bool
+
+
+class KillSwitchLightOut(ApiModel):
+    switch: str
+    label: str
+    tripped: bool
+    tripped_at: UtcDateTime | None = None
+    value: Decimal | None = None
+    threshold: Decimal | None = None
+    unit: KillSwitchUnit
+    count: int | None = None
+    count_min: int | None = None
+    trip_value: Decimal | None = None
+    trip_threshold: Decimal | None = None
+    automatic: bool
+    needs_web_reset: bool
+    clears: str
+
+
+class RiskOut(ApiModel):
+    killswitches: list[KillSwitchLightOut]
+    equity: Decimal
+    open_risk: Decimal
+    open_risk_cap: Decimal | None = None
+    slots_used: int
+    slots_max: int
+    open_positions: int
+
+
+class SparkPointOut(ApiModel):
+    ts: UtcDateTime
+    price: Decimal
+
+
+class BarOut(ApiModel):
+    start: UtcDateTime
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    source: BarSource
+
+
+class LivePositionOut(ApiModel):
+    id: int
+    symbol_id: int
+    ticker: str
+    strategy_key: str
+    side: Literal["long"]
+    qty: int
+    entry: Decimal
+    mark: Decimal | None = None
+    bid: Decimal | None = None
+    ask: Decimal | None = None
+    mark_at: UtcDateTime | None = None
+    mark_state: MarkState
+    stop: Decimal | None = None
+    stop_working: bool
+    target: Decimal | None = None
+    planned_risk: Decimal | None = None
+    unrealized: Decimal | None = None
+    unrealized_r: Decimal | None = None
+    distance_to_stop_r: Decimal | None = None
+    near_stop: bool
+    opened_at: UtcDateTime
+    held_seconds: int
+    unprotected_seconds: int
+    spark: list[SparkPointOut]
+    bars: list[BarOut] | None = None
+    fills: list[FillMarkerOut]
+    link: str
+
+
+class ActivityItemOut(ApiModel):
+    id: str
+    ts: UtcDateTime
+    kind: ActivityKind
+    chip: ActivityChip
+    ticker: str | None = None
+    text: str
+    amount: Decimal | None = None
+    tone: ActivityTone
+    link: str | None = None
+
+
+class RejectionRuleOut(ApiModel):
+    stage: DecisionStage
+    rule: str
+    count: int
+    tickers: list[str]
+    truncated: bool
+    link: str
+
+
+class RejectionsOut(ApiModel):
+    session_date: date
+    source: RejectionSource
+    total: int
+    rules: list[RejectionRuleOut]
+    final: bool
+    recorded_at: UtcDateTime | None = None
+
+
+class LiveOut(ApiModel):
+    server_time: UtcDateTime
+    run_id: int
+    run_started_at: UtcDateTime
+    session: SessionInfoOut
+    session_day: date
+    approval_mode: Literal["manual", "auto"]
+    trading: TradingState
+    telegram_configured: bool
+    worker: WorkerOut
+    worker_stale: bool
+    marks_stale_seconds: int
+    closed_today: int
+    periods: list[PeriodPnlOut] | None = None
+    claude_today: ClaudeTodayOut | None = None
+    books: BooksCheckOut | None = None
+    equity: EquitySeriesOut | None = None
+    risk: RiskOut | None = None
+    positions: list[LivePositionOut] | None = None
+    activity: list[ActivityItemOut] | None = None
+    rejections: RejectionsOut | None = None
+    timeline: list[TimelineItemOut] | None = None
+    pending: list[ProposalOut] | None = None
+    part_errors: list[PartErrorOut]
+
+
+class EngineOut(ApiModel):
+    approval_mode: Literal["manual", "auto"]
+    trading: TradingState
+    paused_at: UtcDateTime | None = None
+    run_id: int
+    run_started_at: UtcDateTime
+    run_start_date: date
+    version: str
+    app_env: str
+    alembic_revision: str | None = None
+
+
+class StrategyCardOut(ApiModel):
+    key: str
+    kind: Literal["entry", "overlay"]
+    enabled: bool
+    revision: int
+    version: str
+    updated_at: UtcDateTime
+    updated_by: str | None = None
+    owns_open_positions: bool
+    max_positions: int | None = None
+    settings_link: str
+
+
+class ScheduleItemOut(ApiModel):
+    key: str
+    label: str
+    kind: Literal["job", "event"]
+    at: UtcDateTime
+    status: TimelineStatus
+    detail: str | None = None
+    started_at: UtcDateTime | None = None
+    finished_at: UtcDateTime | None = None
+    duration_seconds: float | None = None
+    attempts: int
+    summary: str | None = None
+    rerun: ManualJob | None = None
+
+
+class QuestradeCountsOut(ApiModel):
+    requests: int
+    http_429: int
+    pause_s: float
+    http_5xx: int
+    transport_errors: int
+
+
+class QuestradeStatsOut(ApiModel):
+    day: date
+    since: UtcDateTime
+    market: QuestradeCountsOut
+    account: QuestradeCountsOut
+    rate_limit: dict[str, int] | None = None
+
+
+class OpeningBarsOut(ApiModel):
+    session_date: date
+    started_at: UtcDateTime
+    symbols: int
+    completed: int
+    errors: int
+    outstanding: int
+    elapsed_s: float
+    deadline_s: float | None = None
+    http_429: int
+    pause_s: float
+    complete: bool
+    raised: str | None = None
+
+
+class MarksHealthOut(ApiModel):
+    written_at: UtcDateTime | None = None
+    symbols: int
+    failing: bool
+
+
+class HealthPanelOut(ApiModel):
+    worker: WorkerOut
+    worker_stale: bool
+    token: TokenOut
+    db_ok: bool
+    db_latency_ms: int | None = None
+    telegram_configured: bool
+    questrade: QuestradeStatsOut | None = None
+    opening_bars: OpeningBarsOut | None = None
+    marks: MarksHealthOut | None = None
+    notifications_failed: list[NotificationOut]
+    tz_iana_version: str | None = None
+
+
+class SoakTodayOut(ApiModel):
+    session_date: date
+    verdict: str
+    failed: list[str]
+    provisional: bool
+
+
+class SoakSummaryOut(ApiModel):
+    target: int
+    consecutive_clean: int
+    total_clean: int
+    day_one: date | None = None
+    earliest_finish: date | None = None
+    last_final: date | None = None
+    today: SoakTodayOut | None = None
+    generated_at: UtcDateTime
+
+
+class ControlOut(ApiModel):
+    server_time: UtcDateTime
+    session: SessionInfoOut
+    manual_jobs: list[ManualJob]
+    engine: EngineOut | None = None
+    killswitches: list[KillSwitchLightOut] | None = None
+    killswitch_history: list[KillSwitchEventOut] | None = None
+    strategies: list[StrategyCardOut] | None = None
+    schedule: list[ScheduleItemOut] | None = None
+    health: HealthPanelOut | None = None
+    soak: SoakSummaryOut | None = None
+    errors: list[EventOut] | None = None
+    part_errors: list[PartErrorOut]
 
 
 # --- stream (SSE event payloads) ------------------------------------------------------------------------

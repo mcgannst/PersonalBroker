@@ -24,6 +24,7 @@ import type {
   TotpSetupIn,
 } from "../api/types";
 import * as fx from "./fixtures";
+import * as lfx from "./liveFixtures";
 
 /** Methods that return a Promise (every method except the three URL builders). */
 export type AsyncApiMethod = Exclude<ApiMethod, "exportTradesUrl" | "decisionsCsvUrl" | "streamUrl">;
@@ -96,6 +97,8 @@ export function defaultResponses(): FakeResponses {
     weeklyReport: fx.weeklyReportOk,
     decisionDays: fx.decisionDaysOut,
     decisionDay: fx.decisionDayOut,
+    live: lfx.liveOut,
+    control: lfx.controlOut,
   };
 }
 
@@ -337,6 +340,13 @@ export class FakeApiClient implements ApiClient {
   decisionsCsvUrl(q: Parameters<ApiClient["decisionsCsvUrl"]>[0]): string {
     this.calls.push(["decisionsCsvUrl", [q]]);
     return `/api/export/decisions.csv${queryString(q)}`;
+  }
+  // live dashboard and control (DB-T1)
+  live(q: Parameters<ApiClient["live"]>[0]) {
+    return this.call("live", [q]);
+  }
+  control() {
+    return this.call("control", []);
   }
   // live updates
   streamUrl(): string {

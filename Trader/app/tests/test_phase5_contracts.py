@@ -170,9 +170,9 @@ def test_every_contract_module_imports_with_its_names(module: str) -> None:
 
 
 def test_routers_are_seventeen_with_replays_and_reports_before_stream() -> None:
-    assert len(ROUTERS) == 18  # P6-T12 added decisions (before stream)
+    assert len(ROUTERS) == 20  # P6-T12 added decisions, DB-T1 live and control (all before stream)
     tags = [r.tags[0] for r in ROUTERS]
-    assert tags[-4:] == ["replays", "reports", "decisions", "stream"]
+    assert tags[-6:] == ["replays", "reports", "decisions", "live", "control", "stream"]
     for name in ("replays", "reports"):
         assert importlib.import_module(f"trader.api.routers.{name}").router.tags == [name]
 

@@ -9,6 +9,7 @@ messages (decision "SSE by polling, not LISTEN/NOTIFY").
   `events` messages count only rows without a run or of a `live` run (`live_or_unscoped`), so a running
   replay never makes every open live page refetch; `strategies` counts only `live`-scoped config rows.
   `replays` follows the replay runs (`max(id)`, `max(updated_at)`) and `reports` the weekly reports.
+  `marks` (the worker's quote marks) and `activity` (the decision log) count live rows only (DB-T1).
 - `PollingChangeFeed.run(stop)` polls only while someone is subscribed. The baseline is read when the first
   subscriber arrives (before its stream sends the full `invalidate`, so nothing changed after the client's
   refetch can be missed); with no subscribers the loop sleeps without querying. A DB error is logged once per
@@ -53,6 +54,8 @@ WATERMARK_TOPICS: tuple[Topic, ...] = (
     "system",
     "replays",
     "reports",
+    "marks",  # DB-T1
+    "activity",  # DB-T1
 )
 
 MAX_EVENTS = 50  # new event_log rows per `events` message (the newest ones)
@@ -112,6 +115,10 @@ def _watermark_columns() -> dict[Topic, tuple[Select[Any], ...]]:
         "system": (select(hb.phase).where(worker), select(hb.beat_at).where(worker)),
         "replays": (_max(m.Run.id, replay), _max(m.Run.updated_at, replay)),
         "reports": (_max(m.WeeklyReport.updated_at),),
+        # The live dashboard (DB-T1): the mark publisher's writes (at most every 2 s in the session) and the
+        # decision log (a rebuilt day gets new ids, a skipped refresh changes nothing). Live rows only.
+        "marks": (_max(m.QuoteMark.written_at, live_or_unscoped(m.QuoteMark.run_id)),),
+        "activity": (_max(m.DecisionLog.id, live_or_unscoped(m.DecisionLog.run_id)),),
     }
 
 

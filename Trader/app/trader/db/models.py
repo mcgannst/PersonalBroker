@@ -1,6 +1,7 @@
 """ORM models (SPEC §10). Phase 1 tables, the Phase 2 trading tables (migration 0002), the Phase 3
 worker and Telegram tables (migration 0004), the Phase 4 web tables (migration 0005), the Phase 5
-replay columns and weekly reports (migration 0006), then the Phase 6 decision log (migration 0007)."""
+replay columns and weekly reports (migration 0006), then the Phase 6 decision log (migration 0007) and the
+live dashboard's quote marks and mark bars (migration 0008)."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -606,3 +607,38 @@ class DecisionLog(Base):
     data: Mapped[Any] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     recorded_at: Mapped[datetime] = mapped_column(TS)
     final: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+
+
+# --- Phase 6: live marks (migration 0008). Written only by the worker's mark publisher from quotes it already
+# received, read only by the API (live dashboard plan S1/S2). Run-scoped. Bars from quotes, never candles.
+MARK_BAR_OHLC_SQL = "low <= open AND low <= close AND high >= open AND high >= close AND low > 0"
+
+
+class QuoteMark(Base):
+    __tablename__ = "quote_marks"
+    run_id: Mapped[int] = mapped_column(ForeignKey(RUN_FK), primary_key=True)
+    symbol_id: Mapped[int] = mapped_column(ForeignKey(SYMBOL_FK), primary_key=True)
+    bid: Mapped[Decimal | None] = mapped_column(Money)
+    ask: Mapped[Decimal | None] = mapped_column(Money)
+    last: Mapped[Decimal | None] = mapped_column(Money)
+    quote_time: Mapped[datetime | None] = mapped_column(TS)  # Questrade's lastTradeTime
+    observed_at: Mapped[datetime] = mapped_column(TS)  # when the worker received it
+    written_at: Mapped[datetime] = mapped_column(TS)
+    is_halted: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+
+
+class MarkBar(Base):
+    __tablename__ = "mark_bars"
+    __table_args__ = (
+        CheckConstraint(MARK_BAR_OHLC_SQL, name="ck_mark_bars_ohlc"),
+        CheckConstraint("samples > 0", name="ck_mark_bars_samples"),
+    )
+    run_id: Mapped[int] = mapped_column(ForeignKey(RUN_FK), primary_key=True)
+    symbol_id: Mapped[int] = mapped_column(ForeignKey(SYMBOL_FK), primary_key=True)
+    minute_start: Mapped[datetime] = mapped_column(TS, primary_key=True)
+    open: Mapped[Decimal] = mapped_column(Money)
+    high: Mapped[Decimal] = mapped_column(Money)
+    low: Mapped[Decimal] = mapped_column(Money)
+    close: Mapped[Decimal] = mapped_column(Money)
+    samples: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(TS)

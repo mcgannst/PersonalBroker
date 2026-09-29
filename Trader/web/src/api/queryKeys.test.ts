@@ -27,6 +27,15 @@ describe("query keys", () => {
     expect(prefixesFor(["proposals", "killswitch"])).toEqual(["dashboard", "proposals", "proposal", "position", "killswitches"]);
   });
 
+  it("the live dashboard and Control keys sit under the dashboard and system prefixes (DB-T1)", () => {
+    expect(qk.live()).toEqual(["dashboard", "live", {}]);
+    expect(qk.live({ range: "run", expand: "7" })).toEqual(["dashboard", "live", { range: "run", expand: "7" }]);
+    expect(qk.control()).toEqual(["system", "control"]);
+    expect(TOPIC_KEYS.marks).toEqual(["dashboard"]);
+    expect(TOPIC_KEYS.activity).toEqual(["dashboard"]);
+    expect(prefixesFor(["marks", "activity"])).toEqual(["dashboard"]);
+  });
+
   it("a new trade refreshes the journal (its days show trade counts and realized P&L)", () => {
     expect(TOPIC_KEYS.trades).toContain("journal");
   });

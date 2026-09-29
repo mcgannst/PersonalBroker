@@ -96,8 +96,10 @@ def _version(engine: Engine) -> str:
 
 
 # 1 ---------------------------------------------------------------------------------------------------------
-def test_head_is_0007(pg_url: str) -> None:
-    assert _head(pg_url) == "0007"
+def test_0007_is_in_the_chain_below_the_head(pg_url: str) -> None:
+    assert _head(pg_url) == "0008"  # DB-T1 added 0008 (live marks) on top of 0007
+    script = ScriptDirectory.from_config(alembic_config(pg_url)).get_revision("0007")
+    assert script is not None and script.down_revision == "0006"
 
 
 def test_columns_primary_key_and_foreign_keys(migrated_engine: Engine) -> None:
@@ -214,10 +216,10 @@ def _restore_head(pg_url: str, migrated_engine: Engine) -> Iterator[None]:
 def test_downgrade_drops_the_table_and_upgrade_restores_it(
     pg_url: str, migrated_engine: Engine, _restore_head: None
 ) -> None:
-    command.downgrade(alembic_config(pg_url), "-1")
+    command.downgrade(alembic_config(pg_url), "0006")
     assert _version(migrated_engine) == "0006"
     assert "decision_log" not in inspect(migrated_engine).get_table_names(schema="trader")
-    command.upgrade(alembic_config(pg_url), "head")
+    command.upgrade(alembic_config(pg_url), "0007")
     assert _version(migrated_engine) == "0007"
     assert _columns(migrated_engine) == COLUMNS
 

@@ -6,6 +6,7 @@ import type {
   EventsQuery,
   JobsQuery,
   JournalQuery,
+  LiveQuery,
   MetricsQuery,
   EquityQuery,
   PositionsQuery,
@@ -43,6 +44,10 @@ export const qk = {
   // Phase 6 (P6-T12)
   decisionDays: (q: DecisionDaysQuery = {}) => ["decisionDays", q] as const,
   decisionDay: (q: DecisionDayQuery) => ["decisionDay", q] as const,
+  // Live dashboard and Control page (DB-T1): under the existing `dashboard` and `system` prefixes, so every
+  // mutation that invalidates those refreshes the new pages too (plan S9).
+  live: (q: LiveQuery = {}) => ["dashboard", "live", q] as const,
+  control: () => ["system", "control"] as const,
 };
 
 /** The resource-name prefixes each SSE `invalidate` topic refreshes. */
@@ -63,6 +68,8 @@ export const TOPIC_KEYS: Record<Topic, readonly string[]> = {
   system: ["system", "dashboard"],
   replays: ["replays", "replay", "replayOptions"],
   reports: ["weeklyReport"],
+  marks: ["dashboard"],
+  activity: ["dashboard"],
 };
 
 /** The distinct prefixes to invalidate for a set of topics. */

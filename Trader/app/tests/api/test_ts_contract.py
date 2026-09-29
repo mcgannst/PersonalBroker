@@ -4,7 +4,8 @@ For every pydantic model in `trader.api.schemas`, types.ts declares a type of th
 equal the model's, and whose nullability agrees: a field that accepts None is `X | null` in TypeScript, and
 one that doesn't is not. An optional TypeScript field (`name?:`) must have a default in Python. Every value of
 the `Topic`, `FieldKind`, `TimelineStatus`, `ManualJob` and `SessionPhase` literals (and, P6-T9,
-`DecisionStage`, `DecisionOutcome` and `CheckOp`) appears in the TS union.
+`DecisionStage`, `DecisionOutcome` and `CheckOp`, and DB-T1's live dashboard literals) appears in the TS
+union.
 """
 
 import inspect
@@ -145,6 +146,17 @@ def test_every_schema_model_is_mirrored_with_the_same_fields_and_nullability(mod
         ("DecisionStage", schemas.DecisionStage),  # P6-T9
         ("DecisionOutcome", schemas.DecisionOutcome),
         ("CheckOp", schemas.CheckOp),
+        ("PeriodKey", schemas.PeriodKey),  # DB-T1 (live dashboard)
+        ("LiveRange", schemas.LiveRange),
+        ("MarkState", schemas.MarkState),
+        ("TradingState", schemas.TradingState),
+        ("ActivityKind", schemas.ActivityKind),
+        ("ActivityChip", schemas.ActivityChip),
+        ("ActivityTone", schemas.ActivityTone),
+        ("EquitySource", schemas.EquitySource),
+        ("BarSource", schemas.BarSource),
+        ("KillSwitchUnit", schemas.KillSwitchUnit),
+        ("RejectionSource", schemas.RejectionSource),
     ],
 )
 def test_every_literal_value_is_in_the_ts_union(name: str, literal: Any) -> None:

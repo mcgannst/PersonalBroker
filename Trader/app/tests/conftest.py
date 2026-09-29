@@ -56,7 +56,18 @@ def _day_jobs_single_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(scope="session")
 def pg_url() -> Iterator[str]:
-    with PostgresContainer("postgres:14-alpine", driver="psycopg") as pg:
+    """One throwaway cluster per test process. Under pytest-xdist (scripts/check.sh runs `-n 4`) every worker
+    is its own pytest session, so each worker starts its own container: roles, databases, advisory locks and
+    pg_terminate_backend stay private to that worker, exactly as in a serial run.
+
+    Durability is switched off (fsync, synchronous_commit, full_page_writes): it only matters if the container
+    itself crashes, which no test does (the crash tests kill the worker process, not PostgreSQL). Visibility,
+    locking, isolation and triggers are unchanged. Tests that pin server settings use their own containers
+    (tests/integration/test_prod_db_setup.py, tests/gauntlet/test_p6_t6_breaker.py)."""
+    container = PostgresContainer("postgres:14-alpine", driver="psycopg").with_command(
+        "postgres -c fsync=off -c synchronous_commit=off -c full_page_writes=off"
+    )
+    with container as pg:
         yield pg.get_connection_url()
 
 

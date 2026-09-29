@@ -6,7 +6,9 @@ uv sync --quiet
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy trader
-uv run pytest -q "$@"
+# pytest-xdist: TRADER_TEST_WORKERS processes (default 4, 0 = one process). Each worker starts its own
+# PostgreSQL container (tests/conftest.py pg_url). loadfile keeps every module on one worker, in file order.
+uv run pytest -q -n "${TRADER_TEST_WORKERS:-4}" --dist loadfile "$@"
 
 # The web app (Phase 4): type check and Vitest, whenever the web project is present. With it present, a
 # missing npm is a failure, so the gate is never silently incomplete.

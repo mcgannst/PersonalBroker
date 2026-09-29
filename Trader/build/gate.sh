@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # Shared test lane: runs the full quality gate (app/scripts/check.sh) for THIS checkout, but at most
-# TRADER_GATE_SLOTS (default 3) full gates run at once across every worktree on the machine. A single
-# pytest run uses only 1-2 of the Mac's 8 cores, so 3 lanes keep the machine busy without the overload
-# that 8 simultaneous runs caused. Other callers wait for a free slot.
+# TRADER_GATE_SLOTS (default 2) full gates run at once across every worktree on the machine. Each gate runs
+# pytest with TRADER_TEST_WORKERS (default 4) xdist workers, each with its own PostgreSQL container, so one
+# gate uses about 4 of the Mac's 8 cores: 2 lanes x 4 workers keep the machine busy without overload.
+# Other callers wait for a free slot.
 # Usage (from a worktree root): bash Trader/build/gate.sh
 # Exit code is check.sh's exit code.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CHECK="$HERE/../app/scripts/check.sh"
 BASE="${TRADER_GATE_LOCK:-/private/tmp/claude-501/trader-gate.lock}"
-SLOTS="${TRADER_GATE_SLOTS:-3}"
+SLOTS="${TRADER_GATE_SLOTS:-2}"
 STALE_MINUTES="${TRADER_GATE_STALE_MINUTES:-45}"
 
 mkdir -p "$(dirname "$BASE")"

@@ -377,10 +377,11 @@ async def test_the_worker_steps_on_while_the_decisions_loop_blocks_and_fails(
     vt = VirtualTime(clock)
     h = Harness(db_factory, clock, sleep=vt.sleep)
     blocked = threading.Event()
+    release = threading.Event()  # set once the assertions are done, so teardown does not wait out the 3 s
 
     def slow_running(factory: Any, day: date) -> bool:
         blocked.set()
-        time.sleep(3)
+        release.wait(3)
         raise RuntimeError("stuck database")
 
     monkeypatch.setattr(loop_mod, "event_running", slow_running)
@@ -398,8 +399,10 @@ async def test_the_worker_steps_on_while_the_decisions_loop_blocks_and_fails(
     worker = Worker(WorkerDeps(**{**vars(h.deps()), "decisions": loop}))
     started = time.monotonic()
     await _run(worker, stop, vt)
+    elapsed = time.monotonic() - started
+    release.set()
     assert len(polls_while_blocked) >= 20  # the step loop and the relay went on meanwhile
-    assert time.monotonic() - started < 3.0  # and the stop did not wait for the blocked pass
+    assert elapsed < 3.0  # and the stop did not wait for the blocked pass
     assert h.engines and len(h.engines[-1].polls) >= 20
 
 

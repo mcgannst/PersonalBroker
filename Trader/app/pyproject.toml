@@ -46,6 +46,7 @@ dev = [
   "mypy>=1.11",
   "pandas-stubs>=2.2",
   "httpx2>=2.0",
+  "pytest-xdist>=3.6",
 ]
 
 [build-system]

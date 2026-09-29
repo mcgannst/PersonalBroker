@@ -492,23 +492,23 @@ Web (`Trader/web/src/`):
 - Only rows of `run_id` are read (replay rows can never enter).
 
 **Acceptance tests (pure unless marked db):**
-- [ ] 1. `period_windows` on Wednesday 2026-10-07 14:00 ET: today 10-07, week 10-05..10-07, run from the run's ET start date; on Saturday 2026-10-10 12:00 ET: today = Friday 10-09 (last session), week 10-05..10-10.
-- [ ] 2. DST: `et_day_bounds(2026-11-01)` is `[2026-11-01T04:00Z, 2026-11-02T05:00Z)` (25 hours) and `et_day_bounds(2026-03-08)` is `[2026-03-08T05:00Z, 2026-03-09T04:00Z)` (23 hours); the S5 pinned fill cases land in the stated weeks.
-- [ ] 3. Holidays: on Thanksgiving 2026-11-26 `session_day` is 2026-11-25; on Monday 2026-10-12 (a session day) before the open `session_day` is 2026-10-12.
-- [ ] 4. `period_blocks` (db): trades on Monday and Wednesday of the week, one the previous Friday, one of a replay run on Wednesday and one of an older live run → today, week and run realized equal the hand sums; the replay and old-run trades are never counted; wins/losses/win rate/expectancy equal `compute_metrics` over the same dates.
-- [ ] 5. Fees (db): the week's fees equal Σ of the rounded fill fees with `ts` in the week bounds, including a fill at 2026-11-02T04:59:59Z counted in the week of 2026-10-26 (DST end); `pnl_after_fees` does not subtract fees again (a trade with pnl −12.50 and fees 0.35 gives realized −12.50, fees 0.35).
-- [ ] 6. Claude (db): catalysts on three session dates and a weekly report updated on Saturday → today/week/run spend as S4; `net_after_ai` = `pnl_after_fees` − spend; `claude_today` equals `claude_spent(factory, et_date(now))` and the cap is `claude_daily_budget_usd`.
-- [ ] 7. Unrealized: open values with marks give (mark − avg) × qty − entry fees; one without a mark sets `unrealized_partial`; none with a mark gives `unrealized` None and `pnl_after_fees` = realized.
-- [ ] 8. Invariant (db): on a seeded run with closed trades and two marked open positions, the run block's `pnl_after_fees` equals `equity_at_marks − starting_cash` exactly.
-- [ ] 9. Empty run (db): no trades, no fills → every block zero, win rate and expectancy None, no error.
-- [ ] 10. Books ✓ (db): a run built through the real `SimBroker` (fills, ledger rows, trades) with 150 round trips and odd fee fractions (SEC fee to 7 dp) → `ok` true and `difference` exactly 0.0000 (no drift).
-- [ ] 11. Books ✗ (db, each from the ✓ state): delete a closed position's `trades` row (the table is not append-only) → ✗ with the difference equal to that trade's gross; add a duplicate `fee` ledger row → ✗ by that fee (the ledger is append-only, so corrupt by inserting); change an open position's `avg_price` → ✗.
-- [ ] 12. Books with open positions: two open positions (entry fees paid) → ✓; `positions_at_cost` = Σ round4(avg × qty); `realized_recorded` = Σ `trades.pnl`.
-- [ ] 13. Books on a brand-new run (deposit only) → ✓ with every component zero except cash = starting cash.
-- [ ] 14. `books_check` reads only (a statement listener sees only SELECTs).
-- [ ] 15. `downsample`: 499 and 500 points unchanged (`downsampled` false); 10,000 points → at most 500, first and last kept, the global minimum and maximum kept, time order kept, deterministic.
-- [ ] 16. `equity_series` (db): `today` with 2 snapshots, 30 minutes of `mark_bars` while one position was open, and `equity_now` → snapshot points, 30 derived `marks` points whose values equal cash-as-of + qty × bar close, and one `now` point; `start_equity` = the last snapshot before the open (or starting cash when none); a stored 1-minute candle overrides the mark bar of its minute; `run` range → snapshots of the whole run plus `now`, `start_equity` = starting cash; fills of the range as markers.
-- [ ] 17. Gate and commit `DB-T3: live P&L periods, books check and equity series`.
+- [x] 1. `period_windows` on Wednesday 2026-10-07 14:00 ET: today 10-07, week 10-05..10-07, run from the run's ET start date; on Saturday 2026-10-10 12:00 ET: today = Friday 10-09 (last session), week 10-05..10-10.
+- [x] 2. DST: `et_day_bounds(2026-11-01)` is `[2026-11-01T04:00Z, 2026-11-02T05:00Z)` (25 hours) and `et_day_bounds(2026-03-08)` is `[2026-03-08T05:00Z, 2026-03-09T04:00Z)` (23 hours); the S5 pinned fill cases land in the stated weeks.
+- [x] 3. Holidays: on Thanksgiving 2026-11-26 `session_day` is 2026-11-25; on Monday 2026-10-12 (a session day) before the open `session_day` is 2026-10-12.
+- [x] 4. `period_blocks` (db): trades on Monday and Wednesday of the week, one the previous Friday, one of a replay run on Wednesday and one of an older live run → today, week and run realized equal the hand sums; the replay and old-run trades are never counted; wins/losses/win rate/expectancy equal `compute_metrics` over the same dates.
+- [x] 5. Fees (db): the week's fees equal Σ of the rounded fill fees with `ts` in the week bounds, including a fill at 2026-11-02T04:59:59Z counted in the week of 2026-10-26 (DST end); `pnl_after_fees` does not subtract fees again (a trade with pnl −12.50 and fees 0.35 gives realized −12.50, fees 0.35).
+- [x] 6. Claude (db): catalysts on three session dates and a weekly report updated on Saturday → today/week/run spend as S4; `net_after_ai` = `pnl_after_fees` − spend; `claude_today` equals `claude_spent(factory, et_date(now))` and the cap is `claude_daily_budget_usd`.
+- [x] 7. Unrealized: open values with marks give (mark − avg) × qty − entry fees; one without a mark sets `unrealized_partial`; none with a mark gives `unrealized` None and `pnl_after_fees` = realized.
+- [x] 8. Invariant (db): on a seeded run with closed trades and two marked open positions, the run block's `pnl_after_fees` equals `equity_at_marks − starting_cash` exactly.
+- [x] 9. Empty run (db): no trades, no fills → every block zero, win rate and expectancy None, no error.
+- [x] 10. Books ✓ (db): a run built through the real `SimBroker` (fills, ledger rows, trades) with 150 round trips and odd fee fractions (SEC fee to 7 dp) → `ok` true and `difference` exactly 0.0000 (no drift).
+- [x] 11. Books ✗ (db, each from the ✓ state): delete a closed position's `trades` row (the table is not append-only) → ✗ with the difference equal to that trade's gross; add a duplicate `fee` ledger row → ✗ by that fee (the ledger is append-only, so corrupt by inserting); change an open position's `avg_price` → ✗.
+- [x] 12. Books with open positions: two open positions (entry fees paid) → ✓; `positions_at_cost` = Σ round4(avg × qty); `realized_recorded` = Σ `trades.pnl`.
+- [x] 13. Books on a brand-new run (deposit only) → ✓ with every component zero except cash = starting cash.
+- [x] 14. `books_check` reads only (a statement listener sees only SELECTs).
+- [x] 15. `downsample`: 499 and 500 points unchanged (`downsampled` false); 10,000 points → at most 500, first and last kept, the global minimum and maximum kept, time order kept, deterministic.
+- [x] 16. `equity_series` (db): `today` with 2 snapshots, 30 minutes of `mark_bars` while one position was open, and `equity_now` → snapshot points, 30 derived `marks` points whose values equal cash-as-of + qty × bar close, and one `now` point; `start_equity` = the last snapshot before the open (or starting cash when none); a stored 1-minute candle overrides the mark bar of its minute; `run` range → snapshots of the whole run plus `now`, `start_equity` = starting cash; fills of the range as markers.
+- [x] 17. Gate and commit `DB-T3: live P&L periods, books check and equity series`.
 
 **LIVE steps:** none.
 

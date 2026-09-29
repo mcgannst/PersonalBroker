@@ -691,16 +691,16 @@ export function TodayTimeline(props: { timeline: TimelineItemOut[] | null; sessi
 - Every component uses `Panel`; text renders as plain text.
 
 **Acceptance tests:**
-- [ ] 1. PositionsTable with 0, 1 and 20 positions (fixtures): the empty state with the closed count; 20 rows with sparklines; default sort by unrealised descending; "Distance to stop" sort ascending with missing last; `near_stop` rows highlighted and announced.
-- [ ] 2. Expand: tapping rows calls `onExpand` with up to 3 ids, a fourth tap drops the oldest; the expanded row shows `PositionChart` with its bars, or "Chart data not available yet".
-- [ ] 3. Stale marks: a `stale` row and a `missing` row show the row badge and the panel badge; all `live` → no badge.
-- [ ] 4. Sparkline: 60 points render a polyline with 60 coordinates, the entry and stop lines, the aria label; 1 point → placeholder.
-- [ ] 5. ActivityFeed: chips filter by `chip` and keep order; empty states; exit amounts carry money tone, other items none; links rendered as router links.
-- [ ] 6. RejectionsPanel: rules and counts, tapping a rule reveals tickers with the S8 link format (`/reports?day=D&stage=scan&outcome=rejected&ticker=T`), truncated note, the `candidates` source note, the empty state.
-- [ ] 7. TodayTimeline for a session day and a closed day.
-- [ ] 8. Panel errors: each component with `null` data and an error shows the error and Retry without throwing.
-- [ ] 9. Touch targets ≥ 44 px; no horizontal overflow at 390 px with 20 positions; XSS fixture renders text literally.
-- [ ] 10. Types clean; gate and commit `DB-T8: live dashboard positions, activity, rejections and today components`.
+- [x] 1. PositionsTable with 0, 1 and 20 positions (fixtures): the empty state with the closed count; 20 rows with sparklines; default sort by unrealised descending; "Distance to stop" sort ascending with missing last; `near_stop` rows highlighted and announced.
+- [x] 2. Expand: tapping rows calls `onExpand` with up to 3 ids, a fourth tap drops the oldest; the expanded row shows `PositionChart` with its bars, or "Chart data not available yet".
+- [x] 3. Stale marks: a `stale` row and a `missing` row show the row badge and the panel badge; all `live` → no badge.
+- [x] 4. Sparkline: 60 points render a polyline with 60 coordinates, the entry and stop lines, the aria label; 1 point → placeholder.
+- [x] 5. ActivityFeed: chips filter by `chip` and keep order; empty states; exit amounts carry money tone, other items none; links rendered as router links.
+- [x] 6. RejectionsPanel: rules and counts, tapping a rule reveals tickers with the S8 link format (`/reports?day=D&stage=scan&outcome=rejected&ticker=T`), truncated note, the `candidates` source note, the empty state.
+- [x] 7. TodayTimeline for a session day and a closed day.
+- [x] 8. Panel errors: each component with `null` data and an error shows the error and Retry without throwing.
+- [x] 9. Touch targets ≥ 44 px; no horizontal overflow at 390 px with 20 positions; XSS fixture renders text literally.
+- [x] 10. Types clean; gate and commit `DB-T8: live dashboard positions, activity, rejections and today components`.
 
 **LIVE steps:** none.
 

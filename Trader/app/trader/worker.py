@@ -15,6 +15,9 @@ Four asyncio tasks run side by side, so none can delay another (Telegram never b
 - the bot (long polling), restarted 30 s after it dies.
 - (P6-T11) the decision log loop (`trader.decisions.loop.DecisionsLoop`), when given: logging only, its
   database work in worker threads, cancelled on stop without a grace period.
+- (DB-T2) the mark publisher (`trader.marks.publisher.MarkPublisher`), when given: logging only (the live
+  dashboard's `quote_marks`/`mark_bars`), its database work in its own thread, cancelled on stop without a
+  grace period.
 
 Failure alerts (fix round 1): a part that fails writes ONE `error` event when its failure streak starts,
 one `critical` event at FAILED_STEPS_CRITICAL consecutive failures, and one `info` "recovered after N
@@ -50,6 +53,7 @@ from trader.events import log_event
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock, et_date
 from trader.market.sessions import SessionPhase, session_phase
+from trader.marks.publisher import MarkPublisher
 from trader.notify.notifier import settle_interrupted_sends
 from trader.settings_store import RuntimeSettings
 
@@ -102,6 +106,9 @@ class WorkerDeps:
     # P6-T11: the decision log's refresh loop, run beside the relay. Its database work runs off the event
     # loop and it never raises. None: the worker records no decisions.
     decisions: DecisionsLoop | None = None
+    # DB-T2 (live dashboard): the mark publisher, run beside the decisions loop. Its database work runs in its
+    # own thread and it never raises. None: no marks are written.
+    marks: MarkPublisher | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -530,6 +537,10 @@ class Worker:
                 tasks["decisions"] = asyncio.create_task(
                     self._supervise("decisions_loop", self.deps.decisions.run, stop)
                 )
+            if self.deps.marks is not None:
+                tasks["marks"] = asyncio.create_task(
+                    self._supervise("marks_publisher", self.deps.marks.run, stop)
+                )
             while not stop.is_set():
                 await self.step()
                 if stop.is_set():
@@ -556,6 +567,7 @@ class Worker:
                 self._finish(tasks.get("bot"), timeout),
                 self._finish(tasks.get("heartbeat"), 0),
                 self._finish(tasks.get("decisions"), 0),  # no grace period: a pass is idempotent
+                self._finish(tasks.get("marks"), 0),  # idem; a pass stuck in its thread ends at its timeout
             )
         finally:
             try:

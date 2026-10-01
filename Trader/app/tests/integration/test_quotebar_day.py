@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from tests.factories import add_symbol
+from tests.factories import add_capture, add_symbol
 from tests.fakes_questrade import FakeQuestrade
 from tests.strategies.fakes import FakeCatalyst, FakeCatalysts
 from trader.adapters.questrade.models import QtQuote
@@ -51,7 +51,7 @@ def open_quote(qid: int, ticker: str, volume: int) -> QtQuote:
         last=Decimal("20.30"),
         last_regular=Decimal("20.30"),
         volume=volume,
-        last_trade_time=T_ORB - timedelta(seconds=1),
+        last_trade_time=OPEN + timedelta(minutes=5, seconds=1),  # FIX-DAY1: was 09:35:04, now quote_late
         delay=0,
         is_halted=False,
         vwap=None,
@@ -105,6 +105,8 @@ async def test_the_935_scan_enters_on_quote_bars_under_the_cap(db_factory: sessi
                     recorded_at=CAL.session_close(PREV) + timedelta(minutes=15),
                 )
             )
+            # FIX-DAY1: the volume at the open (no pre-market here), so the opening volume is the quote volume
+            add_capture(s, DAY, ids[t], "open", OPEN - timedelta(seconds=2), volume=0)
         ids["SPY"] = add_symbol(s, "SPY", questrade_id=199, exchange="ARCA")
         s.commit()
     for i, t in enumerate(CHEAP):

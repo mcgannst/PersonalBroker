@@ -1,6 +1,6 @@
 """Tiny row builders for DB tests. Each flushes and returns the new primary key; the caller commits."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from trader.db import models as m
 
 T0 = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+_ONE_SECOND = timedelta(seconds=1)
 
 
 def add_symbol(
@@ -67,3 +68,32 @@ def add_strategy_config(
     s.add(cfg)
     s.flush()
     return cfg.id
+
+
+def add_capture(
+    s: Session,
+    session_date: Any,
+    symbol_id: int,
+    kind: str,
+    at: datetime,
+    *,
+    volume: int,
+    quote_time: datetime | None = None,
+    **prices: Any,
+) -> None:
+    """FIX-DAY1: one stored timed quote capture (`open`: the volume at the open, `bar`: the 09:35:00 one).
+    `prices` sets open/high/low/last/last_regular (Decimals); `quote_time` defaults to `at` - 1 s."""
+    s.add(
+        m.OpeningQuoteCapture(
+            session_date=session_date,
+            symbol_id=symbol_id,
+            kind=kind,
+            capture_started_at=at,
+            capture_ended_at=at,
+            fetched_at=at,
+            quote_time=quote_time if quote_time is not None else at - _ONE_SECOND,
+            volume=volume,
+            delay=prices.pop("delay", 0),
+            **prices,
+        )
+    )

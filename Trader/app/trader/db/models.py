@@ -672,6 +672,35 @@ class OpeningBarQuote(Base):
     official_close: Mapped[Decimal | None] = mapped_column(Money)
     official_volume: Mapped[int | None] = mapped_column(BigInteger)
     decision_differs: Mapped[bool | None] = mapped_column(Boolean)
+    # FIX-DAY1 (migration 0010): `volume` = (quote_volume - open_volume) x vol_factor, volume_basis "delta";
+    # the capture's start and end (NULL: the scan's own quotes pass, not the 09:35:00 capture).
+    open_volume: Mapped[int | None] = mapped_column(BigInteger)
+    volume_basis: Mapped[str | None] = mapped_column(String(20))
+    capture_started_at: Mapped[datetime | None] = mapped_column(TS)
+    capture_ended_at: Mapped[datetime | None] = mapped_column(TS)
+
+
+class OpeningQuoteCapture(Base):
+    """FIX-DAY1 (migration 0010): one symbol's raw quote from a timed capture: `open` (the volume at the open,
+    read just before 09:30:00 ET) or `bar` (read from 09:35:00.0 ET, what the 9:35:05 ORB event builds its bar
+    from). `quote_time` is Questrade's lastTradeTime, `fetched_at` when the app received the quote."""
+
+    __tablename__ = "opening_quote_captures"
+    __table_args__ = (CheckConstraint("kind IN ('open', 'bar')", name="ck_opening_quote_captures_kind"),)
+    session_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    symbol_id: Mapped[int] = mapped_column(ForeignKey(SYMBOL_FK), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(10), primary_key=True)
+    capture_started_at: Mapped[datetime] = mapped_column(TS)
+    capture_ended_at: Mapped[datetime] = mapped_column(TS)
+    fetched_at: Mapped[datetime] = mapped_column(TS)
+    quote_time: Mapped[datetime | None] = mapped_column(TS)
+    open: Mapped[Decimal | None] = mapped_column(Money)
+    high: Mapped[Decimal | None] = mapped_column(Money)
+    low: Mapped[Decimal | None] = mapped_column(Money)
+    last: Mapped[Decimal | None] = mapped_column(Money)
+    last_regular: Mapped[Decimal | None] = mapped_column(Money)
+    volume: Mapped[int] = mapped_column(BigInteger)
+    delay: Mapped[int | None] = mapped_column(Integer)
 
 
 class QuoteVolumeScale(Base):
@@ -685,3 +714,7 @@ class QuoteVolumeScale(Base):
     candle_volume: Mapped[int | None] = mapped_column(BigInteger)
     factor: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     recorded_at: Mapped[datetime] = mapped_column(TS)
+    # FIX-DAY1 (migration 0010): the pre-market volume taken out of `quote_volume` before the ratio;
+    # `snapshot` (the open capture, quote scale) or `candles` (that day's pre-market candles, candle scale).
+    premarket_volume: Mapped[int | None] = mapped_column(BigInteger)
+    premarket_source: Mapped[str | None] = mapped_column(String(10))

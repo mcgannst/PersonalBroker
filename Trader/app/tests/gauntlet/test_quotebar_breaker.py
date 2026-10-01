@@ -19,7 +19,7 @@ import respx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from tests.factories import add_symbol
+from tests.factories import add_capture, add_symbol
 from tests.fakes_questrade import FakeQuestrade
 from tests.strategies.fakes import FakeCatalyst, FakeCatalysts, FakeData, make_ctx
 from trader.adapters.questrade.auth import AccessToken
@@ -65,7 +65,8 @@ def q(qid: int, o: str | None, h: str | None, low: str | None, c: str, volume: i
         "last": Decimal(c),
         "last_regular": Decimal(c),
         "volume": volume,
-        "last_trade_time": T_ORB - timedelta(seconds=1),
+        # FIX-DAY1: was T_ORB - 1 s (the old 09:35:05 read); > 2 s after 09:35:00 is quote_late now
+        "last_trade_time": BAR_END + timedelta(seconds=1),
         "delay": 0,
         "is_halted": False,
         "vwap": None,
@@ -128,7 +129,7 @@ async def test_the_client_parses_null_open_null_volume_and_exact_decimals() -> N
                 "lastTradePrice": 19.09,
                 "lastTradePriceTrHrs": 19.09,
                 "volume": None,
-                "lastTradeTime": "2026-10-06T09:35:04.000000-04:00",
+                "lastTradeTime": "2026-10-06T09:35:01.000000-04:00",  # FIX-DAY1: was 09:35:04 (now late)
                 "delay": 0,
                 "openPrice": None,
                 "highPrice": 19.09,
@@ -139,7 +140,7 @@ async def test_the_client_parses_null_open_null_volume_and_exact_decimals() -> N
                 "symbolId": 12,
                 "lastTradePrice": 0.1,
                 "volume": -3,
-                "lastTradeTime": "2026-10-06T09:35:04.000000-04:00",
+                "lastTradeTime": "2026-10-06T09:35:01.000000-04:00",  # FIX-DAY1: was 09:35:04 (now late)
                 "delay": 0,
                 "openPrice": 0.3,
                 "highPrice": 0.30000000000000004,
@@ -238,6 +239,10 @@ def svc(factory: sessionmaker[Session], client: Any, now: datetime = T_ORB, **kw
 def symbols(factory: sessionmaker[Session], n: int, base: int = 1000) -> list[int]:
     with factory() as s:
         out = [add_symbol(s, f"B{i:03d}", questrade_id=base + i) for i in range(n)]
+        # FIX-DAY1: an open capture with no pre-market volume, so the opening volume is the quote volume as
+        # these QUOTEBAR breakers assumed (without one, a symbol falls back to candles)
+        for sid in out:
+            add_capture(s, DAY, sid, "open", OPEN - timedelta(seconds=2), volume=0)
         s.commit()
     return out
 
@@ -307,7 +312,7 @@ async def test_the_quotes_pass_with_a_429_stays_well_under_its_budget_on_a_virtu
                 "lastTradePrice": 20.5,
                 "lastTradePriceTrHrs": 20.5,
                 "volume": 1400,
-                "lastTradeTime": "2026-10-06T09:35:04.000000-04:00",
+                "lastTradeTime": "2026-10-06T09:35:01.000000-04:00",  # FIX-DAY1: was 09:35:04 (now late)
                 "delay": 0,
                 "openPrice": 20.0,
                 "highPrice": 20.6,

@@ -127,6 +127,7 @@ from trader.logging_mirror import EventLogMirror, install_event_mirror
 from trader.logging_setup import redact_text
 from trader.market.clock import ET, et_date
 from trader.market.data_service import MarketDataService, QuoteClient
+from trader.market.quote_captures import OpeningCaptures
 from trader.market.types import Candle, Interval
 from trader.marks.publisher import MarkPublisher, MarkPublisherDeps
 from trader.marks.tap import QuoteTap
@@ -880,6 +881,8 @@ async def _run_worker(core: Core, settings: GuardedSettings, once: bool) -> int:
             # FIX-401 (g): idle steps re-read the live run every LIVE_RUN_CHECK_SECONDS (the worker
             # throttles), so a switch made at any time stops the worker within a minute (exit 4).
             live_run_check=lambda: watch.check(force=True),
+            # FIX-DAY1: the volume at the open (09:29:58) and the 09:35:00.0 bar, read on the second
+            captures=OpeningCaptures(data, core.calendar),
         )
         try:
             await worker.run(stop, once=once)

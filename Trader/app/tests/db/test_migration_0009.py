@@ -67,8 +67,8 @@ def _version(engine: Engine) -> str:
         return str(conn.execute(text("SELECT version_num FROM trader.alembic_version")).scalar_one())
 
 
-def test_head_is_0009(pg_url: str) -> None:
-    assert ScriptDirectory.from_config(alembic_config(pg_url)).get_current_head() == "0009"
+def test_head_is_0010(pg_url: str) -> None:  # FIX-DAY1 added 0010 on top
+    assert ScriptDirectory.from_config(alembic_config(pg_url)).get_current_head() == "0010"
 
 
 @pytest.mark.parametrize(
@@ -79,7 +79,8 @@ def test_columns_keys_and_foreign_keys(
     migrated_engine: Engine, table: str, columns: dict[str, tuple[str, bool]]
 ) -> None:
     insp = inspect(migrated_engine)
-    assert _columns(migrated_engine, table) == columns
+    # FIX-DAY1 (0010) adds nullable columns to both tables: 0009's own columns are unchanged
+    assert {k: v for k, v in _columns(migrated_engine, table).items() if k in columns} == columns
     assert insp.get_pk_constraint(table, schema="trader")["constrained_columns"] == [
         "session_date",
         "symbol_id",
@@ -125,4 +126,4 @@ def test_downgrade_drops_both_tables_and_upgrade_restores_them(
     assert not {"opening_bar_quotes", "quote_volume_scale"} & tables
     assert {"quote_marks", "mark_bars"} <= tables  # 0008 untouched
     command.upgrade(alembic_config(pg_url), "head")
-    assert _version(migrated_engine) == "0009"
+    assert _version(migrated_engine) == "0010"

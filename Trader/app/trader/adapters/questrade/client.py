@@ -444,6 +444,7 @@ class QuestradeClient:
         for i in range(0, len(ids), NAMES_PER_CALL):
             chunk: Sequence[int] = ids[i : i + NAMES_PER_CALL]
             data = await self._get("markets/quotes", {"ids": ",".join(str(x) for x in chunk)}, "market")
+            fetched_at = self._clock.now()  # FIX-DAY1: the fill model judges the book's freshness by it
             out.extend(
                 QtQuote(
                     symbol_id=int(q["symbolId"]),
@@ -460,6 +461,7 @@ class QuestradeClient:
                     open=_dec(q.get("openPrice")),
                     high=_dec(q.get("highPrice")),
                     low=_dec(q.get("lowPrice")),
+                    fetched_at=fetched_at,
                 )
                 for q in data.get("quotes", [])
             )

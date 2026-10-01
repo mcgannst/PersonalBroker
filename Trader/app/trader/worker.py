@@ -52,6 +52,7 @@ from trader.engine.scheduler import DayPlan, FireResult, due_events
 from trader.events import log_event
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock, et_date
+from trader.market.quote_bars import CAPTURE_WINDOW
 from trader.market.sessions import SessionPhase, session_phase
 from trader.marks.publisher import MarkPublisher
 from trader.notify.notifier import settle_interrupted_sends
@@ -82,6 +83,17 @@ class WorkerEngine(Protocol):
     async def tick(self, now: datetime) -> None: ...
 
     async def end_of_session(self, session_date: date) -> Sequence[Any]: ...
+
+
+class QuoteCaptures(Protocol):
+    """FIX-DAY1: timed quote captures (trader.market.quote_captures.OpeningCaptures): `times(day)` lists
+    (kind, at) for the session, `capture(kind, day)` runs one. The worker runs each once per session, as
+    the first thing of the first step at or after `at` (it wakes for it), and never later than
+    CAPTURE_WINDOW after `at`."""
+
+    def times(self, day: date) -> Sequence[tuple[str, datetime]]: ...
+
+    async def capture(self, kind: str, day: date) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -188,13 +200,22 @@ def _install_signal_handlers(stop: asyncio.Event) -> list[Callable[[], object]]:
 
 
 class Worker:
-    def __init__(self, deps: WorkerDeps, *, live_run_check: Callable[[], bool] | None = None) -> None:
+    def __init__(
+        self,
+        deps: WorkerDeps,
+        *,
+        live_run_check: Callable[[], bool] | None = None,
+        captures: QuoteCaptures | None = None,
+    ) -> None:
         """`live_run_check` (FIX-401 g) re-reads the active live run: False when it changed (it then sets
         the stop event itself and the worker exits 4). Idle steps call it every LIVE_RUN_CHECK_SECONDS by
         the clock; in the session the runtime's `fired` and `engine_for` carry the check. None: no idle
-        check. A constructor argument, so `marks` stays the last WorkerDeps field (DB-T2 contract)."""
+        check. `captures` (FIX-DAY1): the timed opening-bar quote captures; None: none. Both are constructor
+        arguments, so `marks` stays the last WorkerDeps field (DB-T2 contract)."""
         self.deps = deps
         self._live_run_check = live_run_check
+        self._captures = captures
+        self._captures_done: set[tuple[date, str]] = set()
         self._engine: WorkerEngine | None = None
         self._engine_session: date | None = None
         self._plan: DayPlan | None = None
@@ -226,6 +247,7 @@ class Worker:
         ended = False
         if phase == "open" or (phase == "pre_market" and cal.session_open(day) - now <= PRE_OPEN_LEAD):
             self._hb_phase, self._hb_session = "session", day
+            await self._run_captures(day, now)  # first: their moment matters more than anything else here
             engine = await self._guarded_engine(day)
             fired = await self._fire_due(day, now)
             if engine is not None:
@@ -241,6 +263,48 @@ class Worker:
             self._hb_session = day if phase != "closed_day" else None
             self._idle_live_run_check(now)
         return StepReport(now, phase, fired, fills, False, ended)
+
+    def _capture_times(self, day: date) -> Sequence[tuple[str, datetime]]:
+        if self._captures is None:
+            return ()
+        try:
+            times = self._captures.times(day)
+        except Exception as exc:
+            self._failed("captures", exc)
+            return ()
+        self._ok("captures")
+        return times
+
+    async def _run_captures(self, day: date, now: datetime) -> None:
+        """FIX-DAY1: run each due capture once per session; one more than CAPTURE_WINDOW late (a restart, a
+        long step) is skipped and logged, never run late. A failed capture is not retried (it would be
+        late)."""
+        for kind, at in self._capture_times(day):
+            if (day, kind) in self._captures_done or now < at:
+                continue
+            self._captures_done.add((day, kind))
+            late = (now - at).total_seconds()
+            if now - at > CAPTURE_WINDOW:
+                log.warning("worker.capture_skipped", kind=kind, session_date=day.isoformat(), late_s=late)
+                continue
+            assert self._captures is not None
+            streak = f"capture:{kind}"
+            try:
+                await self._captures.capture(kind, day)
+            except Exception as exc:
+                self._failed("capture", exc, streak=streak, kind=kind)
+            else:
+                self._ok("capture", streak=streak, kind=kind)
+
+    def _until_next_capture(self, now: datetime) -> float | None:
+        """Seconds until the next capture not yet run today, or None."""
+        day = et_date(now)
+        upcoming = [
+            (at - now).total_seconds()
+            for kind, at in self._capture_times(day)
+            if (day, kind) not in self._captures_done and at + CAPTURE_WINDOW >= now
+        ]
+        return max(0.0, min(upcoming)) if upcoming else None
 
     def _idle_live_run_check(self, now: datetime) -> None:
         """FIX-401 (g): a live-run switch made while the worker idles (overnight, a weekend) is noticed
@@ -626,7 +690,9 @@ class Worker:
     def _interval(self) -> float:
         settings = self._settings()
         if self._hb_phase == "session":
-            return float(settings.quote_poll_seconds)
+            poll = float(settings.quote_poll_seconds)
+            until = self._until_next_capture(self.deps.clock.now())  # FIX-DAY1: wake on the second
+            return poll if until is None else min(poll, until)
         idle = float(settings.worker_idle_poll_seconds)
         if self._live_run_check is not None:  # wake for the idle live-run check (FIX-401)
             idle = min(idle, LIVE_RUN_CHECK_SECONDS)

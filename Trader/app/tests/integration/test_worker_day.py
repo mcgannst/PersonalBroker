@@ -13,6 +13,7 @@ side goes through the runtime's job bodies (`preopen_job`, `checkin_job`, `event
 """
 
 import asyncio
+import dataclasses
 import re
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
@@ -442,33 +443,50 @@ async def pre_open(d: Driver, day: date) -> None:
     ]
 
 
+PREMARKET_VOLUME = 100_000  # FIX-DAY1: each name's pre-market volume, in its quote's day volume
+
+
+def before_open(w: World, ticker: str, bar: Candle) -> None:
+    """FIX-DAY1: the quote before 09:30: no regular-session open yet, the day volume is the pre-market's."""
+    spread = Decimal("0.01")
+    w.fq.session.pop(QT[ticker], None)
+    w.fq.set_quote(QT[ticker], str(bar.open - spread), str(bar.open + spread), str(bar.open), w.clock.now())
+    w.fq.quote_map[QT[ticker]] = dataclasses.replace(w.fq.quote_map[QT[ticker]], volume=PREMARKET_VOLUME)
+
+
 def open_session(w: World, ticker: str, bar: Candle) -> None:
     """QUOTEBAR: the live quote during the first five minutes: its session open/high/low are the opening
-    bar's, its last trade the bar's close, its consolidated volume the bar's candle volume /
-    DEFAULT_VOLUME_FACTOR (no factor measured in this world, so the 9:35 scan scales it back to the candle's
-    volume)."""
+    bar's, its last trade the bar's close, its consolidated volume the pre-market volume (FIX-DAY1: the open
+    capture subtracts it) plus the bar's candle volume / DEFAULT_VOLUME_FACTOR (no factor measured in this
+    world, so the 9:35 scan scales it back to the candle's volume)."""
     spread = Decimal("0.01")
     bid, ask = str(bar.close - spread), str(bar.close + spread)
     w.fq.set_quote(QT[ticker], bid, ask, str(bar.close), w.clock.now())
     volume = int((Decimal(bar.volume) / DEFAULT_VOLUME_FACTOR).quantize(Decimal(1), ROUND_HALF_UP))
-    w.fq.set_session(QT[ticker], bar.open, bar.high, bar.low, volume)
+    w.fq.set_session(QT[ticker], bar.open, bar.high, bar.low, PREMARKET_VOLUME + volume)
 
 
 async def to_orb(d: Driver, day: date, t: Times) -> Sent:
     """The session opens; the 09:35 opening bars arrive (as live quotes for the 9:35:05 scan, QUOTEBAR, and as
     the delayed candles for later); orb_open fires at the first step at or after 09:35:05 and the entry
-    proposal goes out with its buttons."""
+    proposal goes out with its buttons. FIX-DAY1: the worker captures the volume at the open (09:29:58) and
+    the bar (09:35:00) itself; the scan reads the stored bar capture."""
     open_ = CAL.session_open(day)
     spy = next(c for c in d.w.fq.bars[(QT["SPY"], "FiveMinutes")] if c.start == open_)
-    for tk, bar in (
+    bars = (
         ("AAA", opening(day, "21.00", "21.50", "20.90", "21.40", 5000)),
         ("BBB", opening(day, "20.00", "20.40", "19.95", "20.30", 3000)),
         ("SPY", spy),
-    ):
+    )
+    d.w.clock.set(t.orb - timedelta(seconds=310))
+    for tk, bar in bars:
         if tk != "SPY":
             d.w.fq.add_bars(QT[tk], "FiveMinutes", [bar])
+        before_open(d.w, tk, bar)
+    steps = await d.walk(t.orb - timedelta(seconds=310), open_ + timedelta(seconds=1))
+    for tk, bar in bars:  # the session's first trades
         open_session(d.w, tk, bar)
-    steps = await d.walk(t.orb - timedelta(seconds=310), t.orb)
+    steps += await d.walk(open_ + timedelta(seconds=3), t.orb)
     fired = [(r.now, f.key, f.status) for r in steps for f in r.fired]
     assert fired == [(t.orb, "orb_open", "fired")]  # exactly once, at 09:35:05
     with d.w.factory() as s:  # QUOTEBAR: the scan built its bars from the quotes (default volume factor)

@@ -14,10 +14,10 @@ from typing import Any
 import httpx
 import pytest
 import respx
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from tests.factories import add_symbol
+from tests.factories import add_capture, add_symbol
 from tests.fakes_questrade import FakeQuestrade
 from trader.adapters.questrade.auth import AccessToken
 from trader.adapters.questrade.client import QuestradeApiError, QuestradeClient
@@ -48,7 +48,8 @@ def quote(qid: int, o: str, h: str, low: str, c: str, volume: int, **kw: Any) ->
         "last": Decimal(c),
         "last_regular": Decimal(c),
         "volume": volume,
-        "last_trade_time": T_ORB - timedelta(seconds=1),
+        # FIX-DAY1: was T_ORB - 1 s (09:35:04); a last trade > 2 s after 09:35:00 is now quote_late
+        "last_trade_time": BAR_END + timedelta(seconds=1),
         "delay": 0,
         "is_halted": False,
         "vwap": None,
@@ -58,6 +59,15 @@ def quote(qid: int, o: str, h: str, low: str, c: str, volume: int, **kw: Any) ->
     }
     values.update(kw)
     return QtQuote(**values)
+
+
+def no_premarket(factory: sessionmaker[Session], sids: Sequence[int]) -> None:
+    """FIX-DAY1: an open capture with no pre-market volume, so the opening volume (the 09:35 volume minus the
+    volume at the open) is the quote volume, as these QUOTEBAR tests were written."""
+    with factory() as s:
+        for sid in sids:
+            add_capture(s, DAY, sid, "open", OPEN - timedelta(seconds=2), volume=0)
+        s.commit()
 
 
 def c5(o: str, h: str, low: str, c: str, v: int) -> Candle:
@@ -84,6 +94,7 @@ def ids(db_factory: sessionmaker[Session]) -> dict[str, int]:
                 )
             )
         s.commit()
+    no_premarket(db_factory, [out["AAA"], out["BBB"], out["CCC"]])
     return out
 
 
@@ -240,6 +251,7 @@ async def test_quotes_are_batched_at_most_100_ids_a_request(db_factory: sessionm
     with db_factory() as s:
         sids = [add_symbol(s, f"S{i:03d}", questrade_id=1000 + i) for i in range(250)]
         s.commit()
+    no_premarket(db_factory, sids)
     fq = RecordingQuotes()
     for i in range(250):
         fq.quote_map[1000 + i] = quote(1000 + i, "20.00", "20.60", "19.90", "20.50", 10_000)
@@ -261,6 +273,7 @@ async def test_quotes_go_through_the_paced_market_bucket(db_factory: sessionmake
     with db_factory() as s:
         sids = [add_symbol(s, f"S{i:03d}", questrade_id=1000 + i) for i in range(230)]
         s.commit()
+    no_premarket(db_factory, sids)
 
     def handler(request: httpx.Request) -> httpx.Response:
         asked = [int(x) for x in request.url.params["ids"].split(",")]
@@ -274,7 +287,7 @@ async def test_quotes_go_through_the_paced_market_bucket(db_factory: sessionmake
                         "lastTradePrice": 20.5,
                         "lastTradePriceTrHrs": 20.5,
                         "volume": 1000,
-                        "lastTradeTime": "2026-10-06T09:35:04.000000-04:00",
+                        "lastTradeTime": "2026-10-06T09:35:01.000000-04:00",  # FIX-DAY1: within 2 s
                         "delay": 0,
                         "openPrice": 20.0,
                         "highPrice": 20.6,
@@ -428,6 +441,9 @@ async def test_measure_volume_scale_stores_the_candle_to_quote_ratio(
 ) -> None:
     close = CAL.session_close(DAY)
     at = close + timedelta(minutes=15)
+    with db_factory() as s:  # FIX-DAY1: no open capture that day: the pre-market candles are used
+        s.execute(delete(m.OpeningQuoteCapture))
+        s.commit()
     fq = RecordingQuotes()
     fq.quote_map[101] = quote(101, "20", "21", "19", "20.5", 1_400_000, last_trade_time=close)
     fq.quote_map[102] = quote(102, "20", "21", "19", "20.5", 1_000_000, last_trade_time=close)
@@ -457,12 +473,15 @@ async def test_measure_volume_scale_stores_the_candle_to_quote_ratio(
     with db_factory() as s:
         rows = {r.symbol_id: r for r in s.execute(select(m.QuoteVolumeScale)).scalars()}
     a = rows[ids["AAA"]]
-    assert (a.quote_volume, a.candle_volume, a.factor) == (1_400_000, 975_000, Decimal("0.696429"))
+    # FIX-DAY1: was 975,000 / 1,400,000 = 0.696429 (the pre-market candle was never read). The pre-market
+    # candles now count on the candle side: (975,000 + 50,000) / 1,400,000 (no open capture that day).
+    assert (a.quote_volume, a.candle_volume, a.factor) == (1_400_000, 975_000, Decimal("0.732143"))
+    assert (a.premarket_volume, a.premarket_source) == (50_000, "candles")
     assert a.recorded_at == at
     b = rows[ids["BBB"]]
     assert b.factor is None and b.quote_volume == 1_000_000
     assert ids["CCC"] not in rows and ids["DDD"] not in rows
-    assert detail["median"] == "0.696429"
+    assert detail["median"] == "0.732143"
 
 
 async def test_measure_volume_scale_survives_a_quotes_failure(

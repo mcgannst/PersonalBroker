@@ -27,7 +27,7 @@ Probe (orchestrator, Tue 09-29, SPY and SMMT quotes against the day's candles):
    open and close), close = `lastTradePriceTrHrs` (else `lastTradePrice`), start 09:30, end 09:35 (complete at
    09:35:05). Missing: `no_quote` (no quote returned), `no_trade` (no open, no volume, or the last trade
    before 09:30), `quote_incomplete`, `quote_delayed`.
-2. **No 09:30 snapshot.** The evidence says quote volume excludes premarket, so the 09:35:05 quote volume is
+2. **No 09:30 snapshot** (superseded by FIX-DAY1 below: the quote volume does include pre-market). The evidence said quote volume excludes premarket, so the 09:35:05 quote volume is
    the session's volume so far; a snapshot at 09:30 would only subtract the opening print it should keep. The
    five seconds after 09:35:00 leak into high/low/close/volume; that is small and the shadow check measures it.
    Quotes are only used within 5 minutes after the bar's end (`QUOTE_BAR_MAX_LAG`): later, the quote's
@@ -59,6 +59,52 @@ Probe (orchestrator, Tue 09-29, SPY and SMMT quotes against the day's candles):
    open, high and low equal (the close is read 5 s later by design).
 7. **1022 is not a token failure.** The client raises a 401 with code 1022 at once, without a forced token
    refresh (a refresh would only rotate the refresh token).
+
+## FIX-DAY1 amendment (Wed 2026-09-30, approved by Stephen ~23:30 MT)
+
+Wednesday was the first live day on quote bars. The 09:47 shadow check: 100 compared, prices exact 51%,
+volume within ±10% only 10%, median volume error +47.7%, 9 decisions would differ. Two of the assumptions above
+were wrong:
+
+- **Quote volume includes pre-market** (decision 2's premise was wrong). CLDX: 339,533 at 09:35 against an
+  official 35,628; scaled 208,621, rvol ~3.6 instead of ~0.6; it was traded and should not have been.
+- **The 5 s after 09:35:00 are not small** on a breakout (decision 2): NVTS's quote high was 12.3899 against
+  the official 12.30, read 6.3 s after 09:35:00 (`quote_lag_s` 6.32). 84 of the 100 compared quotes had a last
+  trade more than 2 s after 09:35:00; 14 of the 16 high mismatches were among them.
+
+Changes (SPEC §4.1, §5.2, §7.2, §9, §10):
+
+1. **Two timed captures by the worker** (`trader.market.quote_captures`, `MarketDataService.capture_quotes`,
+   table `opening_quote_captures`, migration 0010): `open` at 09:29:58 (the volume at the open) and `bar` at
+   09:35:00.0. The worker wakes for them whatever its 2 s poll cadence, runs each once per session before the
+   step's events, never more than 5 s late. The open capture is read 2 s BEFORE 09:30:00 (the brief said
+   09:30:00-09:30:05): a snapshot after 09:30:00 would hold the opening print, which belongs to the 09:30 bar,
+   and subtract it from the bar. As a guard, an open-capture quote whose last trade is at/after 09:30:00 is not
+   used; a symbol without a trade today counts 0 (Questrade may still show yesterday's volume).
+2. **Opening volume = (bar capture − open capture) × factor.** No usable volume at the open: the symbol falls
+   back to the candle path (missing at 09:35:05; counted `volume_basis.no_open_snapshot`), never the raw day
+   volume.
+3. **The ORB event at 09:35:05 reads the stored bar capture** (a fresh pass only for symbols it lacks, kept for
+   cron backups and re-runs within the 5-minute window). A quote whose last trade is > 2 s after 09:35:00 is
+   `quote_late` and missing. Decided: mark missing, not "candles later": at 09:35:05 the candle is not
+   published, and entering 10 minutes later on a delayed candle would be a different strategy; a high that may
+   hold post-bar prints raises the OR high and the entry trigger, which is the failure we saw.
+4. **The factor on regular-session volume**: RTH candles / (quote day − open capture); without an open capture,
+   (RTH candles + pre-market candles) / quote day. The brief's wording "RTH / (quote day − pre-market candles)"
+   would subtract a candle-scale volume from a quote-scale one; with one ratio f for the day the consistent
+   form is the one used. The post-close now fetches candles from 04:00 ET. `quote_volume_scale` records
+   `premarket_volume` and `premarket_source` (snapshot | candles).
+5. **The shadow check** compares the delta-based `volume` (what rvol used) and reports `volume_basis`.
+6. **Fills judge book freshness** (§7.2): a live two-sided book fetched within `stale_quote_seconds` is usable
+   however old the last trade; an old last trade then no longer triggers a stop by itself.
+
+Back-check on Wednesday's stored rows (no pre-market candles are stored, so the pre-market volume cannot be
+rebuilt independently from the database): a regular-session factor measured after 09:35 on both sides,
+(RTH candles − official 09:30 candle) / (day quote volume − 09:35 quote volume), has a median of 0.707
+(IQR 0.645-0.798) and implies a pre-market share of the 09:35 day volume of 35% median. With the delta exact
+and the universe-median factor, the residual volume error on the 100 compared bars is median 0.0%, median
+|error| 10.4%, 48 of 100 within ±10% (Wednesday: +47.4% median, 10 within ±10%). CLDX: implied pre-market
+~280,000 of 339,533.
 
 ## Deploy notes
 

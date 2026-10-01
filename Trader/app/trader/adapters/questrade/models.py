@@ -34,6 +34,9 @@ class QtQuote:
     open: Decimal | None = None
     high: Decimal | None = None
     low: Decimal | None = None
+    # FIX-DAY1: when the app received this quote (the client's clock, right after the response). None for
+    # quotes not fetched live (replay, older callers): the fill model then judges only the last trade's age.
+    fetched_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

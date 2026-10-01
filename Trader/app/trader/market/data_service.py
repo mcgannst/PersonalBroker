@@ -28,13 +28,20 @@ from trader.market.calendar import SessionCalendar
 from trader.market.clock import ET, Clock, et_date
 from trader.market.indicators import opening_bar, regular_hours
 from trader.market.quote_bars import (
+    CAPTURE_BAR,
+    CAPTURE_OPEN,
+    NO_OPEN_SNAPSHOT,
     NO_QUOTE,
     QUOTE_BAR_MAX_LAG,
+    QUOTE_LATE_AFTER,
+    VOLUME_BASIS_DELTA,
     OpeningBarSource,
     VolumeScale,
-    measured_factor,
     median_factor,
+    open_snapshot_volume,
+    opening_delta,
     quote_bar,
+    regular_factor,
     scale_volume,
     usable_factor,
 )
@@ -64,6 +71,12 @@ QUOTE_IDS_PER_CALL = 100  # Questrade's limit per quotes request
 # FETCH_DEADLINE_S then still ends the scan within ~60 s.
 QUOTES_DEADLINE_S = 15.0
 MEASURE_DEADLINE_S = 180.0  # the post-close volume-factor measurement (a whole day of 5-minute candles each)
+# FIX-DAY1: a timed capture (the open snapshot, the 09:35:00 bar) is ~6 paced requests (< 1 s); its budget is
+# small, so a slow capture is cut short rather than read late.
+CAPTURE_DEADLINE_S = 4.0
+# The post-close measurement also reads the day's pre-market candles, from this long before the open
+# (04:00 ET).
+PREMARKET_SPAN = timedelta(hours=5, minutes=30)
 # The 9:35 scan uses the factors of the latest earlier session that has any, at most this far back.
 FACTOR_LOOKBACK = timedelta(days=10)
 STALE_QUOTE = "stale_quote"  # measurement: the quote's last trade is not from the measured session
@@ -105,10 +118,15 @@ class OpeningScan:
     source: str | None = None
     factor_sources: dict[str, int] | None = None
     quote_lag_s: float | None = None
+    # FIX-DAY1 (quotes mode): how many quote bars got their volume from the open-capture delta and how many
+    # fell back to candles for want of a usable volume at the open; the stored 09:35:00 capture used
+    # (started_at, ended_at, symbols), None when the scan read its own quotes.
+    volume_basis: dict[str, int] | None = None
+    capture: dict[str, Any] | None = None
 
     def detail(self) -> dict[str, Any]:
         """The job-detail keys: universe, bars, missing, missing_reasons (and, in quotes mode, source,
-        volume_factors and quote_lag_s)."""
+        volume_factors, quote_lag_s, volume_basis and capture)."""
         out: dict[str, Any] = {
             "universe": self.universe,
             "bars": self.bars,
@@ -121,6 +139,10 @@ class OpeningScan:
             out["volume_factors"] = dict(self.factor_sources)
         if self.quote_lag_s is not None:
             out["quote_lag_s"] = self.quote_lag_s
+        if self.volume_basis is not None:
+            out["volume_basis"] = dict(self.volume_basis)
+        if self.capture is not None:
+            out["capture"] = dict(self.capture)
         return out
 
     @property
@@ -133,6 +155,18 @@ class OpeningScan:
     def unhealthy(self) -> bool:
         """At least half of the universe has no opening bar (or there is no bar at all)."""
         return self.universe > 0 and (self.bars == 0 or 2 * self.missing >= self.universe)
+
+
+@dataclass(frozen=True)
+class _QuoteBars:
+    """What `_quote_opening_bars` found: the bars, the symbols to fall back to candles for, the volume-factor
+    sources and volume bases counted, and the stored 09:35:00 capture used (None: the scan's own pass)."""
+
+    bars: dict[int, Candle]
+    fallback: list[int]
+    factors: Counter[str]
+    basis: Counter[str]
+    capture: dict[str, Any] | None
 
 
 def _from_row(row: m.IntradayCandle, step: timedelta) -> Candle:
@@ -305,17 +339,23 @@ class MarketDataService:
         use_quotes = quotes_mode and end <= started < end + QUOTE_BAR_MAX_LAG
         candle_ids = [sid for sid in need if sid in qids]
         factor_counts: Counter[str] | None = None
+        basis_counts: Counter[str] | None = None
+        capture: dict[str, Any] | None = None
         lag: float | None = None
         fell_back = False
         if use_quotes:
             lag = round((started - end).total_seconds(), 3)
-            factor_counts = Counter()
+            factor_counts, basis_counts = Counter(), Counter()
             if candle_ids:
-                quoted, candle_ids, factor_counts = await self._quote_opening_bars(
+                got = await self._quote_opening_bars(
                     session_date, {sid: qids[sid] for sid in candle_ids}, open_, end, started, missing
                 )
-                bars.update(quoted)
-                sources.update(dict.fromkeys(quoted, "quotes"))
+                bars.update(got.bars)
+                sources.update(dict.fromkeys(got.bars, "quotes"))
+                candle_ids, factor_counts, basis_counts = got.fallback, got.factors, got.basis
+                capture = got.capture
+                if capture is not None:  # the bars were read at the capture, not now
+                    lag = capture["quote_lag_s"]
                 fell_back = bool(candle_ids)
         reqs = {sid: CandleRequest(qids[sid], open_, end, "FiveMinutes") for sid in candle_ids}
         results: dict[CandleRequest, list[Candle] | QuestradeApiError] = {}
@@ -356,6 +396,8 @@ class MarketDataService:
             source=source,
             factor_sources=dict(factor_counts) if factor_counts is not None else None,
             quote_lag_s=lag,
+            volume_basis=dict(basis_counts) if basis_counts is not None else None,
+            capture=capture,
         )
         return OpeningBars(bars, missing, sources)
 
@@ -423,22 +465,42 @@ class MarketDataService:
         end: datetime,
         now: datetime,
         missing: dict[int, str],
-    ) -> tuple[dict[int, Candle], list[int], Counter[str]]:
-        """QUOTEBAR: the opening bars from one quotes pass, volume on candle scale. Returns the bars, the
-        symbols to fall back to candles for (their quote request failed) and the volume-factor sources used.
-        Symbols with a quote but no usable bar get their reason in `missing`. The bars are stored in
+    ) -> "_QuoteBars":
+        """QUOTEBAR + FIX-DAY1: the opening bars from the stored 09:35:00 capture (`bar`), and from one quotes
+        pass for the symbols it lacks; volume = (quote volume - the open capture's volume) x the candle-scale
+        factor. Symbols whose quote request failed, or without a usable volume at the open, fall back to
+        candles (never the raw day volume: it includes pre-market trades). Symbols with a quote but no usable
+        bar (including `quote_late`) get their reason in `missing`. The bars are stored in
         `opening_bar_quotes` (never as candles)."""
         loop = asyncio.get_running_loop()
         started = loop.time()
-        quotes, errors = await self._quote_pass(
-            list(qids.items()), min(QUOTES_DEADLINE_S, self._fetch_deadline_s)
-        )
+        stored, cap_start, cap_end = self._stored_captures(session_date, CAPTURE_BAR, list(qids))
+        capture: dict[str, Any] | None = None
+        if stored and cap_start is not None and end <= cap_start < end + QUOTE_BAR_MAX_LAG:
+            capture = {
+                "started_at": cap_start.isoformat(),
+                "ended_at": cap_end.isoformat() if cap_end is not None else None,
+                "symbols": len(stored),
+                "quote_lag_s": round((cap_start - end).total_seconds(), 3),
+            }
+        else:
+            stored, cap_start, cap_end = {}, None, None
+        rest = [(sid, qid) for sid, qid in qids.items() if sid not in stored]
+        quotes: dict[int, QtQuote] = dict(stored)
+        errors: dict[int, str] = {}
+        if rest:
+            fresh, errors = await self._quote_pass(rest, min(QUOTES_DEADLINE_S, self._fetch_deadline_s))
+            quotes.update(fresh)
+        opens, _, _ = self._stored_captures(session_date, CAPTURE_OPEN, list(qids))
         scale = self._volume_scale(session_date)
         bars: dict[int, Candle] = {}
         counts: Counter[str] = Counter()
+        basis: Counter[str] = Counter()
+        fallback: list[int] = []
         rows: list[dict[str, Any]] = []
         for sid in qids:
             if sid in errors:
+                fallback.append(sid)
                 continue
             q = quotes.get(sid)
             if q is None:
@@ -448,15 +510,23 @@ class MarketDataService:
             if isinstance(built, str):
                 missing[sid] = built
                 continue
+            open_volume = open_snapshot_volume(opens.get(sid), open_, session_date)
+            delta = opening_delta(built.volume, open_volume)
+            if delta is None:
+                basis[NO_OPEN_SNAPSHOT] += 1
+                fallback.append(sid)
+                continue
             factor, factor_source = scale.factor_for(sid)
-            volume = scale_volume(built.volume, factor)
+            volume = scale_volume(delta, factor)
             bars[sid] = dataclasses.replace(built, volume=volume, vwap=None)
             counts[factor_source] += 1
+            basis[VOLUME_BASIS_DELTA] += 1
+            from_capture = sid in stored
             rows.append(
                 {
                     "session_date": session_date,
                     "symbol_id": sid,
-                    "captured_at": now,
+                    "captured_at": cap_start if from_capture else now,
                     "quote_time": q.last_trade_time,
                     "open": built.open,
                     "high": built.high,
@@ -466,6 +536,10 @@ class MarketDataService:
                     "volume": volume,
                     "vol_factor": factor,
                     "factor_source": factor_source,
+                    "open_volume": open_volume,
+                    "volume_basis": VOLUME_BASIS_DELTA,
+                    "capture_started_at": cap_start if from_capture else None,
+                    "capture_ended_at": cap_end if from_capture else None,
                 }
             )
         if rows:
@@ -479,11 +553,136 @@ class MarketDataService:
             symbols=len(qids),
             bars=len(bars),
             failed=len(errors),
+            from_capture=len(stored),
             volume_factors=dict(counts),
+            volume_basis=dict(basis),
             factor_session=scale.measured_on.isoformat() if scale.measured_on else None,
             elapsed_s=round(loop.time() - started, 3),
         )
-        return bars, [sid for sid in qids if sid in errors], counts
+        return _QuoteBars(bars, fallback, counts, basis, capture)
+
+    def _stored_captures(
+        self, session_date: date, kind: str, symbol_ids: Sequence[int]
+    ) -> tuple[dict[int, QtQuote], datetime | None, datetime | None]:
+        """FIX-DAY1: the stored quotes of one timed capture by symbols.id, with the capture's start and end
+        (the earliest start and latest end over the rows); empty when there is none or the read fails."""
+        try:
+            with self._factory() as s:
+                rows = (
+                    s.execute(
+                        select(m.OpeningQuoteCapture).where(
+                            m.OpeningQuoteCapture.session_date == session_date,
+                            m.OpeningQuoteCapture.kind == kind,
+                            m.OpeningQuoteCapture.symbol_id.in_(list(symbol_ids)),
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+        except Exception as exc:  # the scan reads its own quotes instead
+            log.error("market.captures_unreadable", kind=kind, error=type(exc).__name__)
+            return {}, None, None
+        if not rows:
+            return {}, None, None
+        out = {
+            r.symbol_id: QtQuote(
+                symbol_id=r.symbol_id,
+                symbol="",
+                bid=None,
+                ask=None,
+                last=r.last,
+                last_regular=r.last_regular,
+                volume=int(r.volume),
+                last_trade_time=r.quote_time,
+                delay=r.delay,
+                is_halted=False,
+                vwap=None,
+                open=r.open,
+                high=r.high,
+                low=r.low,
+                fetched_at=r.fetched_at,
+            )
+            for r in rows
+        }
+        return out, min(r.capture_started_at for r in rows), max(r.capture_ended_at for r in rows)
+
+    async def capture_quotes(
+        self, session_date: date, kind: str, symbol_ids: Sequence[int] | None = None
+    ) -> dict[str, Any]:
+        """FIX-DAY1: one timed quotes capture of the universe (default) under a small budget, stored in
+        `opening_quote_captures` (kind `open`: the volume at the open, read just before 09:30:00; kind `bar`:
+        the 09:30-09:35 bar, read from 09:35:00.0). Records the capture's start and end and, per symbol, the
+        quote's last-trade time and when it arrived. A re-run replaces the rows. Returns the detail (never
+        raises for missing data; a storage failure is logged)."""
+        if kind not in (CAPTURE_OPEN, CAPTURE_BAR):
+            raise ValueError(f"unknown capture kind {kind!r}")
+        if symbol_ids is None:
+            symbol_ids = [x.symbol_id for x in await self.universe(session_date)]
+        ids = list(dict.fromkeys(symbol_ids))
+        uncached = [sid for sid in ids if sid not in self._quote_qids]
+        if uncached:  # the open capture warms this cache, so the 09:35:00 one starts with no database read
+            self._quote_qids.update(await self._db(self._questrade_ids, uncached))
+        items = [(sid, self._quote_qids[sid]) for sid in ids if sid in self._quote_qids]
+        started = self._clock.now()
+        quotes, errors = await self._quote_pass(items, CAPTURE_DEADLINE_S)
+        ended = self._clock.now()
+        rows = [
+            {
+                "session_date": session_date,
+                "symbol_id": sid,
+                "kind": kind,
+                "capture_started_at": started,
+                "capture_ended_at": ended,
+                "fetched_at": q.fetched_at or ended,
+                "quote_time": q.last_trade_time,
+                "open": q.open,
+                "high": q.high,
+                "low": q.low,
+                "last": q.last,
+                "last_regular": q.last_regular,
+                "volume": max(int(q.volume), 0),
+                "delay": q.delay,
+            }
+            for sid, q in quotes.items()
+        ]
+        open_ = self._cal.session_open(session_date)
+        target = open_ + OPENING_BAR if kind == CAPTURE_BAR else open_
+        detail: dict[str, Any] = {
+            "session_date": session_date.isoformat(),
+            "kind": kind,
+            "symbols": len(ids),
+            "quoted": len(rows),
+            "failed": len(errors),
+            "missing_reasons": dict(Counter(reason_key(r) for r in errors.values())),
+            "started_at": started.isoformat(),
+            "ended_at": ended.isoformat(),
+            "elapsed_s": round((ended - started).total_seconds(), 3),
+            "offset_s": round((started - target).total_seconds(), 3),  # start relative to 09:35:00 / 09:30:00
+        }
+        if kind == CAPTURE_BAR:
+            late_at = target + QUOTE_LATE_AFTER
+            detail["late"] = sum(
+                1 for q in quotes.values() if q.last_trade_time is not None and q.last_trade_time > late_at
+            )
+        else:
+            detail["after_open"] = sum(
+                1 for q in quotes.values() if q.last_trade_time is not None and q.last_trade_time >= open_
+            )
+        if rows:
+            try:
+                await self._db(self._store_captures, rows)
+            except Exception as exc:
+                log.error("market.capture_not_stored", kind=kind, error=type(exc).__name__, rows=len(rows))
+                detail["stored"] = False
+        log.info("market.quotes_captured", **detail)
+        return detail
+
+    def _store_captures(self, rows: list[dict[str, Any]]) -> None:
+        stmt = pg_insert(m.OpeningQuoteCapture).values(rows)
+        keep = ("session_date", "symbol_id", "kind")
+        set_ = {k: stmt.excluded[k] for k in rows[0] if k not in keep}
+        with session_scope(self._factory) as s:
+            s.execute(stmt.on_conflict_do_update(index_elements=list(keep), set_=set_))
 
     def _store_quote_bars(self, rows: list[dict[str, Any]]) -> None:
         """Upsert by (session_date, symbol_id). A re-read replaces the bar and clears an earlier shadow
@@ -533,8 +732,10 @@ class MarketDataService:
         self, session_date: date, symbol_ids: Sequence[int] | None = None
     ) -> dict[str, Any]:
         """QUOTEBAR (after the close): for each symbol (default: the session's universe), the day's quote
-        volume (one batched quotes pass) and the sum of its regular-session 5-minute candles; their ratio
-        (candle / quote) is stored in `quote_volume_scale`, for the next session's 9:35 bars. A quote whose
+        volume (one batched quotes pass) and the sum of its regular-session 5-minute candles; their ratio on
+        regular-session volume (FIX-DAY1, `regular_factor`: the pre-market volume from the open capture, else
+        from the day's pre-market candles, is taken out) is stored in `quote_volume_scale`, for the next
+        session's 9:35 bars. A quote whose
         last trade is not from `session_date` is not measured (stale_quote), nor a day whose last 5-minute
         candle is not there yet (incomplete_day). Returns the job-detail counts; missing data is counted,
         never raised."""
@@ -558,7 +759,10 @@ class MarketDataService:
             else:
                 todays[sid] = q.volume
         open_, close = self._cal.session_open(session_date), self._cal.session_close(session_date)
-        reqs = {sid: CandleRequest(qids[sid], open_, close, "FiveMinutes") for sid in todays}
+        # FIX-DAY1: the quote's day volume includes pre-market trades; take them out of the ratio, from the
+        # open capture (quote scale) when there is one, else from that day's pre-market candles.
+        opens, _, _ = self._stored_captures(session_date, CAPTURE_OPEN, list(todays))
+        reqs = {sid: CandleRequest(qids[sid], open_ - PREMARKET_SPAN, close, "FiveMinutes") for sid in todays}
         results: dict[CandleRequest, list[Candle] | QuestradeApiError] = {}
         if reqs:
             results = await self._client.candles_many(list(reqs.values()), deadline_s=MEASURE_DEADLINE_S)
@@ -570,6 +774,8 @@ class MarketDataService:
             result = results.get(req)
             candle_volume: int | None = None
             factor: Decimal | None = None
+            premarket: int | None = None
+            premarket_source: str | None = None
             if result is None:
                 reasons["timeout"] += 1
             elif isinstance(result, QuestradeApiError):
@@ -580,7 +786,14 @@ class MarketDataService:
                     reasons[INCOMPLETE_DAY] += 1
                 else:
                     candle_volume = sum(c.volume for c in rth)
-                    factor = measured_factor(candle_volume, todays[sid])
+                    snapshot = open_snapshot_volume(opens.get(sid), open_, session_date)
+                    if snapshot is not None:
+                        premarket, premarket_source = snapshot, "snapshot"
+                        factor = regular_factor(candle_volume, todays[sid], premarket_quote=snapshot)
+                    else:
+                        premarket = sum(c.volume for c in result if open_ - PREMARKET_SPAN <= c.start < open_)
+                        premarket_source = "candles"
+                        factor = regular_factor(candle_volume, todays[sid], premarket_candle=premarket)
                     if factor is None:
                         reasons["no_volume"] += 1
                     elif not usable_factor(factor):
@@ -598,11 +811,20 @@ class MarketDataService:
                     "candle_volume": candle_volume,
                     "factor": factor,
                     "recorded_at": now,
+                    "premarket_volume": premarket,
+                    "premarket_source": premarket_source,
                 }
             )
         if rows:
             stmt = pg_insert(m.QuoteVolumeScale).values(rows)
-            updated = ("quote_volume", "candle_volume", "factor", "recorded_at")
+            updated = (
+                "quote_volume",
+                "candle_volume",
+                "factor",
+                "recorded_at",
+                "premarket_volume",
+                "premarket_source",
+            )
             with session_scope(self._factory) as s:
                 s.execute(
                     stmt.on_conflict_do_update(

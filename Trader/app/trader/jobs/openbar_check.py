@@ -6,10 +6,12 @@ by 09:47 it can be fetched. For a sample of at most MAX_SAMPLE symbols (every sy
 first, then the ranked candidates, then the largest opening volumes) the job fetches it (cached as an ordinary
 candle: it IS official), compares it with the quote-built bar and stores the result on `opening_bar_quotes`:
 the official OHLCV, `check_status` ("compared" or the missing reason) and `decision_differs` (whether the
-bar-level ORB screen, rvol and candle shape and price band, decides otherwise on the official bar). The job
-detail and the post-close summary line carry the totals. When nothing could be compared and every request
-was refused with HTTP 401 (the candle is not published yet), the job raises OpenbarNotReady so its retries
-run again later (nothing is written).
+bar-level ORB screen, rvol and candle shape and price band, decides otherwise on the official bar). FIX-DAY1:
+the quote bar's `volume` is the pre-market-free delta (the 09:35:00 capture's volume minus the volume at the
+open, x factor), so the volume error is measured on what rvol used; the detail counts the bases compared
+(`volume_basis`). The job detail and the post-close summary line carry the totals. When nothing could be
+compared and every request was refused with HTTP 401 (the candle is not published yet), the job raises
+OpenbarNotReady so its retries run again later (nothing is written).
 """
 
 from collections import Counter
@@ -158,6 +160,7 @@ async def run_openbar_check(deps: OpenbarCheckDeps, session_date: date) -> dict[
     exact = within = differs = 0
     differing: list[str] = []
     errors: list[Decimal] = []
+    bases: Counter[str] = Counter()  # FIX-DAY1: what the compared volumes were built from
     now = deps.clock.now()
     for sid in ids:
         row = rows.get(sid)
@@ -172,6 +175,7 @@ async def run_openbar_check(deps: OpenbarCheckDeps, session_date: date) -> dict[
         cmp = compare_bars(quote, bar)
         avg = stats.get(sid)
         differ = _passes(quote, avg, params) != _passes(bar, avg, params)
+        bases[row.volume_basis or "day_volume"] += 1
         exact += cmp.prices_exact
         within += cmp.volume_within
         differs += differ
@@ -215,6 +219,9 @@ async def run_openbar_check(deps: OpenbarCheckDeps, session_date: date) -> dict[
         "prices_exact": exact,
         "volume_within_10pct": within,
         "median_volume_error": str(errors[len(errors) // 2]) if errors else None,
+        # FIX-DAY1: `delta` = (09:35 capture - volume at the open) x factor, the volume rvol used;
+        # `day_volume`: a bar from before FIX-DAY1 (the quote's day volume, pre-market included)
+        "volume_basis": dict(bases),
         "decision_differs": differs,
         "differing": sorted(differing)[:MAX_DIFFERING_SHOWN],
         "missing": len(missing),

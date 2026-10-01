@@ -218,3 +218,21 @@ def test_the_line_counts_only_this_session(db_factory: sessionmaker[Session]) ->
     assert line == QuoteBarsLineView(
         quote_bars=1, compared=0, prices_exact=0, volume_within=0, decision_differs=0
     )
+
+
+async def test_fixday1_the_volume_error_is_measured_on_the_pre_market_free_delta(
+    db_factory: sessionmaker[Session],
+) -> None:
+    """FIX-DAY1: a CLDX-like bar: day volume 339,533 at 09:35, 303,905 at the open, factor 0.7 -> 24,940 on
+    candle scale; the official candle 25,000 -> -0.24% (Wednesday's day-volume bar was +567%)."""
+    run_id, ids, fq = world(db_factory, 1)
+    with db_factory() as s:
+        row = quote_row(ids["T000"], "20.00", "20.50", "19.90", "20.40", 24_940)
+        row.quote_volume, row.open_volume, row.volume_basis = 339_533, 303_905, "delta"
+        row.vol_factor = Decimal("0.700000")
+        s.add(row)
+        s.commit()
+    fq.add_bars(500, "FiveMinutes", [c5("20.00", "20.50", "19.90", "20.40", 25_000)])
+    detail = await run_openbar_check(deps(db_factory, fq, run_id), DAY)
+    assert detail["median_volume_error"] == "-0.0024" and detail["volume_within_10pct"] == 1
+    assert detail["volume_basis"] == {"delta": 1}

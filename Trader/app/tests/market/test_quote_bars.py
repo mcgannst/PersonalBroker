@@ -36,7 +36,8 @@ def q(**kw: object) -> QtQuote:
         "last": Decimal("18.93"),
         "last_regular": Decimal("18.93"),
         "volume": 1_400_000,
-        "last_trade_time": END + timedelta(seconds=4),
+        # FIX-DAY1: was END + 4 s (read at 09:35:05); a last trade > 2 s after 09:35:00 is now quote_late
+        "last_trade_time": END + timedelta(seconds=1),
         "delay": 0,
         "is_halted": False,
         "vwap": Decimal("18.70"),

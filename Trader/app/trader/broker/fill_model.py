@@ -1,7 +1,10 @@
 """Quote-based fill model for live simulation (SPEC §7.2, BR-20).
 
-Assumption: staleness uses QtQuote.last_trade_time, because a Questrade quote carries no separate quote
-timestamp (P1-T7). This may over-flag quiet stocks as stale; it is re-checked live in Phase 6 (S2 recheck).
+Freshness (FIX-DAY1, Wed 2026-09-30): a Questrade quote carries no quote timestamp, so the app stamps when it
+fetched it (QtQuote.fetched_at). A live two-sided book (bid and ask > 0, not crossed; delay 0 and not halted
+are checked first) fetched within stale_quote_seconds is usable however old the last trade is; an old last
+trade then does not trigger a stop (only the book does). Without a live book, or without a fetch time
+(replay, older callers), the last trade's age decides, as before (P1-T7).
 QuoteFillModel implements the FillModel protocol; candle fills for replay are a separate model (P5-T2).
 A crossed quote (bid > ask) is unusable, like a one-sided one: NoFill("crossed_quote") (P2-B1 fix round).
 """
@@ -56,6 +59,7 @@ def quote_snapshot(q: QtQuote, now: datetime) -> dict[str, Any]:
         "time": q.last_trade_time.isoformat() if q.last_trade_time else None,
         "delay": q.delay,
         "halted": q.is_halted,
+        "fetched_at": q.fetched_at.isoformat() if q.fetched_at else None,
         "evaluated_at": now.isoformat(),
     }
 
@@ -94,12 +98,24 @@ class QuoteFillModel:
             return NoFill("halted")
         if quote.delay is None or quote.delay > 0:  # None: Questrade omitted it, so never assume real-time
             return NoFill("delayed_quote", f"delay={quote.delay}")
-        if quote.last_trade_time is None:
-            return NoFill("stale_quote", "the quote has no time")
-        age = (now - quote.last_trade_time).total_seconds()
-        if age > self._p.stale_quote_seconds:
-            return NoFill("stale_quote", f"the quote is {age:.1f}s old")
         bid, ask, last = _positive(quote.bid), _positive(quote.ask), _positive(quote.last)
+        limit = self._p.stale_quote_seconds
+        trade_age = (now - quote.last_trade_time).total_seconds() if quote.last_trade_time else None
+        fetch_age = (now - quote.fetched_at).total_seconds() if quote.fetched_at else None
+        live_book = bid is not None and ask is not None and bid <= ask
+        if live_book and fetch_age is not None:
+            # FIX-DAY1: a live two-sided book fetched within the limit is current, however long ago the last
+            # trade printed (CLDX Wed 09-30 sat 30 min unfilled on an old last trade with a live book).
+            if fetch_age > limit:
+                return NoFill("stale_quote", f"the quote was fetched {fetch_age:.1f}s ago")
+            if trade_age is None or trade_age > limit:
+                last = None  # an old print says nothing about now: only the book triggers
+        else:
+            # No live book (or no fetch time: replay, older callers): the last trade's age decides, as before.
+            if trade_age is None:
+                return NoFill("stale_quote", "the quote has no time")
+            if trade_age > limit:
+                return NoFill("stale_quote", f"the quote is {trade_age:.1f}s old")
         if bid is not None and ask is not None and bid > ask:  # a broken book: no price in it is real
             return NoFill("crossed_quote", f"bid {bid} > ask {ask}")
         priced: Priced | NoFill

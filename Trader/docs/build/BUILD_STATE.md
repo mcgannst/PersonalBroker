@@ -2487,3 +2487,7 @@ None open.
 
 ### 2026-10-01 00:45 MT · FIX-DAY1b · Deploy · finished
 - Deployed eb45264 (code 37b9077) to trader-dev at 06:45:30Z, health 200. cron_gap: nothing skipped. Thu 10-01 is still soak day 1 (the reset mark stands). `volume-scale --date 2026-09-30` without --force answered "skipped (already succeeded)". With --force at 06:47Z it measured 0 of 533: Questrade's login service answered HTTP 500 (overnight), and the stored factors were left untouched (median 0.552). Retrying every 5 min until 07:52Z. If it never succeeds, Thursday runs on the 0.552 factors: rvol about 20% low, which fails safe (fewer entries)
+
+### 2026-10-01 01:53 MT · FIX-DAY1b · Wed volume re-measure · gave up
+- Questrade's login service answered HTTP 500 from about 00:47 to 01:04 MT. From 01:04 MT quotes came back, but every symbol was stale_quote: the overnight quotes carry a last trade at 00:00 ET (SPY lastTradeTime 2026-09-30T04:00Z), so Wednesday's day volume is gone after midnight ET. The real window for a late re-measure is before 00:00 ET (22:00 MT), not before 04:00 ET as the builder's deploy note said. Each failed --force run left the stored rows untouched (533 rows, median 0.552). Thursday therefore runs on the 0.552 factors: opening volumes about 20% low, which fails safe. The 16:15 ET postclose measures Thursday's factors with the new numerator
+- Backlog: every `trader questrade-check` after the first did a "forced" token exchange (8 rotations in 45 min, chain intact). Look at why a fresh process forces a refresh when the stored access token is still valid

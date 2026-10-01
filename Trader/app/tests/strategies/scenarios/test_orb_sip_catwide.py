@@ -1,6 +1,8 @@
 """CATWIDE: orb_sip's bearish-only catalyst policy, walking past top_n until the slots are full, and the paper
 doji rule (doji_body_pct_max = 0). Every default keeps the 1.0.0 behaviour."""
 
+from collections.abc import Sequence
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -9,6 +11,7 @@ from pydantic import ValidationError
 
 from tests.strategies.fakes import CAL, FakeCatalyst, FakeCatalysts, FakeData, bar, make_ctx, position
 from trader.decisions.orb_explain import explain_orb, first_failure
+from trader.market.clock import FixedClock
 from trader.market.indicators import is_doji
 from trader.strategies.base import EnterLong, StrategyContext
 from trader.strategies.orb_sip import ORB_EVENT, OrbSip, OrbSipParams
@@ -297,3 +300,151 @@ async def test_strategy_with_zero_doji_pct_trades_a_one_cent_body() -> None:
     assert ctx.candidates[0].data["direction"] == "bullish"
     ctx, intents = await _run(data, FakeCatalysts({1: FakeCatalyst()}), OrbSipParams())
     assert intents == [] and ctx.candidates[0].reject_reason == "doji"  # the default 10% still says doji
+
+
+# --- D (CATWIDE-b): the walk's stop reason, time limit and a failing later lookup ---------------------------
+def _ranked_note(ctx: StrategyContext) -> dict[str, Any]:
+    return next(n.data for n in ctx.notes if n.message == "orb: ranked")
+
+
+class SlowCatalysts(FakeCatalysts):
+    """Each lookup advances the strategy context's (fake) clock."""
+
+    def __init__(self, by_symbol: dict[int, FakeCatalyst], step: timedelta) -> None:
+        super().__init__(by_symbol)
+        self.step = step
+        self.clock: FixedClock | None = None
+
+    async def get(self, symbol_ids: Sequence[int], session_date: date) -> dict[int, FakeCatalyst]:
+        assert self.clock is not None
+        self.clock.advance(self.step)
+        return await super().get(symbol_ids, session_date)
+
+
+class FailingCatalysts(FakeCatalysts):
+    def __init__(self, by_symbol: dict[int, FakeCatalyst], fail_on: int) -> None:
+        super().__init__(by_symbol)
+        self.fail_on = fail_on
+
+    async def get(self, symbol_ids: Sequence[int], session_date: date) -> dict[int, FakeCatalyst]:
+        if len(self.requested) + 1 == self.fail_on:
+            self.requested.append(list(symbol_ids))
+            raise RuntimeError("database went away")
+        return await super().get(symbol_ids, session_date)
+
+
+async def _run_slow(
+    n: int, good: set[int], params: OrbSipParams, step: timedelta
+) -> tuple[StrategyContext, list[EnterLong], SlowCatalysts]:
+    data, plain = _ranked_universe(n, good)
+    cats = SlowCatalysts(plain.by_symbol, step)
+    strategy = OrbSip(params)
+    ctx = make_ctx(data, params, cats)
+    assert isinstance(ctx.clock, FixedClock)
+    cats.clock = ctx.clock
+    event = next(e for e in strategy.schedule(CAL) if e.key == ORB_EVENT)
+    intents = await strategy.on_event(ctx, event)
+    return ctx, [i for i in intents if isinstance(i, EnterLong)], cats
+
+
+def test_extend_max_seconds_default_and_bounds() -> None:
+    assert OrbSipParams().extend_max_seconds == 60
+    assert OrbSipParams(extend_max_seconds=0).extend_max_seconds == 0
+    assert OrbSipParams(extend_max_seconds=600).extend_max_seconds == 600
+    for bad in (-1, 601):
+        with pytest.raises(ValidationError):
+            OrbSipParams(extend_max_seconds=bad)
+    old = OrbSipParams().model_dump(mode="json")
+    old.pop("extend_max_seconds")
+    assert OrbSipParams.model_validate(old) == OrbSipParams()
+
+
+@pytest.mark.parametrize(
+    ("n", "good", "max_rank", "max_positions", "stopped", "through"),
+    [
+        (30, {2, 7}, 100, 2, "slots_full", 10),  # filled in chunk 2: chunk 3 never starts
+        (30, {2, 9, 10}, 100, 2, "slots_full", 10),  # filled by chunk 2's last rank
+        (8, {8}, 100, 3, "list_end", 8),
+        (40, {13}, 13, 3, "max_rank", 13),
+        (13, {13}, 13, 3, "list_end", 13),  # max_rank == list length: the list ran out
+    ],
+)
+async def test_ranked_note_says_why_the_walk_stopped(
+    n: int, good: set[int], max_rank: int, max_positions: int, stopped: str, through: int
+) -> None:
+    data, cats = _ranked_universe(n, good)
+    params = OrbSipParams(top_n=5, max_positions=max_positions, extend_past_top_n=True, max_rank=max_rank)
+    ctx, _ = await _run(data, cats, params)
+    note = _ranked_note(ctx)
+    assert (note["stopped"], note["evaluated_through"]) == (stopped, through)
+    assert len(ctx.candidates) == through
+
+
+async def test_extend_off_ranked_note_unchanged() -> None:
+    data, cats = _ranked_universe(30, good={2})
+    ctx, _ = await _run(data, cats, OrbSipParams(top_n=5))
+    assert set(_ranked_note(ctx)) == {"ranked", "selected"}
+
+
+async def test_time_limit_stops_before_starting_a_new_chunk() -> None:
+    """Each lookup takes 25 s (fake clock): chunk 1 ends at 25 s, chunk 2 starts (25 <= 60) and ends at 50 s,
+    chunk 3 starts (50 <= 60) and ends at 75 s, chunk 4 does not start (75 > 60)."""
+    params = OrbSipParams(top_n=5, max_positions=10, extend_past_top_n=True)
+    ctx, intents, cats = await _run_slow(40, {1, 6, 11, 16, 21}, params, timedelta(seconds=25))
+    assert [i.symbol_id for i in intents] == [1, 6, 11]
+    assert cats.requested == [[1], [6], [11]]
+    assert [r.rank for r in ctx.candidates] == list(range(1, 16))
+    note = _ranked_note(ctx)
+    assert (note["stopped"], note["evaluated_through"]) == ("time_limit", 15)
+    _explained(ctx, params)
+
+
+async def test_time_limit_never_stops_chunk_one_and_zero_allows_only_chunk_one() -> None:
+    params = OrbSipParams(top_n=5, max_positions=10, extend_past_top_n=True, extend_max_seconds=0)
+    ctx, intents, cats = await _run_slow(40, {1, 6}, params, timedelta(seconds=120))
+    assert [i.symbol_id for i in intents] == [1] and cats.requested == [[1]]
+    assert _ranked_note(ctx)["stopped"] == "time_limit"
+    # chunk 1 took longer than the limit and still decided every rank in it
+    assert [r.rank for r in ctx.candidates] == [1, 2, 3, 4, 5]
+
+
+async def test_time_limit_with_a_fast_walk_changes_nothing() -> None:
+    params = OrbSipParams(top_n=5, max_positions=10, extend_past_top_n=True, extend_max_seconds=0)
+    data, cats = _ranked_universe(20, good={1, 6, 11})
+    ctx, intents = await _run(data, cats, params)  # the fake clock never moves: 0 s elapsed
+    assert [i.symbol_id for i in intents] == [1, 6, 11]
+    assert _ranked_note(ctx)["stopped"] == "list_end"
+
+
+async def test_a_failing_later_lookup_keeps_earlier_entries_and_leaves_its_chunk_unevaluated() -> None:
+    data, plain = _ranked_universe(30, good={2, 4, 7, 12})
+    cats = FailingCatalysts(plain.by_symbol, fail_on=2)
+    params = OrbSipParams(top_n=5, max_positions=5, extend_past_top_n=True)
+    ctx, intents = await _run(data, cats, params)
+    assert [i.symbol_id for i in intents] == [2, 4]
+    # chunk 2 (6..10) is not recorded at all, chunk 3 never starts
+    assert [r.rank for r in ctx.candidates] == [1, 2, 3, 4, 5]
+    assert cats.requested == [[2, 4], [7]]
+    errors = [n for n in ctx.notes if n.level == "error"]
+    assert len(errors) == 1
+    assert errors[0].message == "orb: catalyst lookup failed; the walk stops here"
+    assert errors[0].data["first_rank"] == 6 and errors[0].data["last_rank"] == 10
+    assert errors[0].data["entries_kept"] == 2
+    assert "RuntimeError: database went away" in errors[0].data["error"]
+    note = _ranked_note(ctx)
+    assert (note["stopped"], note["evaluated_through"], note["selected"]) == (
+        "lookup_failed",
+        5,
+        ["R002", "R004"],
+    )
+    _explained(ctx, params)
+
+
+async def test_a_failing_chunk_one_lookup_still_fails_the_scan() -> None:
+    data, plain = _ranked_universe(30, good={2, 7})
+    cats = FailingCatalysts(plain.by_symbol, fail_on=1)
+    params = OrbSipParams(top_n=5, max_positions=5, extend_past_top_n=True)
+    with pytest.raises(RuntimeError, match="database went away"):
+        await _run(data, cats, params)
+    with pytest.raises(RuntimeError, match="database went away"):
+        await _run(data, FailingCatalysts(plain.by_symbol, fail_on=1), OrbSipParams(top_n=5))

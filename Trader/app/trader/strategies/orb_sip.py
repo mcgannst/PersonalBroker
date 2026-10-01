@@ -53,6 +53,10 @@ def _catalyst_json(cat: CatalystInfo | None) -> dict[str, Any] | None:
     }
 
 
+class _LookupFailed(Exception):
+    """A later chunk's catalyst lookup raised (CATWIDE-b); the cause is chained."""
+
+
 @dataclass(frozen=True, slots=True)
 class _Scored:
     """One opening bar that met rvol_min, with its typed inputs (no re-parsing of evidence strings)."""
@@ -88,6 +92,8 @@ class OrbSipParams(BaseModel):
     # CATWIDE: while slots are left after ranks 1..top_n, evaluate the next top_n ranks, up to max_rank
     extend_past_top_n: bool = False
     max_rank: int = Field(100, ge=1, le=1000)
+    # CATWIDE-b: no chunk past the first starts once this many seconds have passed since the scan started
+    extend_max_seconds: int = Field(60, ge=0, le=600)
 
     @field_validator("entry_cancel_at")
     @classmethod
@@ -163,6 +169,7 @@ class OrbSip:
     # --- the 9:35 scan ----------------------------------------------------------------------------------
     async def _orb(self, ctx: StrategyContext) -> list[Intent]:
         p = self.params
+        started = ctx.clock.now()  # extend_max_seconds counts from here
         held = {x.symbol_id for x in ctx.positions}
         entry_orders = [o for o in ctx.working_orders if o.purpose == "entry"]
         working = {o.symbol_id for o in entry_orders}
@@ -230,21 +237,53 @@ class OrbSip:
         # Ranks 1..top_n are evaluated. With extend_past_top_n, while slots are still left, the next top_n
         # ranks are evaluated too (global rank numbers), up to max_rank; catalysts are looked up one chunk
         # at a time, only for that chunk's screen survivors, so no later rank costs a lookup once slots are
-        # full.
+        # full. No chunk past the first starts once extend_max_seconds have passed since the scan started.
+        # A lookup raising in chunk 1 fails the scan (the engine alerts; nothing is entered); in a later
+        # chunk it stops the walk: the entries already decided stand and that chunk is left unevaluated, so
+        # its ranks are outside_top_n like every rank past the walk.
         ranked = scored[: p.max_rank] if p.extend_past_top_n else scored[: p.top_n]
         records: list[CandidateRecord] = []
         intents: list[Intent] = []
+        stopped: str | None = None
         for first in range(0, len(ranked), p.top_n):
-            if first > 0 and len(intents) >= slots:
-                break
+            if first > 0:
+                if len(intents) >= slots:
+                    stopped = "slots_full"
+                    break
+                elapsed = (ctx.clock.now() - started).total_seconds()
+                if elapsed > p.extend_max_seconds:
+                    stopped = "time_limit"
+                    break
             chunk = ranked[first : first + p.top_n]
-            records.extend(
-                await self._chunk(
-                    ctx, chunk, first + 1, slots, intents, members, stats, opening.sources, held, working
+            try:
+                records.extend(
+                    await self._chunk(
+                        ctx, chunk, first + 1, slots, intents, members, stats, opening.sources, held, working
+                    )
                 )
-            )
+            except _LookupFailed as exc:
+                cause = exc.__cause__
+                ctx.note(
+                    "orb: catalyst lookup failed; the walk stops here",
+                    level="error",
+                    first_rank=first + 1,
+                    last_rank=first + len(chunk),
+                    entries_kept=len(intents),
+                    error=f"{type(cause).__name__}: {cause}"[:300],
+                )
+                stopped = "lookup_failed"
+                break
+        if stopped is None:
+            if len(intents) >= slots:
+                stopped = "slots_full"
+            elif len(scored) > len(ranked):
+                stopped = "max_rank"
+            else:
+                stopped = "list_end"
         ctx.candidates.extend(records)
-        note: dict[str, Any] = {"evaluated_through": len(records)} if p.extend_past_top_n else {}
+        note: dict[str, Any] = (
+            {"evaluated_through": len(records), "stopped": stopped} if p.extend_past_top_n else {}
+        )
         ctx.note(
             "orb: ranked",
             ranked=len(records),
@@ -315,9 +354,14 @@ class OrbSip:
             if rec.reject_reason is None:
                 survivors.append(rec)
 
-        catalysts = (
-            await ctx.catalysts.get([x.symbol_id for x in survivors], ctx.session_date) if survivors else {}
-        )
+        catalysts: Mapping[int, CatalystInfo] = {}
+        if survivors:
+            try:
+                catalysts = await ctx.catalysts.get([x.symbol_id for x in survivors], ctx.session_date)
+            except Exception as exc:
+                if first_rank == 1:
+                    raise  # chunk 1: the scan fails, as it always has
+                raise _LookupFailed() from exc
         for rec in survivors:
             cat = catalysts.get(rec.symbol_id)
             rec.data["catalyst"] = _catalyst_json(cat)

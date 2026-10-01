@@ -193,16 +193,21 @@ class CatalystClassifier:
     def budget_usd(self) -> Decimal:
         return self._settings().claude_daily_budget_usd
 
+    def budget_exceeded(self) -> Classification:
+        """The classification of a name the daily budget blocked (no call made, no cost)."""
+        s = self._settings()
+        return Classification(
+            "budget_exceeded",
+            None,
+            s.claude_model,
+            error=f"{BUDGET_EXCEEDED} US${s.claude_daily_budget_usd} reached",
+        )
+
     async def classify(self, inp: CatalystInput, spent_usd: Decimal) -> Classification:
         s = self._settings()
         model = s.claude_model
         if spent_usd >= s.claude_daily_budget_usd:
-            return Classification(
-                "budget_exceeded",
-                None,
-                model,
-                error=f"{BUDGET_EXCEEDED} US${s.claude_daily_budget_usd} reached",
-            )
+            return self.budget_exceeded()
         try:
             resp = await self._client.messages.create(
                 model=model,
@@ -392,7 +397,13 @@ class CatalystService:
         stored = self._store.get(wanted, session_date)
         todo = [sid for sid in wanted if sid not in stored or not stored[sid].classified]
         if todo:
-            stored.update(await self.classify_many(self._requests(todo, session_date), session_date))
+            # on demand, a name's headlines are fetched only to classify it: once the budget is spent the
+            # FinViz fetch is skipped (CATWIDE-b)
+            stored.update(
+                await self.classify_many(
+                    self._requests(todo, session_date), session_date, skip_fetch_over_budget=True
+                )
+            )
         return {sid: stored[sid] for sid in wanted if sid in stored}
 
     def _requests(self, symbol_ids: Sequence[int], session_date: date) -> list[CatalystRequest]:
@@ -436,10 +447,18 @@ class CatalystService:
         }
 
     async def classify_many(
-        self, requests: Sequence[CatalystRequest], session_date: date
+        self,
+        requests: Sequence[CatalystRequest],
+        session_date: date,
+        *,
+        skip_fetch_over_budget: bool = False,
     ) -> dict[int, StoredCatalyst]:
         """Classify every request without a classified row. A name already being classified by another
-        caller in this process (same symbol and session) is not classified twice: this call waits for it."""
+        caller in this process (same symbol and session) is not classified twice: this call waits for it.
+
+        With `skip_fetch_over_budget` (the on-demand path, `get`), a name reached while the daily budget is
+        already spent is not fetched from FinViz: it is stored and reported exactly as a budget-blocked name,
+        only without headlines. The pre-market job keeps the fetch (its brief shows the headlines)."""
         existing = self._store.get([r.symbol_id for r in requests], session_date)
         out = {sid: c for sid, c in existing.items() if c.classified}
         pending = list({r.symbol_id: r for r in requests if r.symbol_id not in out}.values())
@@ -462,7 +481,14 @@ class CatalystService:
                 mine.append((r, fut))
         try:
             if mine:
-                await self._classify_claimed(classifier, source, [r for r, _ in mine], session_date, out)
+                await self._classify_claimed(
+                    classifier,
+                    source,
+                    [r for r, _ in mine],
+                    session_date,
+                    out,
+                    skip_fetch_over_budget=skip_fetch_over_budget,
+                )
         finally:
             for r, fut in mine:
                 self._inflight.pop((r.symbol_id, session_date), None)
@@ -483,10 +509,17 @@ class CatalystService:
         pending: Sequence[CatalystRequest],
         session_date: date,
         out: dict[int, StoredCatalyst],
+        *,
+        skip_fetch_over_budget: bool = False,
     ) -> None:
         today = et_date(self._clock.now())
         inputs: list[tuple[CatalystRequest, tuple[Headline, ...]]] = []
         for r in pending:  # one at a time: FinViz politeness, and the scraper isn't thread-safe
+            if skip_fetch_over_budget:
+                spent, held = self._spent_and_held(session_date)
+                if spent + held >= classifier.budget_usd():
+                    self._budget_blocked(classifier, r, session_date, spent, held, out)
+                    continue
             try:
                 found = await asyncio.to_thread(source.news, r.ticker, today)
             except FinvizError as exc:
@@ -545,6 +578,34 @@ class CatalystService:
                 f"catalyst for {r.ticker} failed: {error}",
                 {"ticker": r.ticker, "status": "failed", "session_date": session_date.isoformat()},
             )
+
+    def _budget_blocked(
+        self,
+        classifier: CatalystClassifier,
+        r: CatalystRequest,
+        session_date: date,
+        spent: Decimal,
+        held: Decimal,
+        out: dict[int, StoredCatalyst],
+    ) -> None:
+        """Store and report one name the spent budget blocked before its headline fetch: the same row,
+        reason and event as a budget-blocked classification, without headlines."""
+        out[r.symbol_id] = self._store.save(
+            r.symbol_id,
+            session_date,
+            headlines=(),
+            gap_pct=r.gap_pct,
+            earnings_date=r.earnings_date,
+            classification=classifier.budget_exceeded(),
+        )
+        data = {
+            "ticker": r.ticker,
+            "status": "budget_exceeded",
+            "spent_usd": str(spent),
+            "reserved_usd": str(held),
+            "session_date": session_date.isoformat(),
+        }
+        self._budget_event(r.ticker, session_date, data)
 
     def _budget_event(self, ticker: str, session_date: date, data: dict[str, Any]) -> None:
         """One error-level alert per session (across processes: it checks the event log), then info."""

@@ -544,3 +544,65 @@ async def test_reservations_use_the_running_average_cost(db_factory: sessionmake
     assert len(msgs.calls) == 3 and msgs.max_in_flight == 2
     assert store.spent(DAY) == Decimal("0.004500")
     assert svc._reserved == {}
+
+
+# --- CATWIDE-b: on demand, a spent budget skips the FinViz fetch ---
+@pytest.mark.db
+async def test_get_skips_the_headline_fetch_once_the_budget_is_spent(
+    db_factory: sessionmaker[Session], symbols: dict[str, int]
+) -> None:
+    """The on-demand path (`get`, the 9:35 walk) fetches headlines only to classify: with the budget spent it
+    fetches nothing and stores each name exactly as the budget-hit path does (unknown, same reason, same
+    alert), only without headlines. classify_many (the pre-market job) still fetches."""
+    store = CatalystStore(db_factory, CLOCK)
+    # AAA's classification spent US$0.003: the whole budget
+    store.save(
+        symbols["AAA"], DAY, headlines=[], gap_pct=None, earnings_date=None, classification=_classified()
+    )
+    client, heads = FakeClient(), FakeHeadlines()
+    svc = CatalystService(
+        db_factory, CLOCK, store, classifier(client, claude_daily_budget_usd=Decimal("0.003")), heads
+    )
+    got = await svc.get([symbols["AAA"], symbols["BBB"]], DAY)
+    assert heads.calls == [] and client.messages.calls == []
+    assert got[symbols["AAA"]].classified
+    bbb = got[symbols["BBB"]]
+    assert not bbb.classified and bbb.catalyst_type == "unknown" and bbb.direction == "neutral"
+    assert bbb.cost_usd == 0 and bbb.model == "claude-sonnet-5"
+    assert bbb.reason == "daily budget US$0.003 reached"
+
+    # the pre-market path: the same budget-hit row, after a fetch
+    pre = await svc.classify_many([CatalystRequest(symbols["CCC"], "CCC")], DAY)
+    assert heads.calls == [("CCC", DAY)] and client.messages.calls == []
+    ccc = pre[symbols["CCC"]]
+    assert (ccc.catalyst_type, ccc.direction, ccc.quality, ccc.classified, ccc.reason, ccc.model) == (
+        bbb.catalyst_type,
+        bbb.direction,
+        bbb.quality,
+        bbb.classified,
+        bbb.reason,
+        bbb.model,
+    )
+    with db_factory() as s:
+        rows = s.execute(
+            select(m.EventLog).where(m.EventLog.source == "claude.catalyst").order_by(m.EventLog.id)
+        ).scalars()
+        events = [(r.level, r.message, r.data["status"]) for r in rows]
+    assert events == [
+        ("error", "Claude daily budget reached: BBB not classified", "budget_exceeded"),
+        ("info", "Claude daily budget reached: CCC not classified", "budget_exceeded"),
+    ]
+
+
+@pytest.mark.db
+async def test_get_still_fetches_while_budget_is_left(
+    db_factory: sessionmaker[Session], symbols: dict[str, int]
+) -> None:
+    store = CatalystStore(db_factory, CLOCK)
+    client, heads = FakeClient(reply(GOOD)), FakeHeadlines()
+    svc = CatalystService(
+        db_factory, CLOCK, store, classifier(client, claude_daily_budget_usd=Decimal("0.001")), heads
+    )
+    got = await svc.get([symbols["BBB"]], DAY)
+    assert heads.calls == [("BBB", DAY)] and len(client.messages.calls) == 1
+    assert got[symbols["BBB"]].classified

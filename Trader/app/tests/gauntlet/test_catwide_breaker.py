@@ -11,8 +11,8 @@ the old behaviour; explain_orb's first_failure equals the stored reject reason o
 the zero-body doji rule on zero-range and malformed bars; the real CatalystService (budget spent, Claude
 failing) inside the walk; replay `stored` catalysts past rank 20.
 
-Known gap pinned as a strict xfail (it flips to XPASS, and fails, when fixed):
-- a catalyst lookup that raises in a later chunk discards the entries chunks already decided.
+The gap this lane pinned as a strict xfail (a catalyst lookup raising in a later chunk discarded the entries
+chunks already decided) is fixed by CATWIDE-b: the walk stops and keeps them.
 """
 
 import random
@@ -264,10 +264,6 @@ class FailingOnCall(FakeCatalysts):
         return await super().get(symbol_ids, session_date)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="CATWIDE should-fix: a lookup raising in chunk 2+ discards chunk 1's already-decided entries",
-)
 async def test_a_failing_later_chunk_keeps_the_entries_already_decided() -> None:
     data = _universe(60, good={2, 30})
     cats = FailingOnCall({s: FakeCatalyst() for s in range(1, 61)}, fail_on=2)
@@ -326,8 +322,8 @@ async def test_budget_spent_names_pass_unclassified_and_claude_is_not_called(
     db_factory: sessionmaker[Session],
 ) -> None:
     """claude.daily_budget_usd reached: every survivor is stored `unknown` and, under bearish-only, PASSES
-    (no catalyst filter at all). The headlines are still fetched for each name (one FinViz page each, >= 2 s
-    apart live): the budget is checked only after the fetch."""
+    (no catalyst filter at all). Since CATWIDE-b no headlines are fetched: the on-demand path checks the
+    budget before the FinViz fetch."""
     ids = _symbols(db_factory, 45)
     data = _data_for(ids, good={5, 25, 41})
     client = FakeClient()
@@ -343,7 +339,7 @@ async def test_budget_spent_names_pass_unclassified_and_claude_is_not_called(
     ctx, intents = await _run(data, svc, LIVE)
     assert [i.symbol_id for i in intents] == [ids[4], ids[24], ids[40]]
     assert client.messages.calls == []
-    assert len(heads.calls) == 3  # one per survivor, across three chunks
+    assert heads.calls == []  # CATWIDE-b: no FinViz fetch once the budget is spent
     for rec in ctx.candidates:
         if rec.passed:
             assert rec.data["catalyst"]["classified"] is False

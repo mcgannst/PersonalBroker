@@ -446,6 +446,14 @@ def test_daily_summary(r: MessageRenderer) -> None:
     assert msg.buttons == ((YES, NO),)
 
 
+def test_daily_summary_on_an_auto_day_states_the_answer(r: MessageRenderer) -> None:
+    """AUTOJOURNAL: a recorded answer is a plain line, never the question."""
+    t = r.daily_summary(summary(journal_answer=(True, "auto")), ()).text
+    assert "Rules followed: Yes (auto mode)" in t and "Rules followed?" not in t
+    t = r.daily_summary(summary(journal_answer=(False, "telegram")), ()).text
+    assert "Rules followed: No (telegram)" in t and "Rules followed?" not in t
+
+
 def test_daily_summary_with_an_open_position_is_loud(r: MessageRenderer) -> None:
     t = r.daily_summary(summary(open_positions=(position(),), trades=()), ((YES, NO),)).text
     assert "STILL OPEN" in t

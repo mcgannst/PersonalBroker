@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { ApiError } from "../../api/client";
 import { FakeApiClient } from "../../test/fakeApi";
 import { renderWithProviders } from "../../test/render";
-import JournalPage from "../Journal";
+import JournalPage, { answerText } from "../Journal";
 import { NOTES_MAX } from "./JournalEditor";
 
 function editor(): HTMLElement {
@@ -14,6 +14,10 @@ function editor(): HTMLElement {
 }
 
 describe("Journal page", () => {
+  it("AUTOJOURNAL: an auto-mode day reads Yes (auto mode)", () => {
+    expect(answerText({ rules_followed: true, answered_via: "auto" })).toBe("Yes (auto mode)");
+  });
+
   it("lists the last session days newest first with the answer and where it was given", async () => {
     const r = renderWithProviders(<JournalPage />, { route: "/journal" });
     const rows = await screen.findAllByRole("listitem");

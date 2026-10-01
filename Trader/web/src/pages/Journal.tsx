@@ -12,9 +12,9 @@ import { fmtDate, fmtMoney } from "../lib/format";
 import { isIsoDate } from "./performance/dates";
 import { JournalEditor } from "./performance/JournalEditor";
 
-const VIA_LABELS: Record<string, string> = { telegram: "Telegram", web: "web" };
+const VIA_LABELS: Record<string, string> = { telegram: "Telegram", web: "web", auto: "auto mode" };
 
-/** `Yes (Telegram)`, `No (web)`, `Not answered`. */
+/** `Yes (Telegram)`, `No (web)`, `Yes (auto mode)`, `Not answered`. */
 export function answerText(day: Pick<JournalDayOut, "rules_followed" | "answered_via">): string {
   if (day.rules_followed === null) return "Not answered";
   const answer = day.rules_followed ? "Yes" : "No";

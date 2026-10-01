@@ -381,13 +381,15 @@ async def test_every_stub_names_its_owner(index: int) -> None:
 def test_additive_fields_are_last_and_defaulted() -> None:
     assert [f.name for f in dataclasses.fields(StrategyConfigView)][-1] == "scope"
     assert dataclasses.fields(StrategyConfigView)[-1].default == "live"
-    # P6-T11 appended `decision_log` after it, QUOTEBAR `quote_bars`: run_to_date stays defaulted
-    assert [f.name for f in dataclasses.fields(DailySummaryView)][-3:] == [
+    # P6-T11 appended `decision_log` after it, QUOTEBAR `quote_bars`, AUTOJOURNAL `journal_answer`:
+    # run_to_date stays defaulted
+    assert [f.name for f in dataclasses.fields(DailySummaryView)][-4:] == [
         "run_to_date",
         "decision_log",
         "quote_bars",
+        "journal_answer",
     ]
-    assert all(f.default is None for f in dataclasses.fields(DailySummaryView)[-3:])
+    assert all(f.default is None for f in dataclasses.fields(DailySummaryView)[-4:])
     assert "audit_auto" in inspect.signature(ProposalService).parameters
     assert inspect.signature(ProposalService).parameters["audit_auto"].default is True
     sig = inspect.signature(SimBroker.on_candles).parameters

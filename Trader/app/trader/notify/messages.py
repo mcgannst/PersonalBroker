@@ -589,7 +589,12 @@ class MessageRenderer:
             lines.append(quote_bars_line(v.quote_bars))
         archive = ", ".join(f"{_e(k)}: {n}" for k, n in sorted(v.archive.items()))
         lines.append(f"Candles archived: {archive or 'none'}")
-        lines.append("<b>Rules followed?</b>")
+        if v.journal_answer is not None:  # AUTOJOURNAL: already recorded, nothing to ask
+            followed, via = v.journal_answer
+            how = "auto mode" if via == "auto" else (via or "recorded")
+            lines.append(f"Rules followed: {'Yes' if followed else 'No'} ({_e(how)})")
+        else:
+            lines.append("<b>Rules followed?</b>")
         lines.append(self._link(f"/journal?date={d}", f"Journal {d}"))
         return self._msg("daily_summary", lines, buttons)
 

@@ -250,6 +250,9 @@ class DailySummaryView:
     decision_log: DecisionsLineView | None = None
     # QUOTEBAR: the shadow check's line; None on a day without quote-built opening bars.
     quote_bars: QuoteBarsLineView | None = None
+    # AUTOJOURNAL: on an auto-approval day the day's recorded answer (rules_followed, answered_via), shown as
+    # a plain line instead of the "Rules followed?" question. None: ask (manual mode, or nothing recorded).
+    journal_answer: tuple[bool, str | None] | None = None
 
 
 @dataclass(frozen=True, slots=True)

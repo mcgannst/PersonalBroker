@@ -653,3 +653,116 @@ def test_upsert_candle_archive_bars_many_symbols(world: World, db_factory: sessi
         (a, Decimal("22.0000")),
         (b, Decimal("21.4000")),
     ]
+
+
+# --- AUTOJOURNAL: auto-approval days answer "Rules followed?" with Yes ------------------------------------
+
+
+def auto_mode(world: World) -> None:
+    world.settings = world.settings.model_copy(update={"approval_mode": "auto"})
+
+
+def journal_rows(factory: sessionmaker[Session]) -> list[tuple[bool | None, str | None]]:
+    with factory() as s:
+        return [(j.rules_followed, j.answered_via) for j in s.execute(select(m.Journal)).scalars()]
+
+
+def add_human_decision(s: Session, run_id: int, symbol_id: int, via: str) -> None:
+    signal = m.Signal(
+        run_id=run_id,
+        strategy_config_id=add_strategy_config(s),
+        symbol_id=symbol_id,
+        session_date=DAY,
+        event_key="orb_open",
+        ts=et(DAY, 9, 35),
+        intent={},
+        evidence={},
+    )
+    s.add(signal)
+    s.flush()
+    add_decided_proposal(s, run_id, signal.id, 1500, via)
+
+
+async def test_auto_day_records_yes_and_the_summary_asks_nothing(world: World) -> None:
+    auto_mode(world)
+    out = await run_postclose(world.deps(post_close(DAY)), DAY)
+    assert out["summary_sent"] is True
+    assert journal_rows(world.factory) == [(True, "auto")]
+    (view,) = world.summaries()
+    assert view.journal_answer == (True, "auto")
+    (msg,) = world.notifier.sent
+    assert msg.buttons == () and world.issuer.issued == []
+
+
+async def test_auto_day_with_only_auto_approvals_is_still_auto(world: World) -> None:
+    auto_mode(world)
+    with world.factory() as s:
+        add_human_decision(s, world.run_id, world.ids["AAA"], "auto")
+        s.commit()
+    await run_postclose(world.deps(post_close(DAY)), DAY)
+    assert journal_rows(world.factory) == [(True, "auto")]
+
+
+async def test_auto_mode_with_a_human_decision_that_day_still_asks(world: World) -> None:
+    auto_mode(world)
+    with world.factory() as s:
+        add_human_decision(s, world.run_id, world.ids["AAA"], "telegram")
+        s.commit()
+    await run_postclose(world.deps(post_close(DAY)), DAY)
+    assert journal_rows(world.factory) == [(None, None)]
+    (msg,) = world.notifier.sent
+    assert len(msg.buttons[0]) == 2 and world.summaries()[0].journal_answer is None
+
+
+async def test_auto_day_keeps_an_existing_answer(world: World) -> None:
+    auto_mode(world)
+    with world.factory() as s:
+        s.add(m.Journal(run_id=world.run_id, session_date=DAY, rules_followed=False, answered_via="web"))
+        s.commit()
+    await run_postclose(world.deps(post_close(DAY)), DAY)
+    assert journal_rows(world.factory) == [(False, "web")]
+    (view,) = world.summaries()
+    assert view.journal_answer == (False, "web")
+    assert world.notifier.sent[0].buttons == ()
+
+
+async def test_manual_mode_is_unchanged(world: World) -> None:
+    assert world.settings.approval_mode == "manual"
+    await run_postclose(world.deps(post_close(DAY)), DAY)
+    assert journal_rows(world.factory) == [(None, None)]
+    (view,) = world.summaries()
+    assert view.journal_answer is None
+    (msg,) = world.notifier.sent
+    assert [b.text for b in msg.buttons[0]] == ["Yes", "No"]
+
+
+async def test_auto_day_rerun_is_idempotent(world: World) -> None:
+    auto_mode(world)
+    first_at = post_close(DAY)
+    deps1, api1 = telegram_world(world, first_at)
+    first = await run_postclose(deps1, DAY)
+    deps2, api2 = telegram_world(world, first_at + timedelta(minutes=30))
+    second = await run_postclose(deps2, DAY)
+    assert (first["summary"], second["summary"]) == ("sent", "duplicate")
+    assert len(api1.calls_of("send_message")) == 1 and api2.calls_of("send_message") == []
+    assert journal_rows(world.factory) == [(True, "auto")]
+    with world.factory() as s:
+        row = s.get(m.Journal, (world.run_id, DAY))
+        assert row is not None and row.updated_at == first_at
+
+
+async def test_auto_journal_write_failure_warns_and_the_summary_still_asks(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import trader.jobs.postclose as postclose
+
+    def broken_update(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(postclose, "update", broken_update)
+    auto_mode(world)
+    out = await run_postclose(world.deps(post_close(DAY)), DAY)
+    assert out["summary_sent"] is True
+    assert journal_rows(world.factory) == [(None, None)]
+    (msg,) = world.notifier.sent
+    assert msg.kind == "daily_summary" and len(msg.buttons[0]) == 2

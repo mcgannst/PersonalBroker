@@ -15,7 +15,7 @@ from decimal import Decimal
 from typing import Any, Literal, Protocol
 
 import structlog
-from sqlalchemy import column, func, select, table
+from sqlalchemy import column, func, select, table, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -63,6 +63,7 @@ MINUTE_CODE: Literal["1m"] = "1m"  # INTERVAL_CODES["OneMinute"]
 MAX_MISSING_OPEN_FRACTION = Decimal("0.05")  # more opening bars missing than this is an error event
 MAX_REASON_CHARS = 200
 JOURNAL_ACTIONS = ("y", "n")
+AUTO_VIA = "auto"  # journal.answered_via on an auto-approval day (AUTOJOURNAL)
 EXPECTANCY_SWITCH = "expectancy"
 # The realized P&L view (migration 0002): one row per (run, session) with trades.
 V_DAILY_PNL = table(
@@ -145,6 +146,7 @@ async def run_postclose(deps: PostcloseDeps, session_date: date) -> dict[str, An
     still_open = await deps.engine.end_of_session(session_date)
     cancelled = _count_cancelled(deps, since=started)
     _ensure_journal(deps, session_date)
+    journal_answer = _auto_journal(deps, session_date)
     archive: dict[str, Any]
     counts: dict[str, int]
     try:
@@ -161,7 +163,7 @@ async def run_postclose(deps: PostcloseDeps, session_date: date) -> dict[str, An
             "missing": len(archive["missing"]),
         }
     decisions_detail, line = await _decisions(deps, session_date)
-    summary = await _send_summary(deps, session_date, counts, line)
+    summary = await _send_summary(deps, session_date, counts, line, journal_answer)
     scale = await _volume_scale(deps, session_date)  # after the summary: it never delays the message
     out: dict[str, Any] = {
         "open_positions": [int(p.id) for p in still_open],
@@ -302,8 +304,10 @@ async def _send_summary(
     session_date: date,
     counts: Mapping[str, int],
     decision_log: DecisionsLineView | None = None,
+    journal_answer: tuple[bool, str | None] | None = None,
 ) -> str:
-    """Send the daily summary once per session (see `run_postclose` for the returned status)."""
+    """Send the daily summary once per session (see `run_postclose` for the returned status). With
+    `journal_answer` (an auto-approval day, AUTOJOURNAL) the summary states the answer and has no buttons."""
     dedupe_key = f"summary:{session_date.isoformat()}"
     try:
         if _summary_status(deps, dedupe_key) is not None:
@@ -328,15 +332,18 @@ async def _send_summary(
         if quote_bars is not None:
             view = dataclasses.replace(view, quote_bars=quote_bars)
         buttons: Buttons = ()
-        try:
-            _nonce, data = deps.issuer.issue(
-                "journal", session_date.strftime("%Y%m%d"), JOURNAL_ACTIONS, deps.chat_id, None
-            )
-            buttons = ((Button("Yes", data["y"]), Button("No", data["n"])),)
-        except (
-            Exception
-        ) as exc:  # the summary goes out without buttons; the journal page still takes the answer
-            log.error("postclose.journal_buttons_failed", error=type(exc).__name__)
+        if journal_answer is not None:
+            view = dataclasses.replace(view, journal_answer=journal_answer)
+        else:
+            try:
+                _nonce, data = deps.issuer.issue(
+                    "journal", session_date.strftime("%Y%m%d"), JOURNAL_ACTIONS, deps.chat_id, None
+                )
+                buttons = ((Button("Yes", data["y"]), Button("No", data["n"])),)
+            except (
+                Exception
+            ) as exc:  # the summary goes out without buttons; the journal page still takes the answer
+                log.error("postclose.journal_buttons_failed", error=type(exc).__name__)
         msg = deps.render.daily_summary(view, buttons)
         await deps.notifier.send(dataclasses.replace(msg, dedupe_key=dedupe_key))
         status = _summary_status(deps, dedupe_key)
@@ -383,6 +390,50 @@ def _ensure_journal(deps: PostcloseDeps, session_date: date) -> None:
             .values(run_id=deps.run_id, session_date=session_date, rules_followed=None)
             .on_conflict_do_nothing(index_elements=[m.Journal.run_id, m.Journal.session_date])
         )
+
+
+def _auto_journal(deps: PostcloseDeps, session_date: date) -> tuple[bool, str | None] | None:
+    """AUTOJOURNAL: on an auto-approval day, answer the day's "Rules followed?" with Yes (answered_via
+    "auto") and return the day's recorded answer for the summary; None means ask as before.
+
+    An auto day: `approval_mode` is "auto" when post-close runs AND no proposal created that ET day was
+    decided by a person (`decided_via` telegram or web). A day with no proposals in auto mode is an auto day.
+    Only an unanswered row is written (`rules_followed IS NULL`), so an answer already given is kept (and
+    shown) and a re-run changes nothing. Never raises: a failure is a warning and the summary asks as
+    before."""
+    try:
+        if deps.settings().approval_mode != "auto":
+            return None
+        day_start, day_end = _et_day(session_date)
+        with session_scope(deps.factory) as s:
+            human = s.execute(
+                select(func.count())
+                .select_from(m.Proposal)
+                .where(
+                    m.Proposal.run_id == deps.run_id,
+                    m.Proposal.created_at >= day_start,
+                    m.Proposal.created_at < day_end,
+                    m.Proposal.decided_via.is_not(None),
+                    m.Proposal.decided_via != "auto",
+                )
+            ).scalar_one()
+            if human:
+                return None
+            where = (m.Journal.run_id == deps.run_id, m.Journal.session_date == session_date)
+            s.execute(
+                update(m.Journal)
+                .where(*where, m.Journal.rules_followed.is_(None))
+                .values(rules_followed=True, answered_via=AUTO_VIA, updated_at=deps.clock.now())
+            )
+            row = s.execute(
+                select(m.Journal.rules_followed, m.Journal.answered_via).where(*where)
+            ).one_or_none()
+    except Exception as exc:
+        log.warning("postclose.auto_journal_failed", error=type(exc).__name__)
+        return None
+    if row is None or row[0] is None:
+        return None
+    return bool(row[0]), row[1]
 
 
 def _missing(sid: int, ticker: str, interval: str, reason: str) -> dict[str, Any]:

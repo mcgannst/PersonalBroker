@@ -1014,6 +1014,8 @@ class _Builder:
         # out of every count, so the counts equal the rows; it keeps its place in the outside_top_n ranking.
         overlay_cands = [c for c in cands if self._is_overlay(c)]
         cand_ids = {c.symbol_id for c in cands}
+        # the last rank the strategy evaluated: top_n, or further with extend_past_top_n (CATWIDE)
+        evaluated_through = max((c.rank for c in cands if c.rank is not None), default=0)
         cands = [c for c in cands if not self._is_overlay(c)]
         catalyst_rows = self._catalyst_rows([c.symbol_id for c in cands])
         rules: Counter[str] = Counter()
@@ -1079,7 +1081,7 @@ class _Builder:
         summary_note: str | None = None
         ran = skipped is None
         if ran and self.scan is not None:
-            counts = self._non_candidates(params, cands, cand_ids, missing, scan_ts, rules)
+            counts = self._non_candidates(params, cands, cand_ids, missing, scan_ts, rules, evaluated_through)
         else:
             counts = {
                 "scanned": len(cands),
@@ -1145,8 +1147,11 @@ class _Builder:
         missing: Mapping[int, str],
         scan_ts: datetime,
         rules: Counter[str],
+        evaluated_through: int = 0,
     ) -> dict[str, Any]:
         assert self.scan is not None
+        # outside_top_n's rank threshold: top_n, or the last rank actually evaluated past it (CATWIDE)
+        rank_limit = max(params.top_n, evaluated_through) if params.extend_past_top_n else params.top_n
         members = [u for u in self.scan.members if u.ticker != OVERLAY_SYMBOL]
         for u in self.scan.members:
             self._tickers.setdefault(u.symbol_id, u.ticker)
@@ -1229,7 +1234,7 @@ class _Builder:
                             "name": "rank",
                             "value": _s(rank_of.get(sid)),
                             "op": "<=",
-                            "threshold": str(params.top_n),
+                            "threshold": str(rank_limit),
                             "passed": False,
                         },
                     ]

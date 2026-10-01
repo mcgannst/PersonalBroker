@@ -1,5 +1,6 @@
 """orb_sip 1.0.0: the 5-minute Opening Range Breakout on Stocks in Play (SPEC §5.2, BR-04, BR-11, BR-13)."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Literal, Self
@@ -9,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from trader.broker.types import Q4, Fill, dec_str
 from trader.market.calendar import SessionCalendar
 from trader.market.indicators import is_bearish, is_doji, rvol
-from trader.market.types import Candle, UniverseMember
+from trader.market.types import Candle, OpenBarStats, UniverseMember
 from trader.strategies.base import (
     Cancel,
     CandidateRecord,
@@ -75,6 +76,8 @@ class OrbSipParams(BaseModel):
     top_n: int = Field(20, ge=1, le=200)
     max_positions: int = Field(1, ge=1, le=10)
     require_catalyst: bool = True
+    # with require_catalyst off: reject only a classified catalyst whose direction is bearish (CATWIDE)
+    reject_bearish_catalyst: bool = False
     catalyst_min_quality: int = Field(50, ge=0, le=100)
     stop_atr_fraction: Decimal = Field(Decimal("0.10"), gt=0, le=Decimal("1"), allow_inf_nan=False)
     entry_offset: Decimal = Field(Decimal("0.01"), ge=0, le=Decimal("5"), allow_inf_nan=False)
@@ -82,6 +85,9 @@ class OrbSipParams(BaseModel):
     exit_at: str = "close-10m"
     doji_body_pct_max: Decimal = Field(Decimal("0.10"), ge=0, le=Decimal("1"), allow_inf_nan=False)
     stale_universe: Literal["skip", "trade"] = "skip"
+    # CATWIDE: while slots are left after ranks 1..top_n, evaluate the next top_n ranks, up to max_rank
+    extend_past_top_n: bool = False
+    max_rank: int = Field(100, ge=1, le=1000)
 
     @field_validator("entry_cancel_at")
     @classmethod
@@ -107,6 +113,8 @@ class OrbSipParams(BaseModel):
     def _price_band(self) -> Self:
         if self.price_min >= self.price_max:
             raise ValueError("price_min must be below price_max")
+        if self.extend_past_top_n and self.max_rank < self.top_n:
+            raise ValueError("max_rank must be at least top_n when extend_past_top_n is on")
         return self
 
 
@@ -219,10 +227,53 @@ class OrbSip:
             ctx.note("orb: no opening-volume baseline", symbol_ids=sorted(no_baseline))
         scored.sort(key=lambda t: (-t.rvol, t.ticker))
 
+        # Ranks 1..top_n are evaluated. With extend_past_top_n, while slots are still left, the next top_n
+        # ranks are evaluated too (global rank numbers), up to max_rank; catalysts are looked up one chunk
+        # at a time, only for that chunk's screen survivors, so no later rank costs a lookup once slots are
+        # full.
+        ranked = scored[: p.max_rank] if p.extend_past_top_n else scored[: p.top_n]
+        records: list[CandidateRecord] = []
+        intents: list[Intent] = []
+        for first in range(0, len(ranked), p.top_n):
+            if first > 0 and len(intents) >= slots:
+                break
+            chunk = ranked[first : first + p.top_n]
+            records.extend(
+                await self._chunk(
+                    ctx, chunk, first + 1, slots, intents, members, stats, opening.sources, held, working
+                )
+            )
+        ctx.candidates.extend(records)
+        note: dict[str, Any] = {"evaluated_through": len(records)} if p.extend_past_top_n else {}
+        ctx.note(
+            "orb: ranked",
+            ranked=len(records),
+            selected=[x.data["ticker"] for x in records if x.passed],
+            **note,
+        )
+        return intents
+
+    async def _chunk(
+        self,
+        ctx: StrategyContext,
+        chunk: list[_Scored],
+        first_rank: int,
+        slots: int,
+        intents: list[Intent],
+        members: Mapping[int, UniverseMember],
+        stats: Mapping[int, OpenBarStats],
+        sources: Mapping[int, str],
+        held: set[int],
+        working: set[int],
+    ) -> list[CandidateRecord]:
+        """Evaluate one chunk of consecutive ranks: the per-candidate rules, then one catalyst lookup for the
+        chunk's survivors, then the catalyst rules and the slots left. Appends each pass to `intents` and
+        returns the chunk's records in rank order."""
+        p = self.params
         records: list[CandidateRecord] = []
         survivors: list[CandidateRecord] = []
         levels: dict[int, tuple[Decimal, Decimal]] = {}  # symbol_id -> (entry, stop_loss)
-        for rank, sc in enumerate(scored[: p.top_n], start=1):
+        for rank, sc in enumerate(chunk, start=first_rank):
             member = members[sc.symbol_id]
             st = stats.get(sc.symbol_id)
             rec = CandidateRecord(
@@ -243,7 +294,7 @@ class OrbSip:
                     "universe_source": member.source,
                 },
             )
-            bar_source = opening.sources.get(sc.symbol_id)
+            bar_source = sources.get(sc.symbol_id)
             if bar_source is not None:  # QUOTEBAR: the live scan says where the bar came from
                 rec.data["bar_source"] = bar_source
             if sc.symbol_id in held:
@@ -267,7 +318,6 @@ class OrbSip:
         catalysts = (
             await ctx.catalysts.get([x.symbol_id for x in survivors], ctx.session_date) if survivors else {}
         )
-        intents: list[Intent] = []
         for rec in survivors:
             cat = catalysts.get(rec.symbol_id)
             rec.data["catalyst"] = _catalyst_json(cat)
@@ -282,13 +332,7 @@ class OrbSip:
             rec.data.update(entry=str(entry), stop_loss=str(stop_loss))
             evidence = {**rec.data, "candle": rec.candle}
             intents.append(EnterLong(rec.symbol_id, "stop", entry, None, stop_loss, "orb_breakout", evidence))
-        ctx.candidates.extend(records)
-        ctx.note(
-            "orb: ranked",
-            ranked=len(records),
-            selected=[x.data["ticker"] for x in records if x.passed],
-        )
-        return intents
+        return records
 
     def _direction(self, c: Candle) -> str:
         try:
@@ -320,6 +364,13 @@ class OrbSip:
     def _catalyst_reason(self, cat: CatalystInfo | None) -> str | None:
         p = self.params
         if not p.require_catalyst:
+            if (
+                p.reject_bearish_catalyst
+                and cat is not None
+                and cat.classified
+                and cat.direction == "bearish"
+            ):
+                return "catalyst_bearish"
             return None
         if cat is None or not cat.classified or cat.catalyst_type in NO_CATALYST:
             return "catalyst_missing"

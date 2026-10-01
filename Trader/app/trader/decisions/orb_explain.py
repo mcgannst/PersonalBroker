@@ -10,8 +10,9 @@ the slots left): `not_held`, `no_working_entry` and `slot_left` are taken from t
 `reject_reason` (`already_held`, `entry_working`, `lower_rank` fail them; any later rule, or a pass, passes
 them), with value and threshold None (`CONTEXT_CHECKS`; the recorder notes the source in the row's data).
 Every other check is recomputed from the stored values. The catalyst checks exist only when the strategy
-requires a catalyst; the strategy evaluates them only for names that survived the price, ATR, volume and stop
-rules, so for an earlier failure they are shown but can't change `first_failure`.
+requires a catalyst (with `reject_bearish_catalyst` alone, only `catalyst_not_bearish`); the strategy
+evaluates them only for names that survived the price, ATR, volume and stop rules, so for an earlier failure
+they are shown but can't change `first_failure`.
 """
 
 from collections.abc import Mapping, Sequence
@@ -123,7 +124,9 @@ def explain_orb(
     out.append(Check("rvol", _s(r), ">=", str(p.rvol_min), None if r is None else r >= p.rvol_min))
     rank = data.get("rank")
     rank_i = rank if isinstance(rank, int) and not isinstance(rank, bool) else None
-    out.append(Check("rank", _s(rank_i), "<=", str(p.top_n), None if rank_i is None else rank_i <= p.top_n))
+    # extend_past_top_n (CATWIDE): a stored candidate may be ranked past top_n, up to max_rank
+    rank_max = p.max_rank if p.extend_past_top_n else p.top_n
+    out.append(Check("rank", _s(rank_i), "<=", str(rank_max), None if rank_i is None else rank_i <= rank_max))
     out.append(_context("not_held", reject_reason))
     out.append(_context("no_working_entry", reject_reason))
 
@@ -186,6 +189,11 @@ def explain_orb(
                 None if catalyst is None else q_i is not None and q_i >= p.catalyst_min_quality,
             )
         )
+    elif p.reject_bearish_catalyst:
+        # CATWIDE: only a classified bearish catalyst fails; none, unclassified, neutral or low quality pass
+        cdir = None if catalyst is None else _s(catalyst.get("direction"))
+        bearish = catalyst is not None and bool(catalyst.get("classified")) and cdir == "bearish"
+        out.append(Check("catalyst_not_bearish", cdir, "!=", "bearish", not bearish))
     out.append(_context("slot_left", reject_reason))
     return tuple(out)
 

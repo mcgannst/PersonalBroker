@@ -347,6 +347,11 @@ class QuestradeClient:
                 self._cache_token(fresh)
 
     async def _get(self, path: str, params: dict[str, str], category: Category) -> Any:
+        return (await self._get_sent(path, params, category))[0]
+
+    async def _get_sent(self, path: str, params: dict[str, str], category: Category) -> tuple[Any, datetime]:
+        """`_get`, with when the answering attempt was sent (FIX-DAY1b: after the bucket's pacing and any
+        429 pause, by the injected clock)."""
         refreshed = False
         last_status: int = 0
         last_text: str = ""
@@ -357,6 +362,7 @@ class QuestradeClient:
             await self._buckets[category].acquire()
             token: AccessToken = await self._access()
             stats.requests += 1
+            sent_at: datetime = self._clock.now()
             try:
                 resp: httpx.Response = await self._http.get(
                     token.api_base + path,
@@ -374,7 +380,7 @@ class QuestradeClient:
                 self.rate_limit_remaining[category] = remaining
             last_status, last_text, last_resp = resp.status_code, resp.text[:300], resp
             if resp.status_code == 200:
-                return json.loads(resp.text, parse_float=Decimal)
+                return json.loads(resp.text, parse_float=Decimal), sent_at
             if resp.status_code == 401 and _questrade_error(resp)[0] == PACKAGE_401_CODE:
                 # QUOTEBAR: not a token problem (the data is outside the market-data package, e.g. a candle
                 # less than ~10 minutes old): a forced refresh would only rotate the refresh token.
@@ -443,7 +449,9 @@ class QuestradeClient:
         out: list[QtQuote] = []
         for i in range(0, len(ids), NAMES_PER_CALL):
             chunk: Sequence[int] = ids[i : i + NAMES_PER_CALL]
-            data = await self._get("markets/quotes", {"ids": ",".join(str(x) for x in chunk)}, "market")
+            data, requested_at = await self._get_sent(
+                "markets/quotes", {"ids": ",".join(str(x) for x in chunk)}, "market"
+            )
             fetched_at = self._clock.now()  # FIX-DAY1: the fill model judges the book's freshness by it
             out.extend(
                 QtQuote(
@@ -462,6 +470,7 @@ class QuestradeClient:
                     high=_dec(q.get("highPrice")),
                     low=_dec(q.get("lowPrice")),
                     fetched_at=fetched_at,
+                    requested_at=requested_at,
                 )
                 for q in data.get("quotes", [])
             )

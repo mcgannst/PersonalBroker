@@ -43,7 +43,7 @@ class FakeCaptures:
         return {"kind": kind}
 
 
-async def test_captures_fire_at_09_29_58_and_09_35_00_sharp_on_a_virtual_clock(
+async def test_captures_fire_at_09_29_55_and_09_35_00_sharp_on_a_virtual_clock(
     db_factory: sessionmaker[Session],
 ) -> None:
     """The quote-poll cadence (2 s) starts at an odd 09:29:01.3; the worker still wakes on the second."""
@@ -56,7 +56,7 @@ async def test_captures_fire_at_09_29_58_and_09_35_00_sharp_on_a_virtual_clock(
     h.on_relay = lambda: stop.set() if clock.now() >= et(TUE, 9, 35, 8) else None
     await _run(w, stop, vt)
     assert caps.calls == [
-        (CAPTURE_OPEN, TUE, et(TUE, 9, 29, 58)),
+        (CAPTURE_OPEN, TUE, et(TUE, 9, 29, 55)),  # FIX-DAY1b: 5 s before the open
         (CAPTURE_BAR, TUE, et(TUE, 9, 35, 0)),
     ]
     # the ORB event fires after the bar capture, at its first step at or after 09:35:05
@@ -78,9 +78,9 @@ async def test_each_capture_runs_once_per_session(db_factory: sessionmaker[Sessi
 
 
 async def test_a_capture_runs_before_the_events_of_the_same_step(db_factory: sessionmaker[Session]) -> None:
-    """A worker busy until 09:35:04.5 still captures first (inside the 5 s window), and an orb_open that is
-    due in the same step fires after it."""
-    clock = FixedClock(et(TUE, 9, 35, 4))
+    """A worker busy until 09:35:00.5 still captures first (inside the 1 s window, FIX-DAY1b), and an
+    orb_open that is due in the same step fires after it."""
+    clock = FixedClock(et(TUE, 9, 35, 0))
     h = Harness(db_factory, clock)
     order: list[str] = []
     caps = FakeCaptures(clock)
@@ -97,11 +97,11 @@ async def test_a_capture_runs_before_the_events_of_the_same_step(db_factory: ses
     caps.capture = capture  # type: ignore[method-assign]
     h.fire = fire  # type: ignore[method-assign]
     w = Worker(h.deps(), captures=caps)
-    clock.set(et(TUE, 9, 35, 4) + timedelta(milliseconds=500))
+    clock.set(et(TUE, 9, 35, 0) + timedelta(milliseconds=500))
     h.plan = lambda d: dataclasses.replace(  # type: ignore[method-assign]
         Harness.plan(h, d),
         events=tuple(
-            dataclasses.replace(e, at=e.at - timedelta(seconds=1)) if e.key == "orb_open" else e
+            dataclasses.replace(e, at=e.at - timedelta(seconds=5)) if e.key == "orb_open" else e
             for e in Harness.plan(h, d).events
         ),
     )
@@ -160,3 +160,47 @@ async def test_the_session_interval_wakes_for_the_next_capture(db_factory: sessi
     w = Worker(h.deps(), captures=FakeCaptures(clock))
     await w.step()
     assert w._interval() == pytest.approx(0.75)
+
+
+# --- FIX-DAY1b: per-kind windows ----------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("at", "runs"),
+    [
+        (et(TUE, 9, 35, 1), True),
+        (et(TUE, 9, 35, 1) + timedelta(milliseconds=1), False),  # the bar would be read > 1 s late
+    ],
+)
+async def test_the_bar_capture_runs_only_within_one_second_of_09_35_00(
+    db_factory: sessionmaker[Session], at: datetime, runs: bool
+) -> None:
+    clock = FixedClock(at)
+    h = Harness(db_factory, clock)
+    caps = FakeCaptures(clock)
+    await Worker(h.deps(), captures=caps).step()
+    assert [k for k, _, _ in caps.calls] == ([CAPTURE_BAR] if runs else [])
+
+
+@pytest.mark.parametrize(
+    ("at", "runs"),
+    [
+        (et(TUE, 9, 29, 58), True),  # still 2 s before the opening print
+        (et(TUE, 9, 29, 58) + timedelta(milliseconds=1), False),
+    ],
+)
+async def test_the_open_capture_runs_only_up_to_two_seconds_before_the_open(
+    db_factory: sessionmaker[Session], at: datetime, runs: bool
+) -> None:
+    clock = FixedClock(at)
+    h = Harness(db_factory, clock)
+    caps = FakeCaptures(clock)
+    await Worker(h.deps(), captures=caps).step()
+    assert [k for k, _, _ in caps.calls] == ([CAPTURE_OPEN] if runs else [])
+
+
+async def test_the_interval_stops_waking_for_a_capture_past_its_window(
+    db_factory: sessionmaker[Session],
+) -> None:
+    clock = FixedClock(et(TUE, 9, 35, 1) + timedelta(milliseconds=500))
+    h = Harness(db_factory, clock)
+    w = Worker(h.deps(), captures=FakeCaptures(clock))
+    assert w._until_next_capture(clock.now()) is None

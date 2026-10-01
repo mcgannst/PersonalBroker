@@ -150,17 +150,20 @@ async def test_the_bar_capture_records_start_end_and_counts_late_quotes(
     assert detail["started_at"] == T_BAR_CAP.isoformat() and detail["ended_at"] == T_BAR_CAP.isoformat()
 
 
-async def test_a_capture_rerun_replaces_its_rows(
+async def test_a_capture_rerun_keeps_the_stored_rows(
     db_factory: sessionmaker[Session], ids: dict[str, int]
 ) -> None:
+    """FIX-DAY1b: a capture already stored for the session is not run again (a worker restart inside the
+    window would replace good rows with later quotes)."""
     clock = FixedClock(T_OPEN_CAP)
     fq = Quotes(clock)
     fq.quote_map[201] = quote(201, 1, OPEN - timedelta(seconds=5), o=None)
     await svc(db_factory, fq, clock).capture_quotes(DAY, "open")
     fq.quote_map[201] = quote(201, 2, OPEN - timedelta(seconds=5), o=None)
-    await svc(db_factory, fq, clock).capture_quotes(DAY, "open")
+    again = await svc(db_factory, fq, clock).capture_quotes(DAY, "open")
+    assert again["skipped"] == "already_captured" and len(fq.requests) == 1
     with db_factory() as s:
-        assert [r.volume for r in s.execute(select(m.OpeningQuoteCapture)).scalars()] == [2]
+        assert [r.volume for r in s.execute(select(m.OpeningQuoteCapture)).scalars()] == [1]
 
 
 # --- the ORB event uses the stored capture ------------------------------------------------------------------

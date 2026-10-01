@@ -881,7 +881,7 @@ async def _run_worker(core: Core, settings: GuardedSettings, once: bool) -> int:
             # FIX-401 (g): idle steps re-read the live run every LIVE_RUN_CHECK_SECONDS (the worker
             # throttles), so a switch made at any time stops the worker within a minute (exit 4).
             live_run_check=lambda: watch.check(force=True),
-            # FIX-DAY1: the volume at the open (09:29:58) and the 09:35:00.0 bar, read on the second
+            # FIX-DAY1: the volume at the open (09:29:55) and the 09:35:00.0 bar, read on the second
             captures=OpeningCaptures(data, core.calendar),
         )
         try:

@@ -52,7 +52,7 @@ from trader.engine.scheduler import DayPlan, FireResult, due_events
 from trader.events import log_event
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock, et_date
-from trader.market.quote_bars import CAPTURE_WINDOW
+from trader.market.quote_bars import capture_window
 from trader.market.sessions import SessionPhase, session_phase
 from trader.marks.publisher import MarkPublisher
 from trader.notify.notifier import settle_interrupted_sends
@@ -88,8 +88,8 @@ class WorkerEngine(Protocol):
 class QuoteCaptures(Protocol):
     """FIX-DAY1: timed quote captures (trader.market.quote_captures.OpeningCaptures): `times(day)` lists
     (kind, at) for the session, `capture(kind, day)` runs one. The worker runs each once per session, as
-    the first thing of the first step at or after `at` (it wakes for it), and never later than
-    CAPTURE_WINDOW after `at`."""
+    the first thing of the first step at or after `at` (it wakes for it), and never later than its window
+    (trader.market.quote_bars.capture_window: 1 s for the bar, FIX-DAY1b) after `at`."""
 
     def times(self, day: date) -> Sequence[tuple[str, datetime]]: ...
 
@@ -276,15 +276,16 @@ class Worker:
         return times
 
     async def _run_captures(self, day: date, now: datetime) -> None:
-        """FIX-DAY1: run each due capture once per session; one more than CAPTURE_WINDOW late (a restart, a
-        long step) is skipped and logged, never run late. A failed capture is not retried (it would be
-        late)."""
+        """FIX-DAY1: run each due capture once per session; one later than its window (`capture_window`: a
+        restart, a long step) is skipped and logged, never run late. A failed capture is not retried (it
+        would be late). A restarted worker's capture inside the window is skipped by the capture itself
+        when its rows are already stored (FIX-DAY1b, MarketDataService.capture_quotes)."""
         for kind, at in self._capture_times(day):
             if (day, kind) in self._captures_done or now < at:
                 continue
             self._captures_done.add((day, kind))
             late = (now - at).total_seconds()
-            if now - at > CAPTURE_WINDOW:
+            if now - at > capture_window(kind):
                 log.warning("worker.capture_skipped", kind=kind, session_date=day.isoformat(), late_s=late)
                 continue
             assert self._captures is not None
@@ -302,7 +303,7 @@ class Worker:
         upcoming = [
             (at - now).total_seconds()
             for kind, at in self._capture_times(day)
-            if (day, kind) not in self._captures_done and at + CAPTURE_WINDOW >= now
+            if (day, kind) not in self._captures_done and at + capture_window(kind) >= now
         ]
         return max(0.0, min(upcoming)) if upcoming else None
 

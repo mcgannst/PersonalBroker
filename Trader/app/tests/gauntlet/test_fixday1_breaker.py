@@ -146,11 +146,6 @@ async def test_slow_but_healthy_api_all_requests_at_0_4_s() -> None:
     assert frac < 0.20, detail  # ~14%: the 6th request's active names
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FINDING (should-fix): one 429 window pause (~1 s) on the 2nd request pushes requests 2-6 past "
-    "09:35:02: ~32% of active names are quote_late and not traded (the 6 requests are sequential)",
-)
 async def test_a_429_pause_on_the_second_request() -> None:
     clock = FixedClock(BAR_END + timedelta(milliseconds=20))
     client = TimedQuotes(clock, [0.25] * 6, pause_before={1: 1.0})
@@ -158,12 +153,6 @@ async def test_a_429_pause_on_the_second_request() -> None:
     assert frac < 0.25, detail
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FINDING (should-fix): a capture that starts 1.5 s late (a slow previous step, token refresh) at "
-    "normal latency loses ~54% of active names to quote_late; CAPTURE_WINDOW (5 s) admits starts that cannot "
-    "produce a usable bar",
-)
 async def test_a_capture_started_1_5_s_late() -> None:
     clock = FixedClock(BAR_END + timedelta(seconds=1.5))
     client = TimedQuotes(clock, [0.25] * 6)
@@ -183,7 +172,7 @@ async def test_a_capture_started_1_5_s_late() -> None:
 def test_capture_times_are_09_29_58_and_09_35_00_et_across_dst_and_early_close(day: date, label: str) -> None:
     caps = OpeningCaptures(None, CAL)  # type: ignore[arg-type]
     times = dict(caps.times(day))
-    assert times["open"].astimezone(ET).time().isoformat() == "09:29:58", label
+    assert times["open"].astimezone(ET).time().isoformat() == "09:29:55", label
     assert times["bar"].astimezone(ET).time().isoformat() == "09:35:00", label
 
 
@@ -207,12 +196,6 @@ async def test_a_restart_at_09_33_skips_the_open_capture_but_runs_the_bar_one(
 
 
 @pytest.mark.db
-@pytest.mark.xfail(
-    strict=True,
-    reason="FINDING (should-fix): the once-per-session set is in memory; a worker restarted at 09:35:03 "
-    "(inside CAPTURE_WINDOW) re-runs the bar capture and REPLACES the good 09:35:00 rows with quotes read "
-    "3 s late (most active names then quote_late)",
-)
 async def test_a_restart_inside_the_window_does_not_overwrite_the_stored_bar_capture(
     db_factory: sessionmaker[Session],
 ) -> None:

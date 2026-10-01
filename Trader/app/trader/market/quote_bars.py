@@ -16,8 +16,8 @@ less than ~10 minutes ago is refused with HTTP 401 code 1022), while quotes are 
 FIX-DAY1 (Wed 2026-09-30): the quote's volume is the DAY's, pre-market included (CLDX 339,533 at 09:35 against
 an official 35,628), and the quotes read at 09:35:05 had moved past the bar (NVTS high 12.3899 against 12.30).
 So the bar is read at 09:35:00.0 by a timed capture, its volume is that capture's minus the volume at the open
-(a capture at 09:29:58), and a quote whose last trade is more than QUOTE_LATE_AFTER past 09:35:00 is not a
-bar.
+(a capture at 09:29:55 since FIX-DAY1b), and a quote whose last trade is more than QUOTE_LATE_AFTER past
+09:35:00 (FIX-DAY1b: past when its capture request was sent, see `late_cutoff`) is not a bar.
 The factor is measured on regular-session volume (`regular_factor`).
 """
 
@@ -51,13 +51,22 @@ VOLUME_TOLERANCE = Decimal("0.10")  # the shadow check's "volume within" band
 # (NVTS: read 6.3 s late, high 12.3899 against the official 12.30): it is not the bar.
 QUOTE_LATE_AFTER = timedelta(seconds=2)
 QUOTE_LATE = "quote_late"
+# FIX-DAY1b: a timed capture's quote is judged against when its request was SENT (`late_cutoff`): a request
+# held back by the bucket or a 429 pause is answered later, and its active names print up to that answer,
+# which says nothing about the bar. The send counts at most this far past the bar's end, so no trade more
+# than REQUEST_LAG_MAX + QUOTE_LATE_AFTER (4 s) after 09:35:00 is ever part of the bar (NVTS was 6.3 s).
+REQUEST_LAG_MAX = timedelta(seconds=2)
 # The two timed captures: `open` (the volume at the open) starts this long BEFORE 09:30:00, so the opening
-# print, which belongs to the 09:30 bar, is not in it; `bar` starts at 09:35:00.0. A capture that could not
-# start within CAPTURE_WINDOW of its time is not run (its quotes would not be the moment's).
-OPEN_CAPTURE_LEAD = timedelta(seconds=2)
-CAPTURE_WINDOW = timedelta(seconds=5)
+# print, which belongs to the 09:30 bar, is not in it (FIX-DAY1b: 5 s, so even a slow capture is answered
+# before the open); `bar` starts at 09:35:00.0. A capture that could not start within its window
+# (CAPTURE_WINDOWS) of its time is not run, its quotes would not be the moment's: the bar one within 1 s
+# (past that the 09:35:05 ORB event's own pass reads the quotes, as before), the open one until 2 s before
+# the open.
+OPEN_CAPTURE_LEAD = timedelta(seconds=5)
 CAPTURE_OPEN = "open"
 CAPTURE_BAR = "bar"
+CAPTURE_WINDOW = timedelta(seconds=1)  # the bar capture's, and any other kind's
+CAPTURE_WINDOWS = {CAPTURE_OPEN: timedelta(seconds=3), CAPTURE_BAR: CAPTURE_WINDOW}
 VOLUME_BASIS_DELTA = "delta"  # opening_bar_quotes.volume_basis: (bar capture - open capture) x factor
 NO_OPEN_SNAPSHOT = "no_open_snapshot"  # no usable volume at the open: the symbol falls back to candles
 
@@ -106,14 +115,34 @@ def regular_factor(
     return measured_factor(rth_candle_volume, quote_day_volume)
 
 
-def quote_bar(q: QtQuote, start: datetime, end: datetime) -> Candle | str:
+def capture_window(kind: str) -> timedelta:
+    """How late a timed capture may still start (CAPTURE_WINDOWS, else CAPTURE_WINDOW)."""
+    return CAPTURE_WINDOWS.get(kind, CAPTURE_WINDOW)
+
+
+def late_cutoff(end: datetime, asked_at: datetime | None = None) -> datetime:
+    """The latest last-trade time a quote read for the bar ending at `end` may have (FIX-DAY1b).
+
+    Without `asked_at` (the scan's own pass, read 5 s after the bar): `end` + QUOTE_LATE_AFTER, as in
+    FIX-DAY1. With it (a timed capture: when the quote's request was sent): QUOTE_LATE_AFTER after the later
+    of `end` and `asked_at`, with `asked_at` counted at most REQUEST_LAG_MAX past `end`. A request sent on
+    time keeps the FIX-DAY1 rule. One the bucket or a 429 held back gets the same 2 s from when it was sent,
+    since an active name's last trade tracks when Questrade answered, not the bar. The ceiling keeps trades
+    more than 4 s after the bar's end out of it whatever the delay."""
+    ref = end if asked_at is None else min(max(end, asked_at), end + REQUEST_LAG_MAX)
+    return ref + QUOTE_LATE_AFTER
+
+
+def quote_bar(
+    q: QtQuote, start: datetime, end: datetime, *, asked_at: datetime | None = None
+) -> Candle | str:
     """The opening bar [start, end) from quote `q`, or the missing reason. `volume` is the RAW quote volume
     (the caller turns it into the bar's volume). High and low are widened to contain open and close (a quote's
-    high/low can trail the last trade by a moment). A quote whose last trade is more than QUOTE_LATE_AFTER
-    after `end` is QUOTE_LATE (FIX-DAY1)."""
+    high/low can trail the last trade by a moment). A quote whose last trade is past `late_cutoff(end,
+    asked_at)` is QUOTE_LATE (FIX-DAY1, and FIX-DAY1b for `asked_at`: a timed capture's send time)."""
     if q.delay is not None and q.delay > 0:
         return QUOTE_DELAYED
-    if q.last_trade_time is not None and q.last_trade_time > end + QUOTE_LATE_AFTER:
+    if q.last_trade_time is not None and q.last_trade_time > late_cutoff(end, asked_at):
         return QUOTE_LATE
     close = q.last_regular if q.last_regular is not None and q.last_regular > 0 else q.last
     if (

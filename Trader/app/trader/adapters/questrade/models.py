@@ -37,6 +37,9 @@ class QtQuote:
     # FIX-DAY1: when the app received this quote (the client's clock, right after the response). None for
     # quotes not fetched live (replay, older callers): the fill model then judges only the last trade's age.
     fetched_at: datetime | None = None
+    # FIX-DAY1b: when the request that answered this quote was sent (the client's clock, the attempt that got
+    # the 200: after the bucket's pacing and any 429 pause). A timed capture judges `quote_late` against it.
+    requested_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

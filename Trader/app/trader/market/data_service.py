@@ -33,10 +33,10 @@ from trader.market.quote_bars import (
     NO_OPEN_SNAPSHOT,
     NO_QUOTE,
     QUOTE_BAR_MAX_LAG,
-    QUOTE_LATE_AFTER,
     VOLUME_BASIS_DELTA,
     OpeningBarSource,
     VolumeScale,
+    late_cutoff,
     median_factor,
     open_snapshot_volume,
     opening_delta,
@@ -77,6 +77,11 @@ CAPTURE_DEADLINE_S = 4.0
 # The post-close measurement also reads the day's pre-market candles, from this long before the open
 # (04:00 ET).
 PREMARKET_SPAN = timedelta(hours=5, minutes=30)
+# FIX-DAY1b: measured after the close, the quote's day volume includes after-hours trades (to 20:00 ET), so
+# the candles of that window are counted too, those that ended at least CANDLE_PUBLISH_LAG ago (Questrade
+# serves candles ~10 minutes late on this data package and refuses a request ending inside that delay).
+AFTERHOURS_SPAN = timedelta(hours=4)
+CANDLE_PUBLISH_LAG = timedelta(minutes=15)
 # The 9:35 scan uses the factors of the latest earlier session that has any, at most this far back.
 FACTOR_LOOKBACK = timedelta(days=10)
 STALE_QUOTE = "stale_quote"  # measurement: the quote's last trade is not from the measured session
@@ -506,7 +511,8 @@ class MarketDataService:
             if q is None:
                 missing[sid] = NO_QUOTE
                 continue
-            built = quote_bar(q, open_, end)
+            # FIX-DAY1b: a stored capture's quote is judged against when its request was sent
+            built = quote_bar(q, open_, end, asked_at=q.requested_at if sid in stored else None)
             if isinstance(built, str):
                 missing[sid] = built
                 continue
@@ -601,6 +607,7 @@ class MarketDataService:
                 high=r.high,
                 low=r.low,
                 fetched_at=r.fetched_at,
+                requested_at=r.capture_started_at,  # FIX-DAY1b: per row, when its request was sent
             )
             for r in rows
         }
@@ -611,11 +618,23 @@ class MarketDataService:
     ) -> dict[str, Any]:
         """FIX-DAY1: one timed quotes capture of the universe (default) under a small budget, stored in
         `opening_quote_captures` (kind `open`: the volume at the open, read just before 09:30:00; kind `bar`:
-        the 09:30-09:35 bar, read from 09:35:00.0). Records the capture's start and end and, per symbol, the
-        quote's last-trade time and when it arrived. A re-run replaces the rows. Returns the detail (never
-        raises for missing data; a storage failure is logged)."""
+        the 09:30-09:35 bar, read from 09:35:00.0). Records the capture's end and, per symbol, when its
+        request was sent (`capture_started_at`, FIX-DAY1b: the earliest is the capture's start), the quote's
+        last-trade time and when it arrived. The requests go out concurrently (`_capture_pass`). FIX-DAY1b: a
+        capture whose rows are already stored for the session is not run again (a worker restarted inside
+        the window would replace them with later quotes): the detail then says `skipped`. Returns the detail
+        (never raises for missing data; a storage failure is logged)."""
         if kind not in (CAPTURE_OPEN, CAPTURE_BAR):
             raise ValueError(f"unknown capture kind {kind!r}")
+        try:
+            done = await self._db(self._capture_stored, session_date, kind)
+        except Exception as exc:  # capture anyway: a lost capture costs more than a replaced one
+            log.error("market.capture_done_unreadable", kind=kind, error=type(exc).__name__)
+            done = False
+        if done:
+            skipped = {"session_date": session_date.isoformat(), "kind": kind, "skipped": "already_captured"}
+            log.warning("market.capture_skipped", **skipped)
+            return skipped
         if symbol_ids is None:
             symbol_ids = [x.symbol_id for x in await self.universe(session_date)]
         ids = list(dict.fromkeys(symbol_ids))
@@ -624,14 +643,14 @@ class MarketDataService:
             self._quote_qids.update(await self._db(self._questrade_ids, uncached))
         items = [(sid, self._quote_qids[sid]) for sid in ids if sid in self._quote_qids]
         started = self._clock.now()
-        quotes, errors = await self._quote_pass(items, CAPTURE_DEADLINE_S)
+        quotes, errors = await self._capture_pass(items, CAPTURE_DEADLINE_S)
         ended = self._clock.now()
         rows = [
             {
                 "session_date": session_date,
                 "symbol_id": sid,
                 "kind": kind,
-                "capture_started_at": started,
+                "capture_started_at": q.requested_at or started,
                 "capture_ended_at": ended,
                 "fetched_at": q.fetched_at or ended,
                 "quote_time": q.last_trade_time,
@@ -659,10 +678,11 @@ class MarketDataService:
             "elapsed_s": round((ended - started).total_seconds(), 3),
             "offset_s": round((started - target).total_seconds(), 3),  # start relative to 09:35:00 / 09:30:00
         }
-        if kind == CAPTURE_BAR:
-            late_at = target + QUOTE_LATE_AFTER
+        if kind == CAPTURE_BAR:  # FIX-DAY1b: judged against each request's send time, as the scan will
             detail["late"] = sum(
-                1 for q in quotes.values() if q.last_trade_time is not None and q.last_trade_time > late_at
+                1
+                for q in quotes.values()
+                if q.last_trade_time is not None and q.last_trade_time > late_cutoff(target, q.requested_at)
             )
         else:
             detail["after_open"] = sum(
@@ -676,6 +696,80 @@ class MarketDataService:
                 detail["stored"] = False
         log.info("market.quotes_captured", **detail)
         return detail
+
+    def _capture_stored(self, session_date: date, kind: str) -> bool:
+        with self._factory() as s:
+            found = s.execute(
+                select(m.OpeningQuoteCapture.symbol_id)
+                .where(m.OpeningQuoteCapture.session_date == session_date, m.OpeningQuoteCapture.kind == kind)
+                .limit(1)
+            ).first()
+        return found is not None
+
+    async def _capture_pass(
+        self, items: Sequence[tuple[int, int]], deadline_s: float
+    ) -> tuple[dict[int, QtQuote], dict[int, str]]:
+        """FIX-DAY1b: the timed captures' quotes pass. The same <= QUOTE_IDS_PER_CALL-id requests as
+        `_quote_pass`, all handed to the client at once: its market bucket still spaces them at the rate limit
+        (~6 requests in ~0.35 s), but one slow or 429-paused request no longer holds back the ones after it.
+        Each quote gets `requested_at` (the client's send time of the answering attempt; without one, when the
+        request was handed to the client). As in `_quote_pass`, a 401 (after the client's forced refresh)
+        or the deadline cancels the requests still outstanding, and their symbols get that reason."""
+        loop = asyncio.get_running_loop()
+        until = loop.time() + deadline_s
+        out: dict[int, QtQuote] = {}
+        errors: dict[int, str] = {}
+        chunks = [items[i : i + QUOTE_IDS_PER_CALL] for i in range(0, len(items), QUOTE_IDS_PER_CALL)]
+        tasks = {asyncio.create_task(self._asked_quotes([qid for _, qid in c])): c for c in chunks}
+        pending: set[asyncio.Task[list[QtQuote]]] = set(tasks)
+        fatal: str | None = None
+        try:
+            while pending and fatal is None:
+                remaining = until - loop.time()
+                if remaining <= 0:
+                    fatal = "timeout"
+                    break
+                done, pending = await asyncio.wait(
+                    pending, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in done:
+                    chunk = tasks[task]
+                    exc = task.exception()
+                    if exc is None:
+                        back = {qid: sid for sid, qid in chunk}
+                        for q in task.result():
+                            sid = back.get(q.symbol_id)
+                            if sid is not None:
+                                out[sid] = dataclasses.replace(q, symbol_id=sid)
+                        continue
+                    if isinstance(exc, QuestradeApiError):
+                        reason = missing_reason(exc)
+                        if exc.status == 401:
+                            fatal = reason
+                    else:  # one failed request never ends the capture
+                        reason = missing_reason(QuestradeApiError(0, type(exc).__name__))
+                    errors.update(dict.fromkeys((sid for sid, _ in chunk), reason))
+        finally:
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+        for task in pending:
+            errors.update(dict.fromkeys((sid for sid, _ in tasks[task]), fatal or "timeout"))
+        if fatal is not None:
+            log.error(
+                "market.quotes_fail_fast",
+                symbols=len(items),
+                requests=len(chunks),
+                failed=len(errors),
+                reason=reason_key(fatal),
+            )
+        return out, errors
+
+    async def _asked_quotes(self, qids: list[int]) -> list[QtQuote]:
+        asked = self._clock.now()
+        got = await self._client.quotes(qids)
+        return [q if q.requested_at is not None else dataclasses.replace(q, requested_at=asked) for q in got]
 
     def _store_captures(self, rows: list[dict[str, Any]]) -> None:
         stmt = pg_insert(m.OpeningQuoteCapture).values(rows)
@@ -762,7 +856,15 @@ class MarketDataService:
         # FIX-DAY1: the quote's day volume includes pre-market trades; take them out of the ratio, from the
         # open capture (quote scale) when there is one, else from that day's pre-market candles.
         opens, _, _ = self._stored_captures(session_date, CAPTURE_OPEN, list(todays))
-        reqs = {sid: CandleRequest(qids[sid], open_ - PREMARKET_SPAN, close, "FiveMinutes") for sid in todays}
+        # FIX-DAY1b: the quote's day volume also holds the after-hours trades up to now; so do the candles,
+        # up to the last one surely published (a request ending inside the ~10 min delay is refused). At the
+        # 16:15 post-close none is yet: the candles end at the close, as before.
+        candles_end = self._afterhours_end(close)
+        reqs = {
+            sid: CandleRequest(qids[sid], open_ - PREMARKET_SPAN, candles_end, "FiveMinutes")
+            for sid in todays
+        }
+        afterhours_total = 0
         results: dict[CandleRequest, list[Candle] | QuestradeApiError] = {}
         if reqs:
             results = await self._client.candles_many(list(reqs.values()), deadline_s=MEASURE_DEADLINE_S)
@@ -786,14 +888,18 @@ class MarketDataService:
                     reasons[INCOMPLETE_DAY] += 1
                 else:
                     candle_volume = sum(c.volume for c in rth)
+                    afterhours = sum(c.volume for c in result if close <= c.start < candles_end)
+                    afterhours_total += afterhours
+                    # the numerator covers the quote's window after the open: the session plus after hours
+                    traded = candle_volume + afterhours
                     snapshot = open_snapshot_volume(opens.get(sid), open_, session_date)
                     if snapshot is not None:
                         premarket, premarket_source = snapshot, "snapshot"
-                        factor = regular_factor(candle_volume, todays[sid], premarket_quote=snapshot)
+                        factor = regular_factor(traded, todays[sid], premarket_quote=snapshot)
                     else:
                         premarket = sum(c.volume for c in result if open_ - PREMARKET_SPAN <= c.start < open_)
                         premarket_source = "candles"
-                        factor = regular_factor(candle_volume, todays[sid], premarket_candle=premarket)
+                        factor = regular_factor(traded, todays[sid], premarket_candle=premarket)
                     if factor is None:
                         reasons["no_volume"] += 1
                     elif not usable_factor(factor):
@@ -840,9 +946,21 @@ class MarketDataService:
             "measured": len(factors),
             "median": str(median) if median is not None else None,
             "missing_reasons": dict(sorted((k, v) for k, v in reasons.items() if v)),
+            "candles_end": candles_end.isoformat(),  # FIX-DAY1b: after the close: after-hours candles counted
+            "afterhours_candle_volume": afterhours_total,
         }
         log.info("market.volume_scale_measured", **detail)
         return detail
+
+    def _afterhours_end(self, close: datetime) -> datetime:
+        """FIX-DAY1b: the end of the measurement's candles: the close, or later the end of the last 5-minute
+        after-hours candle surely published (CANDLE_PUBLISH_LAG ago, on the 5-minute grid), at most
+        AFTERHOURS_SPAN after the close (20:00 ET)."""
+        cut = self._clock.now() - CANDLE_PUBLISH_LAG
+        if cut <= close:
+            return close
+        steps = (min(cut, close + AFTERHOURS_SPAN) - close) // OPENING_BAR
+        return close + steps * OPENING_BAR
 
     def pop_opening_scan(self) -> OpeningScan | None:
         """The counts of the last `opening_bars` call, once (the engine takes them after each event)."""

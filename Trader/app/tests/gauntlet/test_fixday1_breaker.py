@@ -294,15 +294,19 @@ def test_fill_freshness_matrix() -> None:
     sell_stop = OrderSpec(1, "sell", "stop", 10, stop=Decimal("10.20"), purpose="stop", position_id=1)
     # an old print above the buy stop (10.50) with the live ask below it does NOT trigger
     assert MODEL.assess(buy_stop, fq(), NOW) == NoFill("not_triggered")
-    # an old print below a protective sell stop does not trigger either; the live bid does
+    # an old print below a protective sell stop does not trigger either; FILLFIX: nor does the bid alone
     assert MODEL.assess(sell_stop, fq(last="9.00", bid="10.30", ask="10.31"), NOW) == NoFill("not_triggered")
-    sold = MODEL.assess(sell_stop, fq(last="11.00", bid="10.10", ask="10.11"), NOW)
+    assert MODEL.assess(sell_stop, fq(last="11.00", bid="10.10", ask="10.11"), NOW) == NoFill("not_triggered")
+    sold = MODEL.assess(sell_stop, fq(last="10.15", bid="10.10", ask="10.11", trade_age=1), NOW)
     assert isinstance(sold, FillDecision) and sold.trigger == "stop" and sold.price < Decimal("10.20")
-    # live book, ask at the stop: fills at max(stop, ask) + slippage
-    filled = MODEL.assess(buy_stop, fq(ask="10.25", bid="10.24"), NOW)
+    # FILLFIX: live book, ask at the stop but an old print: no trigger; a fresh print at the stop fills at
+    # max(stop, ask) + slippage
+    assert MODEL.assess(buy_stop, fq(ask="10.25", bid="10.24"), NOW) == NoFill("not_triggered")
+    filled = MODEL.assess(buy_stop, fq(ask="10.25", bid="10.24", last="10.20", trade_age=1), NOW)
     assert isinstance(filled, FillDecision) and filled.price > Decimal("10.25")
     # locked book (bid == ask) is live
-    assert isinstance(MODEL.assess(buy_stop, fq(bid="10.25", ask="10.25"), NOW), FillDecision)
+    locked = fq(bid="10.25", ask="10.25", last="10.25", trade_age=1)
+    assert isinstance(MODEL.assess(buy_stop, locked, NOW), FillDecision)
     # never a fill on a stale fetch, a crossed or one-sided/zero book with an old print, delay or halt
     for bad in (
         fq(ask="10.25", bid="10.24", fetch_age=10.5),

@@ -35,6 +35,7 @@ SETTING_GROUPS: Mapping[str, str] = {
     "quote_poll_seconds": "Fill model",
     "stale_quote_seconds": "Fill model",
     "slippage_": "Fill model",
+    "fill.": "Fill model",
     "fees.": "Fill model",
     "proposal_ttl_": "Proposals",
     "stop_escalation_seconds": "Proposals",

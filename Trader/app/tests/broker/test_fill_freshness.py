@@ -49,14 +49,16 @@ def stop_buy(stop: str = "10.00") -> OrderSpec:
     return OrderSpec(1, "buy", "stop", 10, stop=Decimal(stop))
 
 
-def test_live_book_with_an_old_last_trade_fills_the_stop_entry() -> None:
-    out = MODEL.assess(stop_buy("10.00"), q(trade_age=1800), NOW)
+def test_live_book_with_an_old_last_trade_is_usable_and_a_fresh_print_fills_the_stop_entry() -> None:
+    # FILLFIX: the old print is usable (not stale_quote) but triggers nothing; the ask alone never triggers
+    assert MODEL.assess(stop_buy("10.00"), q(trade_age=1800), NOW) == NoFill("not_triggered")
+    out = MODEL.assess(stop_buy("10.00"), q(last="10.00", trade_age=2), NOW)
     assert isinstance(out, FillDecision)
     assert out.trigger == "stop" and out.price == Decimal("10.0100")
 
 
 def test_live_book_with_no_last_trade_time_at_all_is_usable() -> None:
-    assert isinstance(MODEL.assess(stop_buy(), q(trade_age=None), NOW), FillDecision)
+    assert MODEL.assess(stop_buy(), q(trade_age=None), NOW) == NoFill("not_triggered")
 
 
 def test_a_stop_entry_still_waits_for_ask_at_or_above_the_stop() -> None:
@@ -76,7 +78,9 @@ def test_a_book_fetched_too_long_ago_is_stale() -> None:
 
 
 def test_fetched_exactly_stale_quote_seconds_ago_is_still_usable() -> None:
-    assert isinstance(MODEL.assess(stop_buy(), q(fetch_age=10.0, trade_age=1800), NOW), FillDecision)
+    assert isinstance(
+        MODEL.assess(stop_buy(), q(fetch_age=10.0, last="10.00", trade_age=2), NOW), FillDecision
+    )
 
 
 @pytest.mark.parametrize(
@@ -113,13 +117,19 @@ def test_delayed_and_halted_never_fill_even_with_a_live_book() -> None:
 def test_without_a_fetch_time_the_last_trade_rule_applies_as_before() -> None:
     """Replay quotes and older callers carry no fetched_at: the old last-trade-only rule, unchanged."""
     assert MODEL.assess(stop_buy(), q(fetch_age=None, trade_age=600), NOW).reason == "stale_quote"  # type: ignore[union-attr]
-    assert isinstance(MODEL.assess(stop_buy(), q(fetch_age=None, trade_age=2), NOW), FillDecision)
+    assert isinstance(
+        MODEL.assess(stop_buy(), q(fetch_age=None, last="10.00", trade_age=2), NOW), FillDecision
+    )
 
 
-def test_the_protective_stop_sells_into_a_live_bid_despite_an_old_last_trade() -> None:
+def test_the_protective_stop_triggers_on_a_fresh_print_not_on_the_bid() -> None:
+    """FILLFIX: Questrade triggers stops on the last trade: a bid under the stop with an old print above it
+    doesn't sell; a fresh print at or under the stop sells into the bid."""
     order = OrderSpec(1, "sell", "stop", 10, stop=Decimal("9.50"), purpose="stop", position_id=7)
-    out = MODEL.assess(order, q(bid="9.45", ask="9.47", last="9.80", trade_age=900), NOW)
-    assert isinstance(out, FillDecision) and out.trigger == "stop"
+    held = MODEL.assess(order, q(bid="9.45", ask="9.47", last="9.80", trade_age=900), NOW)
+    assert held == NoFill("not_triggered")
+    out = MODEL.assess(order, q(bid="9.45", ask="9.47", last="9.48", trade_age=1), NOW)
+    assert isinstance(out, FillDecision) and out.trigger == "stop" and out.price == Decimal("9.4400")
 
 
 def test_the_snapshot_records_the_fetch_time() -> None:

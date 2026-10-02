@@ -252,8 +252,8 @@ def test_fill_model_boundaries() -> None:
     # stop exactly equal to last (ask below the stop): triggers, fills at max(stop, ask) + slip
     d = MODEL.assess(buy("stop", stop="10.00"), q1("9.98", "9.99", "10.00"), NOW)
     assert isinstance(d, FillDecision) and d.price == Decimal("10.0100") and d.trigger == "stop"
-    # sell stop exactly equal to the bid
-    d = MODEL.assess(sell("stop", stop="9.90"), q1("9.90", "9.91", "9.95"), NOW)
+    # sell stop exactly equal to the last trade (FILLFIX: the last trade triggers, not the bid)
+    d = MODEL.assess(sell("stop", stop="9.90"), q1("9.90", "9.91", "9.90"), NOW)
     assert isinstance(d, FillDecision) and d.price == Decimal("9.8900")
     # one cent short of the stop: no trigger
     n = MODEL.assess(buy("stop", stop="10.00"), q1("9.98", "9.99", "9.99"), NOW)

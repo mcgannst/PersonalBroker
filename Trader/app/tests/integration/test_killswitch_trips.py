@@ -245,9 +245,10 @@ async def build(factory: sessionmaker[Session], *, max_positions: int) -> World:
 
 # --- driving the market -------------------------------------------------------------------------------------
 async def tape(w: World, t: datetime, prices: dict[int, tuple[str, str]]) -> list[FillEvent]:
-    """Quotes at `t` per symbol (bid, ask; last = bid), also served as the marks; one `on_quotes` call."""
+    """Quotes at `t` per symbol (bid, ask; last = ask: FILLFIX stops trigger on the last trade), also served
+    as the marks; one `on_quotes` call."""
     w.clock.set(t)
-    quotes = [quote(sid, bid, ask, bid, at=t, age=0) for sid, (bid, ask) in prices.items()]
+    quotes = [quote(sid, bid, ask, ask, at=t, age=0) for sid, (bid, ask) in prices.items()]
     for q in quotes:
         w.data.quote_map[q.symbol_id] = q
     return await w.engine.on_quotes(quotes, t)
@@ -284,7 +285,8 @@ async def stop_out(
         o for o in w.engine.broker.working_orders() if o.purpose == "stop" and o.symbol_id == sid
     ]
     assert protective.stop == Decimal(stop_loss)
-    (stopped,) = await tape(w, t + timedelta(seconds=2), {sid: (bid, str(Decimal(bid) + Decimal("0.02")))})
+    # FILLFIX: the tape's last trade (= ask, one cent over the bid) prints at or through the stop
+    (stopped,) = await tape(w, t + timedelta(seconds=2), {sid: (bid, str(Decimal(bid) + Decimal("0.01")))})
     assert stopped.purpose == "stop" and stopped.trade_id is not None
     return stopped
 

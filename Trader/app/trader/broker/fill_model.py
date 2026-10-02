@@ -3,10 +3,20 @@
 Freshness (FIX-DAY1, Wed 2026-09-30): a Questrade quote carries no quote timestamp, so the app stamps when it
 fetched it (QtQuote.fetched_at). A live two-sided book (bid and ask > 0, not crossed; delay 0 and not halted
 are checked first) fetched within stale_quote_seconds is usable however old the last trade is; an old last
-trade then does not trigger a stop (only the book does). Without a live book, or without a fetch time
+trade then triggers no stop (FILLFIX: nor does the book). Without a live book, or without a fetch time
 (replay, older callers), the last trade's age decides, as before (P1-T7).
 QuoteFillModel implements the FillModel protocol; candle fills for replay are a separate model (P5-T2).
 A crossed quote (bid > ask) is unusable, like a one-sided one: NoFill("crossed_quote") (P2-B1 fix round).
+
+FILLFIX (Fri 2026-10-02): stop and stop-limit orders trigger on the LAST TRADE only, as Questrade's do
+(a buy-stop when last >= stop, a sell-stop when last <= stop), never on the ask or bid alone. So one quote
+can never fill an entry and its protective stop (its last can't be both >= the entry stop and <= the lower
+protective stop), which the ask/bid triggers allowed on a wide opening spread (BXDC: bid 17.41 / ask 17.83 /
+last 17.72 filled the 17.73 entry and the 17.6678 stop). A stale last trade (see above) triggers nothing: the
+next print does. Once triggered the fill is at the ask (buy) or bid (sell) plus slippage, as before. A
+triggered entry with a planned stop_loss fills only while ask - bid <= max_spread_stop_fraction x
+(stop - stop_loss); a wider spread is NoFill("spread_wide") and the order keeps working. Protective stops and
+exits are never held for spread.
 """
 
 from dataclasses import dataclass
@@ -20,6 +30,7 @@ from trader.market.types import Candle
 from trader.settings_store import RuntimeSettings
 
 Priced = tuple[Decimal, Decimal, str]  # price, slippage per share, trigger
+SPREAD_WIDE = "spread_wide"  # a triggered entry held: the spread is too wide for its stop distance (FILLFIX)
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +42,7 @@ class FillParams:
     ecn_per_share: Decimal = Decimal("0.0035")
     direct_route: bool = False
     sec_fee_rate: Decimal = Decimal("0.0000206")
+    max_spread_stop_fraction: Decimal = Decimal("0.5")
 
     @classmethod
     def from_settings(cls, s: RuntimeSettings) -> "FillParams":
@@ -42,6 +54,7 @@ class FillParams:
             ecn_per_share=s.fees_ecn_per_share,
             direct_route=s.fees_direct_route,
             sec_fee_rate=s.fees_sec_rate,
+            max_spread_stop_fraction=s.fill_max_spread_stop_fraction,
         )
 
 
@@ -109,7 +122,7 @@ class QuoteFillModel:
             if fetch_age > limit:
                 return NoFill("stale_quote", f"the quote was fetched {fetch_age:.1f}s ago")
             if trade_age is None or trade_age > limit:
-                last = None  # an old print says nothing about now: only the book triggers
+                last = None  # an old print says nothing about now: it triggers no stop
         else:
             # No live book (or no fetch time: replay, older callers): the last trade's age decides, as before.
             if trade_age is None:
@@ -123,6 +136,10 @@ class QuoteFillModel:
             if ask is None:
                 return NoFill("no_ask")
             priced = self._buy(order, ask, last)
+            if not isinstance(priced, NoFill):
+                held = self._spread_hold(order, bid, ask)
+                if held is not None:
+                    return held
         else:
             if bid is None:
                 return NoFill("no_bid")
@@ -142,6 +159,24 @@ class QuoteFillModel:
             trigger=trigger,
         )
 
+    def _spread_hold(self, o: OrderSpec, bid: Decimal | None, ask: Decimal) -> NoFill | None:
+        """FILLFIX: a triggered stop entry with a planned stop_loss is held while ask - bid exceeds
+        max_spread_stop_fraction x (stop - stop_loss), or while there is no bid to measure the spread. None:
+        fill. Exits and entries without a stop price or stop_loss are never held."""
+        if o.purpose != "entry" or o.stop is None or o.stop_loss is None:
+            return None
+        distance = o.stop - o.stop_loss
+        if distance <= 0:
+            return None
+        if bid is None:
+            return NoFill(SPREAD_WIDE, "no bid to measure the spread")
+        spread = ask - bid
+        allowed = (self._p.max_spread_stop_fraction * distance).quantize(Q4, ROUND_HALF_UP)
+        if spread > allowed:
+            fraction = self._p.max_spread_stop_fraction
+            return NoFill(SPREAD_WIDE, f"spread {spread} > {fraction} x stop distance {distance} ({allowed})")
+        return None
+
     def _buy(self, o: OrderSpec, ask: Decimal, last: Decimal | None) -> Priced | NoFill:
         if o.order_type == "market":
             s = self.slip(ask)
@@ -150,7 +185,7 @@ class QuoteFillModel:
             assert o.limit is not None
             return (o.limit, ZERO, "limit") if ask <= o.limit else NoFill("not_triggered")
         assert o.stop is not None
-        if not ((last is not None and last >= o.stop) or ask >= o.stop):
+        if last is None or last < o.stop:  # FILLFIX: the last trade triggers, never the ask alone
             return NoFill("not_triggered")
         if o.order_type == "stop":
             ref = max(o.stop, ask)
@@ -170,7 +205,7 @@ class QuoteFillModel:
             assert o.limit is not None
             return (o.limit, ZERO, "limit") if bid >= o.limit else NoFill("not_triggered")
         assert o.stop is not None
-        if not ((last is not None and last <= o.stop) or bid <= o.stop):
+        if last is None or last > o.stop:  # FILLFIX: the last trade triggers, never the bid alone
             return NoFill("not_triggered")
         if o.order_type == "stop":
             ref = min(o.stop, bid)

@@ -344,13 +344,15 @@ The worker polls quotes for symbols with working orders every `quote_poll_second
 |---|---|---|
 | Buy market | immediately | `ask + slip` |
 | Sell market | immediately | `bid − slip` |
-| Buy stop | `last ≥ stop` or `ask ≥ stop` | `max(stop, ask) + slip` |
-| Sell stop | `last ≤ stop` or `bid ≤ stop` | `min(stop, bid) − slip` |
+| Buy stop | `last ≥ stop` | `max(stop, ask) + slip` |
+| Sell stop | `last ≤ stop` | `min(stop, bid) − slip` |
 | Buy stop-limit | as buy stop, then fill only if `ask + slip ≤ limit` | `ask + slip` |
 | Limit buy / sell | `ask ≤ limit` / `bid ≥ limit` | the limit price |
 
+- **Stops trigger on the last trade (FILLFIX, Fri 2026-10-02),** as Questrade's do, never on the ask or bid alone. Before, `ask ≥ stop` / `bid ≤ stop` also triggered: on Friday's wide opening spreads one BXDC quote (bid 17.41, ask 17.83, last 17.72) filled the 17.73 entry stop at the ask and, 3.6 s later on the same quote, its 17.6678 protective stop at the bid (−2.6R) with no trade ever at the entry stop; 5 of 9 entries that day triggered with the last trade below the stop. With the last trade as the only trigger, one quote can never fill both an entry and its (lower) protective stop.
+- **Spread guard on entries (FILLFIX):** a triggered entry with a planned `stop_loss` fills only while `ask − bid ≤ fill.max_spread_stop_fraction × (stop − stop_loss)` (default 0.5, Stephen); otherwise it stays working (logged once per order, "entry held, spread too wide") and fills on a later quote while still triggered and the spread is narrow enough, until `entry_cancel_at` or the entry cutoff. Protective stops and exits are never held for spread.
 - `slip = max(slippage_min, slippage_bps × price)`, default `$0.01` / `5 bps`, configurable.
-- **Stale quotes (FIX-DAY1, 2026-09-30):** a quote with a **live book** (bid and ask both > 0, not crossed, `delay` 0, not halted) **fetched** within `stale_quote_seconds` (default 10) of now is usable however old its last trade is; then an old last trade (older than `stale_quote_seconds`) does not trigger a stop on its own, only the book does (a buy stop on ask ≥ stop, a sell stop on bid ≤ stop). Without a live book, or without a fetch time (replay, older callers), the last trade's age decides as before: `now − q.time > stale_quote_seconds` doesn't fill. (Wednesday the CLDX entry stop sat 30 minutes as `stale_quote` on an old last trade while bid/ask were live.) Flag a `stale_quote` event and alert if it persists.
+- **Stale quotes (FIX-DAY1, 2026-09-30):** a quote with a **live book** (bid and ask both > 0, not crossed, `delay` 0, not halted) **fetched** within `stale_quote_seconds` (default 10) of now is usable however old its last trade is; an old last trade (older than `stale_quote_seconds`) then triggers no stop (FILLFIX: nor does the book; the next print does). Without a live book, or without a fetch time (replay, older callers), the last trade's age decides as before: `now − q.time > stale_quote_seconds` doesn't fill. (Wednesday the CLDX entry stop sat 30 minutes as `stale_quote` on an old last trade while bid/ask were live.) Flag a `stale_quote` event and alert if it persists.
 - **Partial fills:** out of scope. The full quantity fills (the order sizes are small).
 - **Fees** per fill: commission (default $0), ECN (only if the direct-route flag is set), and the SEC fee on sells at `0.0000206 × value` (configurable).
 - Every fill stores the triggering quote (bid, ask, last, time) in `fills.quote_snapshot` for auditing.
@@ -543,6 +545,7 @@ Engine settings (Phase 2; `trader/settings_store.py` is the source of truth):
 | `no_entry_before_close_minutes` | `30` | 0–390 | No entry from this long before the close (BR-42); the broker cancels later entries |
 | `quote_poll_seconds` | `2.0` | 1–60 | Quote polling interval for working orders |
 | `stale_quote_seconds` | `10.0` | 1–300 | A quote older than this never fills (§7.2) |
+| `fill.max_spread_stop_fraction` | `0.5` | > 0–5 | A triggered entry is held while its spread exceeds this × its stop distance (§7.2, FILLFIX) |
 | `slippage_min`, `slippage_bps` | `0.01`, `5` | 0–1, 0–100 | Slippage = max(min, bps × price) |
 | `fees.commission`, `fees.direct_route`, `fees.ecn_per_share`, `fees.sec_rate` | `0`, `false`, `0.0035`, `0.0000206` | see code | Commission, ECN fee when direct-routed, SEC fee on sells |
 | `proposal_ttl_entry_seconds`, `proposal_ttl_stop_seconds`, `proposal_ttl_exit_seconds` | `300`, `180`, `300` | 30–3600 | Proposal TTLs by kind; cancels use the exit TTL (§6.2) |

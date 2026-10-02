@@ -115,6 +115,11 @@ class RuntimeSettings(BaseModel):
     slippage_bps: Decimal = Field(
         Decimal("5"), ge=0, le=Decimal("100"), allow_inf_nan=False, alias="slippage_bps"
     )
+    # FILLFIX (Stephen, 2026-10-02): a triggered entry fills only while ask - bid <= this x its stop distance
+    # (stop price - stop_loss); a wider spread holds it working. Protective stops and exits always fill.
+    fill_max_spread_stop_fraction: Decimal = Field(
+        Decimal("0.5"), gt=0, le=Decimal("5"), allow_inf_nan=False, alias="fill.max_spread_stop_fraction"
+    )
     fees_commission: Decimal = Field(
         Decimal("0"), ge=0, le=Decimal("100"), allow_inf_nan=False, alias="fees.commission"
     )

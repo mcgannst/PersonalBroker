@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from trader.adapters.questrade.models import QtQuote
 from trader.broker.base import BrokerRejected
+from trader.broker.fill_model import SPREAD_WIDE
 from trader.broker.ledger import Ledger
 from trader.broker.types import (
     Q4,
@@ -169,6 +170,7 @@ class SimBroker:
         self._cal = calendar if calendar is not None else SessionCalendar()
         self._settings: Callable[[], RuntimeSettings] = settings if settings is not None else RuntimeSettings
         self._candle_no_fill_logged: set[int] = set()  # replay: order ids whose unusable bar was logged
+        self._spread_held_logged: set[int] = set()  # FILLFIX: entry order ids whose spread hold was logged
 
     def entry_cutoff(self, day: date) -> datetime | None:
         """The moment entries stop filling on `day`: session close - no_entry_before_close_minutes (BR-42)."""
@@ -518,6 +520,15 @@ class SimBroker:
         )
 
     def _no_fill(self, s: Session, order: m.Order, outcome: NoFill, now: datetime) -> None:
+        if outcome.reason == SPREAD_WIDE and order.id not in self._spread_held_logged:
+            # FILLFIX: an entry held for its spread is logged once per order (per process), not per poll
+            self._spread_held_logged.add(order.id)
+            self._log(
+                s,
+                "warning",
+                f"order {order.id}: entry held, spread too wide ({outcome.detail})",
+                {"order_id": order.id, "reason": outcome.reason, "detail": outcome.detail},
+            )
         if outcome.reason not in UNUSABLE_QUOTE:  # a usable quote: the next outage alerts afresh
             order.stale_since, order.stale_alerted = None, False
             return

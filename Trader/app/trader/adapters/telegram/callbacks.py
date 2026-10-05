@@ -1,6 +1,7 @@
 """Signed, single-use Telegram callback data (SPEC §14).
 
-Data format (at most 64 bytes): `<k>:<ref>:<a>:<nonce>:<mac>`, k = p (proposal) | s (pause) | j (journal).
+Data format (at most 64 bytes): `<k>:<ref>:<a>:<nonce>:<mac>`, k = p (proposal) | s (pause) | j (journal) |
+o (owner prompt).
 The MAC is the first 16 characters of the base64url HMAC-SHA256 of `v1|<k>:<ref>:<a>:<nonce>`, keyed
 with HMAC-SHA256(SESSION_SECRET, "trader.telegram.callback.v1"). A forged or altered button therefore
 never parses. Nonces live in `telegram_callbacks`, one per message (shared by its buttons); the first
@@ -33,17 +34,21 @@ MAC_CHARS = 16
 NONCE_BYTES = 6  # 8 URL-safe base64 characters
 MAX_DATA_BYTES = 64  # Telegram's callback_data limit
 
-KIND_CODES: dict[CallbackKind, str] = {"proposal": "p", "pause": "s", "journal": "j"}
+# OPTSIM-T10: kind `prompt` (code o) is an owner prompt of the options simulation; its ref is the prompt
+# id and its actions are the choice codes that can be a button (`w`, write on the web, never is).
+KIND_CODES: dict[CallbackKind, str] = {"proposal": "p", "pause": "s", "journal": "j", "prompt": "o"}
 CODE_KINDS: dict[str, CallbackKind] = {code: kind for kind, code in KIND_CODES.items()}
 ACTIONS: dict[CallbackKind, frozenset[str]] = {
     "proposal": frozenset({"a", "r"}),
     "pause": frozenset({"y", "n"}),
     "journal": frozenset({"y", "n"}),
+    "prompt": frozenset("aryncohbsk"),
 }
 REF_PATTERNS: dict[CallbackKind, re.Pattern[str]] = {
     "proposal": re.compile(r"^[0-9]{1,19}$"),  # proposal id
     "pause": re.compile(r"^[0-9]{1,19}$"),  # run id
     "journal": re.compile(r"^[0-9]{8}$"),  # YYYYMMDD
+    "prompt": re.compile(r"^[0-9]{1,19}$"),  # owner prompt id
 }
 NONCE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8}$")
 

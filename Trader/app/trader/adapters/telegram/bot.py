@@ -33,6 +33,7 @@ from trader.events import log_event
 from trader.market.clock import Clock
 from trader.notify.types import Button, Buttons, OutboundMessage, ProposalView, Renderer
 from trader.notify.views import proposal_view
+from trader.options.prompts import DbPromptStore
 from trader.settings_store import RuntimeSettings
 
 SOURCE = "telegram"
@@ -46,6 +47,13 @@ CLAIM_ANSWERS: dict[ClaimResult, str] = {
     "used": "Already answered",
     "expired": "Button expired",
     "wrong_message": "Old message",
+}
+# OPTSIM-T10: the callback answer of an owner-prompt tap that did not store an answer.
+PROMPT_ANSWERS: dict[str, str] = {
+    "already": "Already answered",
+    "unknown": "Unknown prompt",
+    "text_required": "Answer this one on the Options page",
+    "invalid_choice": "Invalid button",
 }
 DECISIONS: dict[str, Decision] = {"a": "approve", "r": "reject"}
 PROPOSAL_ACTIONS = ("a", "r")
@@ -250,6 +258,9 @@ class TelegramBot:
         if parsed.kind == "proposal":
             await self._proposal_tap(cb, parsed)
             return
+        if parsed.kind == "prompt":
+            await self._prompt_tap(cb, parsed)
+            return
         try:
             if parsed.kind == "pause":
                 text = await self.commands.confirm_pause(parsed.action)
@@ -297,6 +308,31 @@ class TelegramBot:
             await self.api.edit_message(self.chat_id, message_id, text, ())
         except Exception as exc:
             log.warning("telegram.edit_failed", proposal_id=proposal_id, **_error_text(exc))
+
+    async def _prompt_tap(self, cb: CallbackQuery, parsed: ParsedCallback) -> None:
+        """OPTSIM-T10: a tap on an owner prompt of the options simulation. The store decides (its row lock
+        makes two answers race safely); the plug-in that asked gets the answer from the options worker."""
+        prompt_id = int(parsed.ref)
+        try:
+            store = DbPromptStore(self.factory, self.clock)
+            result = store.answer(prompt_id, parsed.action, via="telegram", actor=f"telegram:{cb.from_id}")
+        except Exception as exc:
+            self.issuer.release(parsed.nonce)  # nothing was saved: let the next tap try again
+            log.error("telegram.prompt_answer_failed", prompt_id=prompt_id, **_error_text(exc))
+            await self._answer(cb, "Error, try again")
+            return
+        if result.status in ("text_required", "invalid_choice"):
+            # Nothing was decided: the message keeps its buttons and the other choices stay usable.
+            self.issuer.release(parsed.nonce)
+            await self._answer(cb, PROMPT_ANSWERS[result.status])
+            return
+        if result.status == "ok" and result.prompt is not None:
+            labels = {c.code: c.label for c in result.prompt.choices}
+            answer = labels.get(parsed.action, "Saved")
+        else:
+            answer = PROMPT_ANSWERS[result.status]
+        await self._answer(cb, answer)
+        await self._remove_buttons(cb)
 
     def _journal_answer(self, parsed: ParsedCallback) -> str:
         """Save the daily "Rules followed?" answer for the live run; returns the callback answer."""

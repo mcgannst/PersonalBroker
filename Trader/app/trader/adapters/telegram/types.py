@@ -11,7 +11,7 @@ from typing import Literal, Protocol
 
 from trader.notify.types import Buttons, OutboundMessage
 
-CallbackKind = Literal["proposal", "pause", "journal"]
+CallbackKind = Literal["proposal", "pause", "journal", "prompt"]  # prompt: OPTSIM owner prompts (T10)
 
 
 @dataclass(frozen=True, slots=True)

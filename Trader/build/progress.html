@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trader build progress</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --line: #e1e4ea; --text: #16191f; --muted: #667085;
+    --todo: #98a2b3; --active: #2563eb; --check: #7c3aed; --fix: #d97706; --done: #15803d; --blocked: #dc2626;
+    --bar: #e7eaf0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1115; --panel: #171a21; --line: #272c37; --text: #e8eaef; --muted: #98a2b3; --bar: #242936;
+            --todo: #667085; --active: #60a5fa; --check: #a78bfa; --fix: #fbbf24; --done: #4ade80; --blocked: #f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 22px 0 8px; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .top { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; }
+  @media (max-width: 760px) { .top { grid-template-columns: 1fr; } }
+  .now { font-size: 17px; font-weight: 600; margin: 4px 0 6px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 14px; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; }
+  .big { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .bar { height: 8px; background: var(--bar); border-radius: 99px; overflow: hidden; margin: 8px 0 4px; }
+  .bar > i { display: block; height: 100%; background: var(--done); border-radius: 99px; }
+  .waves { display: grid; gap: 10px; }
+  .wave { display: grid; grid-template-columns: 92px 1fr; gap: 10px; align-items: start; }
+  @media (max-width: 760px) { .wave { grid-template-columns: 1fr; } }
+  .wave > .label { font-weight: 600; padding-top: 10px; }
+  .wave > .label small { display: block; color: var(--muted); font-weight: 400; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 8px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--todo);
+          border-radius: 8px; padding: 9px 11px; min-width: 0; }
+  .card.planning, .card.building { border-left-color: var(--active); }
+  .card.checking { border-left-color: var(--check); } .card.fixing { border-left-color: var(--fix); }
+  .card.done { border-left-color: var(--done); } .card.blocked { border-left-color: var(--blocked); }
+  .card .head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .card .id { font-weight: 700; } .card .title { font-size: 13.5px; margin: 2px 0 6px; overflow-wrap: anywhere; }
+  .chip { font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 99px; white-space: nowrap;
+          color: var(--panel); background: var(--todo); }
+  .chip.planning, .chip.building { background: var(--active); } .chip.checking { background: var(--check); }
+  .chip.fixing { background: var(--fix); } .chip.done { background: var(--done); } .chip.blocked { background: var(--blocked); }
+  .times { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .msg { font-size: 12.5px; margin-top: 6px; overflow-wrap: anywhere; }
+  .mini { height: 4px; background: var(--bar); border-radius: 99px; overflow: hidden; margin-top: 6px; }
+  .mini > i { display: block; height: 100%; background: var(--active); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12.5px; }
+  td.n { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .scroll { overflow-x: auto; }
+  .quiet { color: var(--fix); font-weight: 600; } .bad { color: var(--blocked); font-weight: 600; }
+  .ok { color: var(--done); font-weight: 600; }
+  ul.plain { list-style: none; margin: 0; padding: 0; } ul.plain li { padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+  ul.plain li:last-child { border-bottom: 0; }
+  .t { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 8px; white-space: nowrap; }
+  .stalebanner { background: var(--blocked); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px; display: none; }
+</style>
+</head>
+<body>
+<main>
+  <div class="stalebanner" id="stale">The board has lost contact with its server. Showing the last data received.</div>
+  <div class="top">
+    <div class="panel">
+      <h1 id="title">Trader build</h1>
+      <div class="sub" id="updated"></div>
+      <div class="now" id="now">Loading…</div>
+      <dl class="kv" id="head"></dl>
+    </div>
+    <div class="panel">
+      <div class="sub">Tasks done</div>
+      <div class="big" id="count">–</div>
+      <div class="bar"><i id="bar" style="width:0"></i></div>
+      <dl class="kv">
+        <dt>Forecast finish</dt><dd id="eta">–</dd>
+        <dt>Pace</dt><dd id="pace">–</dd>
+        <dt>Agents working</dt><dd id="nagents">–</dd>
+      </dl>
+    </div>
+  </div>
+
+  <h2>Agents working now</h2>
+  <div class="panel scroll"><table id="agents"></table></div>
+
+  <h2>Waves and tasks</h2>
+  <div class="waves" id="waves"></div>
+
+  <h2>Milestones</h2>
+  <div class="panel"><ul class="plain" id="miles"></ul></div>
+
+  <h2>Activity</h2>
+  <div class="panel"><ul class="plain" id="feed"></ul></div>
+</main>
+<script>
+const MT = { timeZone: "America/Edmonton", hour: "2-digit", minute: "2-digit", hour12: false };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const hm = iso => iso ? new Date(iso).toLocaleTimeString("en-CA", MT) : "–";
+const dayHm = iso => {
+  if (!iso) return "–";
+  const d = new Date(iso), today = new Date();
+  const day = d.toLocaleDateString("en-CA", { timeZone: "America/Edmonton" });
+  const same = day === today.toLocaleDateString("en-CA", { timeZone: "America/Edmonton" });
+  return (same ? "" : d.toLocaleDateString("en-CA", { timeZone: "America/Edmonton", weekday: "short" }) + " ") + hm(iso) + " MT";
+};
+const mins = m => m == null ? "–" : (m >= 90 ? (m / 60).toFixed(1) + " h" : Math.round(m) + " min");
+const ago = s => s < 60 ? s + " s ago" : s < 3600 ? Math.round(s / 60) + " min ago" : (s / 3600).toFixed(1) + " h ago";
+const LABEL = { todo: "Not started", planning: "Planning", building: "Building", checking: "Checking",
+                fixing: "Fixing", done: "Done", blocked: "Blocked" };
+
+function render(d) {
+  const plan = d.plan || { tasks: [] }, st = d.status, fc = d.forecast;
+  document.getElementById("title").textContent = plan.title || "Trader build";
+  document.getElementById("updated").textContent = "Live · refreshed " + hm(d.now) + " MT · times are Mountain Time";
+  const head = st.head || {};
+  document.getElementById("now").textContent = head.now || "No status yet";
+  const order = ["wave", "next", "note"];
+  const names = { wave: "Wave", next: "Next", note: "Note" };
+  document.getElementById("head").innerHTML = order.filter(k => head[k]).map(k =>
+    `<dt>${names[k]}</dt><dd>${esc(head[k])}</dd>`).join("");
+  document.getElementById("count").textContent = `${fc.done} of ${fc.count}`;
+  document.getElementById("bar").style.width = (fc.count ? 100 * fc.done / fc.count : 0) + "%";
+  document.getElementById("eta").textContent = fc.count && fc.done === fc.count ? "Finished" : dayHm(fc.eta);
+  document.getElementById("pace").textContent = fc.measured_on
+    ? `${fc.pace}× the plan, measured on ${fc.measured_on} finished task${fc.measured_on === 1 ? "" : "s"}`
+    : "No finished tasks yet: using planned times";
+  const working = d.agents.filter(a => a.state === "working");
+  document.getElementById("nagents").textContent = working.length;
+
+  const rows = d.agents.map(a => {
+    const state = a.state === "working" ? (a.quiet ? '<span class="quiet">quiet</span>' : "working")
+      : a.state === "done" ? '<span class="ok">done</span>' : `<span class="bad">${esc(a.state)}</span>`;
+    return `<tr><td class="n"><b>${esc(a.task)}</b></td><td class="n">${esc(a.role)}</td><td>${state}</td>
+      <td>${esc(a.msg)}</td><td class="n">${a.pct != null ? a.pct + "%" : ""}</td><td class="n">${ago(a.age_s)}</td></tr>`;
+  }).join("");
+  document.getElementById("agents").innerHTML = rows
+    ? `<tr><th>Task</th><th>Role</th><th>State</th><th>Doing</th><th>Step</th><th>Last report</th></tr>${rows}`
+    : `<tr><td class="sub">No agents are running right now.</td></tr>`;
+
+  const latest = {};
+  for (const a of d.agents) if (!latest[a.task] || a.age_s < latest[a.task].age_s) latest[a.task] = a;
+  const waves = {};
+  for (const t of plan.tasks) (waves[t.wave] = waves[t.wave] || []).push(t);
+  document.getElementById("waves").innerHTML = Object.keys(waves).sort((a, b) => a - b).map(w => {
+    const ts = waves[w];
+    const nd = ts.filter(t => (st.tasks[t.id] || {}).status === "done").length;
+    const cards = ts.map(t => {
+      const s = st.tasks[t.id] || { status: "todo" }, f = fc.tasks[t.id] || {}, a = latest[t.id];
+      let times;
+      if (s.status === "done")
+        times = `Took ${mins(f.actual_min)} (planned ${mins(f.planned_min)}) · finished ${hm(f.finish)}`;
+      else if (f.elapsed_min != null)
+        times = `Running ${mins(f.elapsed_min)} · about ${mins(f.remaining_min)} left · finish ~${hm(f.finish)}`;
+      else
+        times = `Estimate ${mins(f.adjusted_min)}` + (f.adjusted_min !== f.planned_min ? ` (planned ${mins(f.planned_min)})` : "")
+          + (f.start ? ` · ${hm(f.start)} to ${hm(f.finish)}` : "");
+      const live = a && s.status !== "done" && s.status !== "todo";
+      return `<div class="card ${esc(s.status)}">
+        <div class="head"><span class="id">${esc(t.id)}</span><span class="chip ${esc(s.status)}">${LABEL[s.status] || esc(s.status)}</span></div>
+        <div class="title">${esc(t.title)}</div>
+        <div class="times">${times}</div>
+        ${t.deps && t.deps.length ? `<div class="times">Needs ${esc(t.deps.join(", "))}</div>` : ""}
+        ${s.note ? `<div class="msg">${esc(s.note)}</div>` : ""}
+        ${live ? `<div class="msg"><b>${esc(a.role)}:</b> ${esc(a.msg)}</div>` : ""}
+        ${live && a.pct != null ? `<div class="mini"><i style="width:${Math.min(100, a.pct)}%"></i></div>` : ""}
+        ${s.commit ? `<div class="times">Commit ${esc(s.commit)}</div>` : ""}
+      </div>`;
+    }).join("");
+    const name = (plan.waves || {})[w] || "";
+    return `<div class="wave"><div class="label">Wave ${esc(w)}<small>${nd} of ${ts.length} done${name ? "<br>" + esc(name) : ""}</small></div><div class="cards">${cards}</div></div>`;
+  }).join("");
+
+  const miles = (st.milestones || []).slice().reverse();
+  document.getElementById("miles").innerHTML = miles.length
+    ? miles.map(m => `<li><span class="t">${dayHm(m.ts)}</span>${esc(m.msg)}</li>`).join("")
+    : `<li class="sub">None yet.</li>`;
+  document.getElementById("feed").innerHTML = d.feed.map(e => {
+    const what = e.kind === "report" ? `<b>${esc(e.task)}</b> ${esc(e.role)}: ${esc(e.msg)}`
+      : e.kind === "task" ? `<b>${esc(e.task)}</b> is now ${esc((LABEL[e.status] || e.status).toLowerCase())}${e.msg ? ": " + esc(e.msg) : ""}`
+      : esc(e.msg);
+    return `<li><span class="t">${hm(e.ts)}</span>${what}</li>`;
+  }).join("") || `<li class="sub">Nothing yet.</li>`;
+}
+
+async function tick() {
+  try {
+    const r = await fetch("/data", { cache: "no-store" });
+    render(await r.json());
+    document.getElementById("stale").style.display = "none";
+  } catch (e) {
+    document.getElementById("stale").style.display = "block";
+  }
+}
+tick();
+setInterval(tick, 5000);
+</script>
+</body>
+</html>

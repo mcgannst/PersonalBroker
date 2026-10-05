@@ -511,10 +511,17 @@ async def archive_candles(deps: PostcloseDeps, session_date: date) -> dict[str, 
 def _minute_targets(
     deps: PostcloseDeps, session_date: date, universe: Sequence[UniverseMember]
 ) -> tuple[dict[int, str], int | None]:
-    """symbol_id -> ticker for the top-N distinct candidate symbols (by rank, any strategy) plus SPY, and
-    SPY's id (None when there is no SPY symbol)."""
+    """symbol_id -> ticker for the session's traded symbols (always, AFTEREXIT: a trade past rank top-N had
+    no minute bars to review), then the top-N distinct candidate symbols (by rank, any strategy), plus SPY;
+    and SPY's id (None when there is no SPY symbol)."""
     top_n = deps.settings().postclose_archive_top_n
     with deps.factory() as s:
+        traded = s.execute(
+            select(m.Position.symbol_id, m.Symbol.ticker)
+            .join(m.Symbol, m.Symbol.id == m.Position.symbol_id)
+            .where(m.Position.run_id == deps.run_id, m.Position.session_date == session_date)
+            .order_by(m.Position.id)
+        ).all()
         rows = s.execute(
             select(m.Candidate.symbol_id, m.Symbol.ticker)
             .join(m.Symbol, m.Symbol.id == m.Candidate.symbol_id)
@@ -533,10 +540,13 @@ def _minute_targets(
                 .order_by(m.Symbol.id)
                 .limit(1)
             ).scalar_one_or_none()
-    targets: dict[int, str] = {}
+    ranked: dict[int, str] = {}
     for sid, ticker in rows:
-        if len(targets) >= top_n:
+        if len(ranked) >= top_n:
             break
+        ranked.setdefault(sid, ticker)
+    targets: dict[int, str] = {sid: ticker for sid, ticker in traded}
+    for sid, ticker in ranked.items():
         targets.setdefault(sid, ticker)
     if spy_id is not None:
         targets.setdefault(spy_id, OVERLAY_SYMBOL)
@@ -604,14 +614,25 @@ def daily_summary_view(
     before (BR-60)."""
     day_start, day_end = _et_day(session_date)
     with factory() as s:
+        trade_rows = s.execute(
+            select(m.Trade, m.Symbol.ticker)
+            .join(m.Symbol, m.Symbol.id == m.Trade.symbol_id)
+            .where(m.Trade.run_id == run_id, m.Trade.session_date == session_date)
+            .order_by(m.Trade.closed_at, m.Trade.id)
+        ).all()
+        closes = _session_closes(s, [t.symbol_id for t, _ in trade_rows], day_start, day_end)
         trades = tuple(
-            TradeLine(ticker, t.qty, t.entry_price, t.exit_price, t.pnl, t.pnl_r, t.exit_reason)
-            for t, ticker in s.execute(
-                select(m.Trade, m.Symbol.ticker)
-                .join(m.Symbol, m.Symbol.id == m.Trade.symbol_id)
-                .where(m.Trade.run_id == run_id, m.Trade.session_date == session_date)
-                .order_by(m.Trade.closed_at, m.Trade.id)
-            ).all()
+            TradeLine(
+                ticker,
+                t.qty,
+                t.entry_price,
+                t.exit_price,
+                t.pnl,
+                t.pnl_r,
+                t.exit_reason,
+                session_close=closes.get(t.symbol_id),
+            )
+            for t, ticker in trade_rows
         )
         pnl = s.execute(
             select(V_DAILY_PNL.c.realized_pnl, V_DAILY_PNL.c.fees).where(
@@ -665,6 +686,32 @@ def daily_summary_view(
             else None
         ),
     )
+
+
+def _session_closes(
+    s: Session, symbol_ids: Sequence[int], day_start: datetime, day_end: datetime
+) -> dict[int, Decimal]:
+    """AFTEREXIT: symbol_id -> the close of its last archived 1-minute candle of the ET day (the session's
+    closing price, from the archive post-close has just written). A symbol with no archived minute bars is
+    left out, and any failure returns {} with a warning: the summary never depends on it."""
+    if not symbol_ids:
+        return {}
+    try:
+        rows = s.execute(
+            select(m.CandleArchive.symbol_id, m.CandleArchive.close)
+            .where(
+                m.CandleArchive.symbol_id.in_(set(symbol_ids)),
+                m.CandleArchive.interval == MINUTE_CODE,
+                m.CandleArchive.start_ts >= day_start,
+                m.CandleArchive.start_ts < day_end,
+            )
+            .order_by(m.CandleArchive.symbol_id, m.CandleArchive.start_ts.desc())
+            .distinct(m.CandleArchive.symbol_id)
+        ).all()
+    except Exception as exc:
+        log.warning("postclose.session_closes_failed", error=type(exc).__name__)
+        return {}
+    return {int(sid): close for sid, close in rows}
 
 
 def _run_to_date(

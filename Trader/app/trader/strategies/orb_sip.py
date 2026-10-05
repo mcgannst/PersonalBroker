@@ -94,6 +94,10 @@ class OrbSipParams(BaseModel):
     max_rank: int = Field(100, ge=1, le=1000)
     # CATWIDE-b: no chunk past the first starts once this many seconds have passed since the scan started
     extend_max_seconds: int = Field(60, ge=0, le=600)
+    # CHASECAP: None keeps the plain buy-stop. A fraction makes the entry a stop-limit whose limit is
+    # entry + fraction x (entry - stop_loss), so a breakout that has already run past the trigger is not
+    # chased; the order keeps working and fills only while the price is back within the limit.
+    entry_limit_stop_fraction: Decimal | None = Field(None, ge=0, le=Decimal("5"), allow_inf_nan=False)
 
     @field_validator("entry_cancel_at")
     @classmethod
@@ -374,8 +378,17 @@ class OrbSip:
             entry, stop_loss = levels[rec.symbol_id]
             rec.passed = True
             rec.data.update(entry=str(entry), stop_loss=str(stop_loss))
+            limit: Decimal | None = None
+            if p.entry_limit_stop_fraction is not None:
+                limit = (entry + p.entry_limit_stop_fraction * (entry - stop_loss)).quantize(
+                    Q4, ROUND_HALF_UP
+                )
+                rec.data["entry_limit"] = str(limit)
             evidence = {**rec.data, "candle": rec.candle}
-            intents.append(EnterLong(rec.symbol_id, "stop", entry, None, stop_loss, "orb_breakout", evidence))
+            order_type: Literal["stop", "stop_limit"] = "stop" if limit is None else "stop_limit"
+            intents.append(
+                EnterLong(rec.symbol_id, order_type, entry, limit, stop_loss, "orb_breakout", evidence)
+            )
         return records
 
     def _direction(self, c: Candle) -> str:

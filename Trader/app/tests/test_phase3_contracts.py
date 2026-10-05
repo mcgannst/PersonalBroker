@@ -228,7 +228,16 @@ VIEW_FIELDS: dict[type, list[str]] = {
         "peak_equity",
         "drawdown_pct",
     ],
-    nt.TradeLine: ["ticker", "qty", "entry", "exit", "pnl", "pnl_r", "exit_reason"],
+    nt.TradeLine: [
+        "ticker",
+        "qty",
+        "entry",
+        "exit",
+        "pnl",
+        "pnl_r",
+        "exit_reason",
+        "session_close",  # AFTEREXIT (defaulted, last)
+    ],
     nt.DailySummaryView: [
         "session_date",
         "trades",

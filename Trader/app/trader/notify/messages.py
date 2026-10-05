@@ -35,6 +35,7 @@ from trader.notify.types import (
     RunToDateView,
     SoakLineView,
     StatusView,
+    TradeLine,
     WeeklyReportView,
 )
 
@@ -229,6 +230,14 @@ def run_to_date_lines(v: RunToDateView) -> list[str]:
 
 def _pnl(pnl: Decimal, pnl_r: Decimal | None) -> str:
     return _signed_money(pnl) + (f" ({_fmt_r(pnl_r)})" if pnl_r is not None else "")
+
+
+def _closed_at(t: TradeLine) -> str:
+    """AFTEREXIT: ` · closed 17.41 (+2.23% vs entry)`, where the stock ended the session against the trade's
+    entry price; empty when no closing price was archived (or the entry is not positive)."""
+    if t.session_close is None or t.entry <= 0:
+        return ""
+    return f" · closed {fmt_price(t.session_close)} ({fmt_pct(t.session_close / t.entry - 1)} vs entry)"
 
 
 def _one_row(buttons: Buttons) -> Buttons:
@@ -561,7 +570,7 @@ class MessageRenderer:
             lines.append(f"Trades ({len(v.trades)}):")
             lines += [
                 f"{_e(t.ticker)} {t.qty} @ {fmt_price(t.entry)} → {fmt_price(t.exit)}: "
-                f"{_pnl(t.pnl, t.pnl_r)} {_e(t.exit_reason)}"
+                f"{_pnl(t.pnl, t.pnl_r)} {_e(t.exit_reason)}{_closed_at(t)}"
                 for t in v.trades
             ]
         else:

@@ -167,6 +167,9 @@ class TradeLine:
     pnl: Decimal
     pnl_r: Decimal | None
     exit_reason: str
+    # AFTEREXIT: the session's closing price (the last archived 1-minute candle), to show where the stock
+    # ended against the entry after the trade was closed. None: no minute bars archived for it.
+    session_close: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)

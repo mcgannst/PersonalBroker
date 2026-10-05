@@ -53,13 +53,13 @@ Adding a second strategy later must need only a new plug-in package and its test
 
 The last row is resolved this way: in the simulation, the wheel's recommended action becomes a simulated order automatically (D7). The spec's **owner inputs** stay with Stephen (§6.4).
 
-### 2.4 Defaults chosen by the planner (confirm or change; each is a setting)
+### 2.4 Defaults chosen by the planner (each is a setting). Confirmed by Stephen 2026-10-05: P3 changed to SOFI, P5 and P9 confirmed
 
 | # | Default | Why |
 |---|---|---|
 | P1 | `per_ticker_limit_pct_of_wheel_cash` = 0.50 | D9 |
 | P2 | `itm_at_time_exit_preference` = ASSIGN | Stephen chose "accept assignment" |
-| P3 | `benchmark_ticker` = SPY | the spec needs a broad index fund; SPY is already the overlay benchmark |
+| P3 | `benchmark_ticker` = **SOFI** (Stephen, 2026-10-05) | Stephen's choice. Note: the spec describes the benchmark as a broad index fund; SOFI is a single stock, so the quarterly pause rule (spec §10) compares the wheel account with one stock's quarter. It is a setting |
 | P4 | Option fee 0.99 USD per contract, each way (setting) | Questrade's published option pricing; verify the currency in T2 |
 | P5 | Early assignment is simulated in one case only: a short call that is in the money at the close on the day before the ex-dividend date, with less time value left than the dividend, is assigned that night. Every other assignment happens at expiry | American options can be assigned any time; this is the common case and the one the spec alerts on. A documented limit of the simulation |
 | P6 | An option expires in the money when the underlying's official close is 0.01 or more through the strike: long options are exercised, short ones assigned | the clearing house's automatic-exercise rule |
@@ -86,7 +86,7 @@ The last row is resolved this way: in the simulation, the wheel's recommended ac
 Principles:
 
 1. **The stock engine is not touched.** The ORB run, its worker, its tables and its replay golden files stay as they are, so this work is not a trading change for the soak. A static test fails the build if any file under `trader/engine`, `trader/broker`, `trader/strategies` or `trader/replay` changes in an OPTSIM commit (the existing D2 diff check, extended).
-2. **A separate book.** The options account is a `runs` row with mode `options` (one active at a time), its own `sim_accounts` row, and its own rows in `cash_ledger` and `equity_snapshots`. `active_live_run_id` keeps returning the stock run.
+2. **A separate book.** The options account is a `runs` row with mode `options` (one active at a time), its own `sim_accounts` row, and its own rows in `cash_ledger` and `equity_snapshots`, split into cash pools (§3.7). `active_live_run_id` keeps returning the stock run.
 3. **Generic core, strategy plug-ins.** The broker, collateral engine and lifecycle know nothing about the wheel. A strategy sees a read-only context and returns intents.
 4. **Pure rules.** The wheel's screen, selection and daily evaluation are pure functions (inputs in, verdict or action out, no I/O, no clock), so the spec's acceptance cases run as plain unit tests.
 
@@ -148,6 +148,10 @@ A post-close job on every session, for contracts expiring that day: decide in or
 | quarter end | benchmark review (spec §10) | inside `options-postclose` |
 
 The stock crontab lines are not changed.
+
+### 3.7 Cash pools (Stephen, 2026-10-05)
+
+The options account holds separate pools of cash, one per source: `manual` and one per strategy key (`wheel` first). Every structure belongs to one pool. A pool's cash, reserved collateral, premiums, fees, share lots and P&L are its own: the collateral engine checks an order against its pool only, the per-position cap (`max_position_pct`) is a fraction of that pool's value, and the spec's `wheel_cash_usd` and `cash_usd` are the wheel pool's. Implementation: `cash_ledger` rows for the options run carry a `pool` key; `opt_structures.pool` is set at creation and never changes; pool balances are sums over the ledger. Moving cash between pools is an explicit, audited transfer in the web app (Account tab), never automatic. A new strategy plug-in gets its own pool, funded by a transfer, so adding one cannot draw on another strategy's cash. The Account tab shows each pool and the account total; the wheel's benchmark comparison (spec §11) uses the wheel pool's deposits and withdrawals, transfers included.
 
 ## 4. Data
 
@@ -246,7 +250,7 @@ Contract-first, one owner per file, fakes for everything not yet built. Width up
 | T1 | **Contracts**: value types (contract, leg, order, fill, structure, intents, lifecycle event, market view), the `OptionStrategy` protocol and registry interface, migration 0011, the options run mode and account, settings keys, fakes (market data, broker, strategy), the "stock engine untouched" test | none | `trader/options/types.py`, `protocols.py`, migration, fakes |
 | T2 | Questrade option client: chain, quotes by id and by filter, symbol details, POST with retries; a live check command; confirms real-time quotes in session and the fee currency | T1 | `adapters/questrade/options.py` |
 | T3 | Option market data service: contract master, chain cache, quote marks, staleness, monthly-expiry maths | T1 | `options/market.py` |
-| T4 | Collateral engine with its table-driven tests (every row of §3.3, naked rejections, the cap, partial closes) | T1 | `options/collateral.py` |
+| T4 | Collateral engine with its table-driven tests (every row of §3.3, naked rejections, the cap, partial closes), per cash pool (§3.7): an order never uses another pool's cash or shares; pool transfers | T1 | `options/collateral.py` |
 | T5 | Fill model and option broker: orders, all-or-none multi-leg fills, ledger entries, fees, structures and positions, reprice and cancel | T1 | `options/fill_model.py`, `broker.py` |
 | T6 | Lifecycle: expiry, exercise, assignment, early assignment (P5), share lots, events | T1 | `options/lifecycle.py` |
 | T7 | Strategy registry, config store, state store, event schedule | T1 | `option_strategies/registry.py` |
@@ -268,7 +272,7 @@ Waves: T1 alone; then T2 to T10 and T14 together (8 wide after T1, T15 joining w
 1. The spec's 16 acceptance cases pass against the pure wheel rules, and every threshold is read from the config (a test changes each one and sees the result move).
 2. No order that leaves a short leg uncovered is ever accepted, by hand or from a strategy (the breaker's main target).
 3. A sell never fills above the bid and a buy never below the ask; nothing fills outside option hours or on a stale, delayed, halted, one-sided or zero-bid quote.
-4. Cash plus reserved collateral always reconciles to the ledger; account value uses liquidation marks.
+4. Cash plus reserved collateral always reconciles to the ledger, per pool and in total; no order in one pool can spend or be covered by another pool's cash or shares; account value uses liquidation marks.
 5. A put assigned at expiry becomes 100 shares at the strike with net cost per the spec; a covered call called away records the full-cycle result (spec §11).
 6. A toy second strategy (a test-only plug-in that buys one call) installs through the entry point and trades with no change outside its own package.
 7. The stock engine's golden replay and the "untouched" test pass on every OPTSIM commit; the soak is not reset by this work.
@@ -282,8 +286,10 @@ Waves: T1 alone; then T2 to T10 and T14 together (8 wide after T1, T15 joining w
 - No replay mode for options in this version: historical option quotes are not stored by Questrade's API. The quotes this system records from now on can feed a later replay.
 - Results are in USD with the USD/CAD rate recorded per transaction; no tax treatment.
 
-## 9. Open questions for Stephen
+## 9. Answers from Stephen (2026-10-05)
 
-1. P1 to P9 in §2.4: confirm or change.
-2. Should the 5,000 USD be split into "wheel cash" and cash for manual trades, or is it one pool the wheel may use fully (subject to the 50% cap)? The plan assumes one pool.
-3. Should manual and wheel positions on the same ticker be allowed at once? The spec blocks a second wheel position on a ticker; the plan lets a manual structure coexist and shows both.
+1. An unanswered owner prompt: the wheel does nothing new on that ticker and repeats the prompt daily (P9 confirmed).
+2. Early assignment only before ex-dividend dates is enough for now (P5 confirmed).
+3. Benchmark: SOFI (P3).
+4. **Separate cash pools** for the wheel and for manual trades (§3.7). The split of the 5,000 USD is still to be set.
+5. A manual position may sit alongside a wheel position on the same ticker; only a second wheel position is blocked.

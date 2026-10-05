@@ -97,7 +97,7 @@ def _version(engine: Engine) -> str:
 
 # 1 ---------------------------------------------------------------------------------------------------------
 def test_0007_is_in_the_chain_below_the_head(pg_url: str) -> None:
-    assert _head(pg_url) == "0010"  # DB-T1 added 0008 (live marks), QUOTEBAR 0009, FIX-DAY1 0010
+    assert _head(pg_url) == "0011"  # DB-T1 added 0008, QUOTEBAR 0009, FIX-DAY1 0010, OPTSIM 0011
     script = ScriptDirectory.from_config(alembic_config(pg_url)).get_revision("0007")
     assert script is not None and script.down_revision == "0006"
 

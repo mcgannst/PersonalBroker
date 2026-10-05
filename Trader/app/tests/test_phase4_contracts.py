@@ -559,6 +559,7 @@ def test_api_services_fields() -> None:
         "plan",
         "fired",
         "replays",  # P5-T1: ReplayLauncher | None = None
+        "options",  # OPTSIM-T1: OptionApiServices | None = None
     ]
     assert ApiServices.__dataclass_params__.frozen  # type: ignore[attr-defined]
 

@@ -67,8 +67,8 @@ def _version(engine: Engine) -> str:
         return str(conn.execute(text("SELECT version_num FROM trader.alembic_version")).scalar_one())
 
 
-def test_head_is_0010(pg_url: str) -> None:  # FIX-DAY1 added 0010 on top
-    assert ScriptDirectory.from_config(alembic_config(pg_url)).get_current_head() == "0010"
+def test_head_is_0011(pg_url: str) -> None:  # FIX-DAY1 added 0010, OPTSIM 0011 on top
+    assert ScriptDirectory.from_config(alembic_config(pg_url)).get_current_head() == "0011"
 
 
 @pytest.mark.parametrize(
@@ -126,4 +126,4 @@ def test_downgrade_drops_both_tables_and_upgrade_restores_them(
     assert not {"opening_bar_quotes", "quote_volume_scale"} & tables
     assert {"quote_marks", "mark_bars"} <= tables  # 0008 untouched
     command.upgrade(alembic_config(pg_url), "head")
-    assert _version(migrated_engine) == "0010"
+    assert _version(migrated_engine) == "0011"

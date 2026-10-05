@@ -111,4 +111,4 @@ def test_downgrade_to_0009_and_back(pg_url: str, migrated_engine: Engine, _resto
     assert not set(NEW_BAR_COLUMNS) & set(_columns(migrated_engine, "opening_bar_quotes"))
     assert not set(NEW_SCALE_COLUMNS) & set(_columns(migrated_engine, "quote_volume_scale"))
     command.upgrade(alembic_config(pg_url), "head")
-    assert _version(migrated_engine) == "0010"
+    assert _version(migrated_engine) == "0011"

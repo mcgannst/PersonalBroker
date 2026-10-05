@@ -727,8 +727,9 @@ class QuoteVolumeScale(Base):
     premarket_source: Mapped[str | None] = mapped_column(String(10))
 
 
-# --- OPTSIM: the options simulation (migration 0011). The options run is a `runs` row with mode `options`; ---
-# it reuses sim_accounts, cash_ledger, equity_snapshots, event_log and job_runs. Nothing above reads these.
+# --- OPTSIM: the options simulation (migration 0011). The options run is a `runs` row with mode -------------
+# `options`; it reuses sim_accounts, cash_ledger, equity_snapshots, event_log and job_runs. Nothing above
+# reads these tables.
 Ratio = Numeric(12, 6)  # greeks, IV and other ratios
 CONTRACT_FK = "trader.option_contracts.id"
 OPT_CONFIG_FK = "trader.option_strategy_configs.id"
@@ -815,7 +816,8 @@ class OptionQuoteMark(Base):
 
 class UnderlyingFacts(Base):
     """One underlying's facts on one day (wheel rules spec §3.1). Every fact is nullable (unknown);
-    `sources` maps a field to `[source, fetched at]`. Its value type is `trader.options.types.UnderlyingFacts`."""
+    `sources` maps a field to `[source, fetched at]`. The value type has the same name, in
+    `trader.options.types`."""
 
     __tablename__ = "underlying_facts"
     symbol_id: Mapped[int] = mapped_column(ForeignKey(SYMBOL_FK), primary_key=True)
@@ -1128,9 +1130,7 @@ class WheelPosition(Base):
     call_structure_id: Mapped[int | None] = mapped_column(ForeignKey(STRUCTURE_FK))
     contracts: Mapped[int] = mapped_column(Integer)
     roll_count: Mapped[int] = mapped_column(Integer, default=0, server_default=ZERO_DEFAULT)
-    total_put_premium: Mapped[Decimal] = mapped_column(
-        Money, default=Decimal(0), server_default=ZERO_DEFAULT
-    )
+    total_put_premium: Mapped[Decimal] = mapped_column(Money, default=Decimal(0), server_default=ZERO_DEFAULT)
     total_call_premium: Mapped[Decimal] = mapped_column(
         Money, default=Decimal(0), server_default=ZERO_DEFAULT
     )

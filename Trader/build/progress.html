@@ -111,6 +111,9 @@ const dayHm = iso => {
 };
 const mins = m => m == null ? "–" : (m >= 90 ? (m / 60).toFixed(1) + " h" : Math.round(m) + " min");
 const ago = s => s < 60 ? s + " s ago" : s < 3600 ? Math.round(s / 60) + " min ago" : (s / 3600).toFixed(1) + " h ago";
+const dur = s => s == null ? "–" : s < 3600
+  ? Math.floor(s / 60) + " min " + String(s % 60).padStart(2, "0") + " s"
+  : Math.floor(s / 3600) + " h " + String(Math.floor((s % 3600) / 60)).padStart(2, "0") + " min";
 const LABEL = { todo: "Not started", planning: "Planning", building: "Building", checking: "Checking",
                 fixing: "Fixing", done: "Done", blocked: "Blocked" };
 
@@ -137,10 +140,11 @@ function render(d) {
     const state = a.state === "working" ? (a.quiet ? '<span class="quiet">quiet</span>' : "working")
       : a.state === "done" ? '<span class="ok">done</span>' : `<span class="bad">${esc(a.state)}</span>`;
     return `<tr><td class="n"><b>${esc(a.task)}</b></td><td class="n">${esc(a.role)}</td><td>${state}</td>
-      <td>${esc(a.msg)}</td><td class="n">${a.pct != null ? a.pct + "%" : ""}</td><td class="n">${ago(a.age_s)}</td></tr>`;
+      <td>${esc(a.msg)}</td><td class="n">${a.pct != null ? a.pct + "%" : ""}</td>
+      <td class="n" title="Started ${hm(a.started)} MT">${dur(a.running_s)}</td><td class="n">${ago(a.age_s)}</td></tr>`;
   }).join("");
   document.getElementById("agents").innerHTML = rows
-    ? `<tr><th>Task</th><th>Role</th><th>State</th><th>Doing</th><th>Step</th><th>Last report</th></tr>${rows}`
+    ? `<tr><th>Task</th><th>Role</th><th>State</th><th>Doing</th><th>Step</th><th>Running time</th><th>Last report</th></tr>${rows}`
     : `<tr><td class="sub">No agents are running right now.</td></tr>`;
 
   const latest = {};

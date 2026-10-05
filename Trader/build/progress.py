@@ -173,12 +173,18 @@ def snapshot() -> dict[str, Any]:
     now = _now()
     plan, status, events = _read(PLAN, {"tasks": []}), _status(), _events()
     latest: dict[str, dict[str, Any]] = {}
+    first: dict[str, str] = {}  # agent -> its first report's time (when it started)
     for e in events:
         if e.get("kind") == "report":
-            latest[e.get("agent") or f"{e.get('task')}-{e.get('role')}"] = e
+            name = e.get("agent") or f"{e.get('task')}-{e.get('role')}"
+            latest[name] = e
+            first.setdefault(name, e["ts"])
     agents = []
     for name, e in latest.items():
         age = (now - _parse(e["ts"])).total_seconds()
+        # running time: from the first report to now while working, else to the last report
+        end = now if e.get("state") == "working" else _parse(e["ts"])
+        running = (end - _parse(first[name])).total_seconds()
         task_state = status["tasks"].get(e.get("task", ""), {}).get("status")
         if e.get("state") in ("done", "failed") and age > 1800:
             continue  # finished long ago: off the live list
@@ -187,6 +193,8 @@ def snapshot() -> dict[str, Any]:
                 **e,
                 "name": name,
                 "age_s": int(age),
+                "running_s": int(running),
+                "started": first[name],
                 "quiet": e.get("state") == "working" and age > STALE_SECONDS,
                 "task_status": task_state,
             }

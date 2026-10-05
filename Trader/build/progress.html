@@ -114,6 +114,19 @@ const ago = s => s < 60 ? s + " s ago" : s < 3600 ? Math.round(s / 60) + " min a
 const dur = s => s == null ? "–" : s < 3600
   ? Math.floor(s / 60) + " min " + String(s % 60).padStart(2, "0") + " s"
   : Math.floor(s / 3600) + " h " + String(Math.floor((s % 3600) / 60)).padStart(2, "0") + " min";
+// Estimated time to completion for a working agent. From its own reported step when that is far enough
+// along to extrapolate (running time x what is left / what is done), otherwise from the task's forecast.
+function etc(a, fc, nowIso) {
+  if (a.state !== "working") return "–";
+  let left = null;
+  if (a.pct != null && a.pct >= 10 && a.pct < 100) left = a.running_s * (100 - a.pct) / a.pct;
+  else if (a.pct === 100) left = 60;
+  else { const f = fc.tasks[a.task] || {}; if (f.remaining_min != null) left = f.remaining_min * 60; }
+  if (left == null) return "–";
+  left = Math.max(60, left);
+  const at = new Date(new Date(nowIso).getTime() + left * 1000).toISOString();
+  return `${mins(left / 60)} · ~${hm(at)}`;
+}
 const LABEL = { todo: "Not started", planning: "Planning", building: "Building", checking: "Checking",
                 fixing: "Fixing", done: "Done", blocked: "Blocked" };
 
@@ -141,10 +154,11 @@ function render(d) {
       : a.state === "done" ? '<span class="ok">done</span>' : `<span class="bad">${esc(a.state)}</span>`;
     return `<tr><td class="n"><b>${esc(a.task)}</b></td><td class="n">${esc(a.role)}</td><td>${state}</td>
       <td>${esc(a.msg)}</td><td class="n">${a.pct != null ? a.pct + "%" : ""}</td>
-      <td class="n" title="Started ${hm(a.started)} MT">${dur(a.running_s)}</td><td class="n">${ago(a.age_s)}</td></tr>`;
+      <td class="n" title="Started ${hm(a.started)} MT">${dur(a.running_s)}</td>
+      <td class="n">${etc(a, fc, d.now)}</td><td class="n">${ago(a.age_s)}</td></tr>`;
   }).join("");
   document.getElementById("agents").innerHTML = rows
-    ? `<tr><th>Task</th><th>Role</th><th>State</th><th>Doing</th><th>Step</th><th>Running time</th><th>Last report</th></tr>${rows}`
+    ? `<tr><th>Task</th><th>Role</th><th>State</th><th>Doing</th><th>Step</th><th>Running time</th><th title="Estimated time to completion">ETC</th><th>Last report</th></tr>${rows}`
     : `<tr><td class="sub">No agents are running right now.</td></tr>`;
 
   const latest = {};

@@ -28,6 +28,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from trader.adapters.finviz.fundamentals import parse_snapshot, snapshot_problem
 from trader.adapters.finviz.parser import (
     BASE,
     BLOCK_STATUSES,
@@ -380,3 +381,22 @@ class FinvizScraper:
         headlines, save = self._fetch("/quote.ashx", params, parse, cache_tag=f"#today_et={today_et}")
         save()
         return headlines
+
+    # --- fundamentals (OPTSIM T8) ---
+
+    def snapshot(self, ticker: str, today_et: date) -> dict[str, str]:
+        """The quote page's snapshot table as label -> text (`fundamentals.to_fundamentals` reads it).
+        Same page, spacing and per-ET-day cache entry as `news`, so one download serves both. A page
+        without a readable snapshot table raises FinvizParseError and is not cached."""
+
+        def parse(html: str) -> dict[str, str]:
+            raw = parse_snapshot(html)
+            problem = snapshot_problem(raw)
+            if problem:
+                raise FinvizParseError(f"quote page for {ticker}: {problem}")
+            return raw
+
+        params = {"t": to_finviz_ticker(ticker)}
+        raw, save = self._fetch("/quote.ashx", params, parse, cache_tag=f"#today_et={today_et}")
+        save()
+        return raw

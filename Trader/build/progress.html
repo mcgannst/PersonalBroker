@@ -149,7 +149,8 @@ function render(d) {
   const working = d.agents.filter(a => a.state === "working");
   document.getElementById("nagents").textContent = working.length;
 
-  const rows = d.agents.map(a => {
+  // Only agents that are still on the job: working, or stopped on a blocker that needs attention.
+  const rows = d.agents.filter(a => a.state === "working" || a.state === "blocked").map(a => {
     const state = a.state === "working" ? (a.quiet ? '<span class="quiet">quiet</span>' : "working")
       : a.state === "done" ? '<span class="ok">done</span>' : `<span class="bad">${esc(a.state)}</span>`;
     return `<tr><td class="n"><b>${esc(a.task)}</b></td><td class="n">${esc(a.role)}</td><td>${state}</td>

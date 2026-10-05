@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import typer
 
 from trader import __version__
+from trader.options.cli import register_options_cli
 
 if TYPE_CHECKING:
     from trader.bootstrap import Core
@@ -1504,3 +1505,6 @@ def live_run_new(
         f"started live run {out.run.id}: starting cash {a.starting_cash} {a.currency} "
         f"(from {plain(a.source_amount)} {a.source_currency})"
     )
+
+
+register_options_cli(app)  # OPTSIM: the `trader options-*` commands (trader/options/cli.py)

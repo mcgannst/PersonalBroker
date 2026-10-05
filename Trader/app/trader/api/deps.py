@@ -33,6 +33,7 @@ from trader.engine.scheduler import DayPlan
 from trader.market.types import Candle
 from trader.notify.types import Notifier
 from trader.notify.views import Quotes
+from trader.options.protocols import OptionApiServices
 from trader.settings_store import RuntimeSettings
 from trader.strategies.registry import StrategyRegistry
 
@@ -131,6 +132,7 @@ class ApiServices:
     plan: Callable[[date], DayPlan]
     fired: Callable[[date], set[str]]
     replays: ReplayLauncher | None = None  # P5: None until wired (P5-T17); the replay routes then answer 503
+    options: OptionApiServices | None = None  # OPTSIM: None until wired (T16); the option routes answer 503
 
 
 # --- dependencies -------------------------------------------------------------------------------------------

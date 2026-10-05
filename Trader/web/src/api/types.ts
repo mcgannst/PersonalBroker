@@ -1291,3 +1291,376 @@ export interface StreamInvalidate {
 export interface StreamEvents {
   items: EventOut[];
 }
+
+// ---------------------------------------------------------------- options (OPTSIM; routes under /api/options)
+// Net prices (net_limit, fill_net, entry_net, take_profit_net, net_at_market) are per share, credit positive:
+// "0.45" is a credit of 0.45, "-1.20" a debit of 1.20. Contract ids are the server's option contract ids.
+
+export type OptRight = "call" | "put";
+export type OptEffect = "open" | "close";
+export type OptInstrument = "option" | "shares";
+export type OptOrderType = "market" | "limit";
+export type OptTif = "day" | "gtc";
+export type OptOrderIntent = "open" | "close" | "roll";
+export type OptOrderStatus = "working" | "filled" | "cancelled" | "expired" | "rejected";
+export type OptStructureKind =
+  | "long_call"
+  | "long_put"
+  | "csp"
+  | "covered_call"
+  | "debit_spread"
+  | "credit_spread"
+  | "iron_condor"
+  | "calendar"
+  | "diagonal"
+  | "shares"
+  | "custom";
+export type OptStructureState = "open" | "closed";
+export type OptCloseReason = "closed" | "expired" | "assigned" | "exercised" | "called_away" | "rolled" | "sold";
+export type OptRejectReason =
+  | "naked_short"
+  | "insufficient_cash"
+  | "position_cap"
+  | "shares_committed"
+  | "not_covered_after_close"
+  | "nothing_to_close"
+  | "unknown_contract"
+  | "expired_contract"
+  | "invalid_order"
+  | "no_quote"
+  | "structure_frozen"
+  | "strategies_paused";
+export type OptPromptStatus = "pending" | "answered" | "expired" | "cancelled";
+export type OptAnsweredVia = "telegram" | "web";
+export type OptActivityKind = "fill" | "lifecycle" | "decision" | "alert" | "prompt" | "order";
+export type OptTone = "ok" | "warn" | "bad";
+export type OptPanelColumnKind = "text" | "money" | "number" | "date" | "badge" | "bool";
+export type OptPanelActionKind = "button" | "toggle" | "text" | "choice";
+
+export const OPT_REJECT_REASONS: readonly OptRejectReason[] = [
+  "naked_short",
+  "insufficient_cash",
+  "position_cap",
+  "shares_committed",
+  "not_covered_after_close",
+  "nothing_to_close",
+  "unknown_contract",
+  "expired_contract",
+  "invalid_order",
+  "no_quote",
+  "structure_frozen",
+  "strategies_paused",
+];
+
+export interface OptContractOut {
+  id: number;
+  underlying: string;
+  expiry: IsoDate;
+  strike: Money;
+  right: OptRight;
+  multiplier: number;
+  is_monthly: boolean;
+  dte: number;
+  label: string;
+}
+
+export interface OptQuoteOut {
+  contract_id: number;
+  bid: Money | null;
+  ask: Money | null;
+  last: Money | null;
+  bid_size: number | null;
+  ask_size: number | null;
+  volume: number | null;
+  open_interest: number | null;
+  iv: string | null;
+  delta: string | null;
+  gamma: string | null;
+  theta: string | null;
+  vega: string | null;
+  fetched_at: IsoTime;
+  stale: boolean;
+}
+
+export interface OptExpiryOut {
+  expiry: IsoDate;
+  dte: number;
+  is_monthly: boolean;
+  strikes: number;
+}
+
+export interface OptChainOut {
+  underlying: string;
+  underlying_price: Money | null;
+  price_time: IsoTime | null;
+  market_open: boolean;
+  expiries: OptExpiryOut[];
+}
+
+export interface OptChainRowOut {
+  strike: Money;
+  call_contract_id: number | null;
+  put_contract_id: number | null;
+  call: OptQuoteOut | null;
+  put: OptQuoteOut | null;
+}
+
+export interface OptChainQuotesOut {
+  underlying: string;
+  expiry: IsoDate;
+  underlying_price: Money | null;
+  fetched_at: IsoTime;
+  market_open: boolean;
+  rows: OptChainRowOut[];
+}
+
+export interface OptLegIn {
+  instrument: OptInstrument;
+  contract_id?: number | null;
+  side: Side;
+  effect: OptEffect;
+  ratio: number;
+}
+
+export interface OptOrderIn {
+  underlying: string;
+  intent: OptOrderIntent;
+  structure_id?: number | null;
+  legs: OptLegIn[];
+  qty: number;
+  order_type: OptOrderType;
+  net_limit?: Money | null;
+  tif: OptTif;
+  walk?: boolean;
+}
+
+export interface OptPreviewOut {
+  accepted: boolean;
+  reject_reason: OptRejectReason | null;
+  detail: string;
+  kind: OptStructureKind;
+  net_at_market: Money | null;
+  max_loss: Money | null;
+  max_profit: Money | null;
+  breakevens: Money[];
+  fees: Money;
+  reserve_cash: Money;
+  cash_after: Money;
+  free_cash_after: Money;
+  exposure_after: Money;
+  cap_limit: Money;
+}
+
+export interface OptLegOut {
+  leg_no: number;
+  instrument: OptInstrument;
+  contract: OptContractOut | null;
+  side: Side;
+  effect: OptEffect;
+  ratio: number;
+  fill_price: Money | null;
+  fill_quote: JsonObject | null;
+}
+
+export interface OptOrderOut {
+  id: number;
+  source: string;
+  intent: OptOrderIntent;
+  structure_id: number | null;
+  underlying: string;
+  legs: OptLegOut[];
+  qty: number;
+  order_type: OptOrderType;
+  net_limit: Money | null;
+  tif: OptTif;
+  status: OptOrderStatus;
+  walk: boolean;
+  reject_reason: OptRejectReason | null;
+  reject_detail: string | null;
+  reason: string;
+  reserved_cash: Money;
+  submitted_at: IsoTime;
+  closed_at: IsoTime | null;
+  fill_net: Money | null;
+  fees: Money | null;
+}
+
+export interface OptRepriceIn {
+  net_limit: Money;
+}
+
+export interface OptPositionOut {
+  id: number;
+  instrument: OptInstrument;
+  contract: OptContractOut | null;
+  qty: number;
+  avg_price: Money;
+  mark: Money | null;
+  unrealized_pnl: Money | null;
+  delta: string | null;
+}
+
+export interface OptStructureOut {
+  id: number;
+  source: string;
+  kind: OptStructureKind;
+  underlying: string;
+  state: OptStructureState;
+  close_reason: OptCloseReason | null;
+  frozen: boolean;
+  qty: number;
+  entry_net: Money;
+  reserved_cash: Money;
+  take_profit_net: Money | null;
+  realized_pnl: Money;
+  unrealized_pnl: Money | null;
+  fees_total: Money;
+  opened_at: IsoTime;
+  closed_at: IsoTime | null;
+  dte: number | null;
+  positions: OptPositionOut[];
+}
+
+export interface OptSourceResultOut {
+  source: string;
+  open_structures: number;
+  reserved: Money;
+  realized_pnl: Money;
+  unrealized_pnl: Money;
+  premium_collected: Money;
+}
+
+export interface OptBenchmarkOut {
+  ticker: string;
+  since: IsoDate;
+  benchmark_return: string | null;
+  account_return: string | null;
+}
+
+export interface OptAccountOut {
+  run_id: number | null;
+  started_at: IsoTime | null;
+  starting_cash: Money;
+  cash: Money;
+  reserved: Money;
+  free_cash: Money;
+  positions_value: Money;
+  account_value: Money;
+  premium_collected: Money;
+  realized_pnl: Money;
+  unrealized_pnl: Money;
+  fees_total: Money;
+  max_position_pct: string;
+  marks_as_of: IsoTime | null;
+  marks_complete: boolean;
+  worker_beat_at: IsoTime | null;
+  by_source: OptSourceResultOut[];
+  benchmark: OptBenchmarkOut | null;
+}
+
+export interface OptActivityOut {
+  id: string;
+  ts: IsoTime;
+  kind: OptActivityKind;
+  source: string;
+  underlying: string | null;
+  title: string;
+  detail: string;
+  level: string;
+  structure_id: number | null;
+}
+
+export interface OptPromptChoiceOut {
+  code: string;
+  label: string;
+}
+
+export interface OptPromptOut {
+  id: number;
+  source: string;
+  kind: string;
+  scope_key: string;
+  title: string;
+  body: string;
+  choices: OptPromptChoiceOut[];
+  needs_text: boolean;
+  status: OptPromptStatus;
+  asked_at: IsoTime;
+  answered_at: IsoTime | null;
+  answer: string | null;
+  answer_text: string | null;
+  answered_via: OptAnsweredVia | null;
+  data: JsonObject;
+}
+
+export interface OptPromptAnswerIn {
+  choice: string;
+  text?: string | null;
+}
+
+export interface OptStrategyOut {
+  key: string;
+  version: string;
+  enabled: boolean;
+  revision: number;
+  params: JsonObject;
+  schema: JsonObject;
+  fields: FieldOut[];
+  updated_at: IsoTime;
+  updated_by: string | null;
+  open_structures: number;
+  manual_events: string[];
+}
+
+export interface OptKeyValueOut {
+  label: string;
+  value: string;
+  tone: OptTone | null;
+}
+
+export interface OptPanelColumnOut {
+  key: string;
+  label: string;
+  kind: OptPanelColumnKind;
+}
+
+export interface OptPanelRowOut {
+  id: string;
+  cells: JsonObject;
+  actions: string[];
+  detail: OptKeyValueOut[];
+}
+
+export interface OptPanelTableOut {
+  key: string;
+  title: string;
+  columns: OptPanelColumnOut[];
+  rows: OptPanelRowOut[];
+  empty_text: string;
+}
+
+export interface OptPanelActionOut {
+  key: string;
+  label: string;
+  kind: OptPanelActionKind;
+  confirm: boolean;
+  choices: string[];
+}
+
+export interface OptPanelOut {
+  strategy_key: string;
+  summary: OptKeyValueOut[];
+  tables: OptPanelTableOut[];
+  actions: OptPanelActionOut[];
+}
+
+export interface OptPanelActionIn {
+  action: string;
+  row_id?: string | null;
+  value?: string | boolean | null;
+}
+
+export interface OptPanelActionResultOut {
+  ok: boolean;
+  message: string;
+}

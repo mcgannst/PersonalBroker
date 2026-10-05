@@ -22,6 +22,23 @@ from trader.decisions.types import DecisionOutcome as DecisionOutcome
 from trader.decisions.types import DecisionStage as DecisionStage
 from trader.market.sessions import SessionPhase
 from trader.notify.types import PositionLine, ProposalView
+from trader.option_strategies.base import PanelActionKind, PanelColumnKind, Tone
+from trader.options.types import (
+    AnsweredVia,
+    CloseReason,
+    Effect,
+    Instrument,
+    OptOrderType,
+    OrderIntent,
+    OrderStatus,
+    PromptStatus,
+    RejectReason,
+    Right,
+    Side,
+    StructureKind,
+    StructureState,
+    Tif,
+)
 from trader.replay.types import CatalystMode as CatalystMode
 from trader.replay.types import DataMode as DataMode
 from trader.replay.types import ReplayStatus as ReplayStatus
@@ -1299,3 +1316,328 @@ class StreamInvalidate(ApiModel):
 
 class StreamEvents(ApiModel):
     items: list[EventOut]
+
+
+# --- Options (OPTSIM task plan §3.9; routes under /api/options) -----------------------------------------
+# Money and ratios are Decimal (JSON strings). Net prices (`net_limit`, `fill_net`, `entry_net`,
+# `take_profit_net`, `net_at_market`) are per share, credit positive. Contract ids are option_contracts.id.
+
+OptActivityKind = Literal["fill", "lifecycle", "decision", "alert", "prompt", "order"]
+OptUnderlying = Annotated[str, StringConstraints(pattern=r"^[A-Z][A-Z0-9.\-]{0,9}$")]
+OptNetPrice = Annotated[Decimal, Field(allow_inf_nan=False, max_digits=10, decimal_places=4)]
+
+
+class OptContractOut(ApiModel):
+    id: int
+    underlying: str
+    expiry: date
+    strike: Decimal
+    right: Right
+    multiplier: int
+    is_monthly: bool
+    dte: int
+    label: str  # for example "F 2026-10-30 P 14.50"
+
+
+class OptQuoteOut(ApiModel):
+    contract_id: int
+    bid: Decimal | None = None
+    ask: Decimal | None = None
+    last: Decimal | None = None
+    bid_size: int | None = None
+    ask_size: int | None = None
+    volume: int | None = None
+    open_interest: int | None = None
+    iv: Decimal | None = None  # a decimal fraction: 0.35 = 35%
+    delta: Decimal | None = None  # signed
+    gamma: Decimal | None = None
+    theta: Decimal | None = None
+    vega: Decimal | None = None
+    fetched_at: UtcDateTime
+    stale: bool
+
+
+class OptExpiryOut(ApiModel):
+    expiry: date
+    dte: int
+    is_monthly: bool
+    strikes: int
+
+
+class OptChainOut(ApiModel):
+    underlying: str
+    underlying_price: Decimal | None = None
+    price_time: UtcDateTime | None = None
+    market_open: bool
+    expiries: list[OptExpiryOut]
+
+
+class OptChainRowOut(ApiModel):
+    strike: Decimal
+    call_contract_id: int | None = None
+    put_contract_id: int | None = None
+    call: OptQuoteOut | None = None
+    put: OptQuoteOut | None = None
+
+
+class OptChainQuotesOut(ApiModel):
+    underlying: str
+    expiry: date
+    underlying_price: Decimal | None = None
+    fetched_at: UtcDateTime
+    market_open: bool
+    rows: list[OptChainRowOut]
+
+
+class OptLegIn(ApiModel):
+    instrument: Instrument
+    contract_id: Annotated[int, Field(ge=1)] | None = None  # None for a shares leg
+    side: Side
+    effect: Effect
+    ratio: int = Field(ge=1, le=10000)
+
+
+class OptOrderIn(ApiModel):
+    underlying: OptUnderlying
+    intent: OrderIntent
+    structure_id: Annotated[int, Field(ge=1)] | None = None
+    legs: list[OptLegIn] = Field(min_length=1, max_length=4)
+    qty: int = Field(ge=1, le=100)
+    order_type: OptOrderType
+    net_limit: OptNetPrice | None = None
+    tif: Tif
+    walk: bool = False
+
+
+class OptPreviewOut(ApiModel):
+    accepted: bool
+    reject_reason: RejectReason | None = None
+    detail: str
+    kind: StructureKind
+    net_at_market: Decimal | None = None
+    max_loss: Decimal | None = None
+    max_profit: Decimal | None = None
+    breakevens: list[Decimal]
+    fees: Decimal
+    reserve_cash: Decimal
+    cash_after: Decimal
+    free_cash_after: Decimal
+    exposure_after: Decimal
+    cap_limit: Decimal
+
+
+class OptLegOut(ApiModel):
+    leg_no: int
+    instrument: Instrument
+    contract: OptContractOut | None = None
+    side: Side
+    effect: Effect
+    ratio: int
+    fill_price: Decimal | None = None
+    fill_quote: dict[str, Any] | None = None
+
+
+class OptOrderOut(ApiModel):
+    id: int
+    source: str
+    intent: OrderIntent
+    structure_id: int | None = None
+    underlying: str
+    legs: list[OptLegOut]
+    qty: int
+    order_type: OptOrderType
+    net_limit: Decimal | None = None
+    tif: Tif
+    status: OrderStatus
+    walk: bool
+    reject_reason: RejectReason | None = None
+    reject_detail: str | None = None
+    reason: str
+    reserved_cash: Decimal
+    submitted_at: UtcDateTime
+    closed_at: UtcDateTime | None = None
+    fill_net: Decimal | None = None
+    fees: Decimal | None = None
+
+
+class OptRepriceIn(ApiModel):
+    net_limit: OptNetPrice
+
+
+class OptPositionOut(ApiModel):
+    id: int
+    instrument: Instrument
+    contract: OptContractOut | None = None
+    qty: int  # signed: short < 0
+    avg_price: Decimal
+    mark: Decimal | None = None
+    unrealized_pnl: Decimal | None = None
+    delta: Decimal | None = None
+
+
+class OptStructureOut(ApiModel):
+    id: int
+    source: str
+    kind: StructureKind
+    underlying: str
+    state: StructureState
+    close_reason: CloseReason | None = None
+    frozen: bool
+    qty: int
+    entry_net: Decimal
+    reserved_cash: Decimal
+    take_profit_net: Decimal | None = None
+    realized_pnl: Decimal
+    unrealized_pnl: Decimal | None = None  # None while a position has no mark
+    fees_total: Decimal
+    opened_at: UtcDateTime
+    closed_at: UtcDateTime | None = None
+    dte: int | None = None
+    positions: list[OptPositionOut]
+
+
+class OptSourceResultOut(ApiModel):
+    source: str
+    open_structures: int
+    reserved: Decimal
+    realized_pnl: Decimal
+    unrealized_pnl: Decimal
+    premium_collected: Decimal
+
+
+class OptBenchmarkOut(ApiModel):
+    ticker: str
+    since: date
+    benchmark_return: Decimal | None = None
+    account_return: Decimal | None = None
+
+
+class OptAccountOut(ApiModel):
+    run_id: int | None = None
+    started_at: UtcDateTime | None = None
+    starting_cash: Decimal
+    cash: Decimal
+    reserved: Decimal
+    free_cash: Decimal
+    positions_value: Decimal
+    account_value: Decimal
+    premium_collected: Decimal
+    realized_pnl: Decimal
+    unrealized_pnl: Decimal
+    fees_total: Decimal
+    max_position_pct: Decimal
+    marks_as_of: UtcDateTime | None = None
+    marks_complete: bool
+    worker_beat_at: UtcDateTime | None = None
+    by_source: list[OptSourceResultOut]
+    benchmark: OptBenchmarkOut | None = None
+
+
+class OptActivityOut(ApiModel):
+    id: str
+    ts: UtcDateTime
+    kind: OptActivityKind
+    source: str
+    underlying: str | None = None
+    title: str
+    detail: str
+    level: str
+    structure_id: int | None = None
+
+
+class OptPromptChoiceOut(ApiModel):
+    code: str
+    label: str
+
+
+class OptPromptOut(ApiModel):
+    id: int
+    source: str
+    kind: str
+    scope_key: str
+    title: str
+    body: str
+    choices: list[OptPromptChoiceOut]
+    needs_text: bool
+    status: PromptStatus
+    asked_at: UtcDateTime
+    answered_at: UtcDateTime | None = None
+    answer: str | None = None
+    answer_text: str | None = None
+    answered_via: AnsweredVia | None = None
+    data: dict[str, Any]
+
+
+class OptPromptAnswerIn(ApiModel):
+    choice: Annotated[str, StringConstraints(pattern=r"^[a-z]$")]
+    text: Annotated[str, StringConstraints(max_length=2000)] | None = None
+
+
+with warnings.catch_warnings():  # `schema`: as StrategyOut above
+    warnings.filterwarnings("ignore", message='Field name "schema"', category=UserWarning)
+
+    class OptStrategyOut(ApiModel):
+        key: str
+        version: str
+        enabled: bool
+        revision: int
+        params: dict[str, Any]
+        schema: dict[str, Any]  # type: ignore[assignment]
+        fields: list[FieldOut]
+        updated_at: UtcDateTime
+        updated_by: str | None = None
+        open_structures: int
+        manual_events: list[str]
+
+
+class OptKeyValueOut(ApiModel):
+    label: str
+    value: str
+    tone: Tone | None = None
+
+
+class OptPanelColumnOut(ApiModel):
+    key: str
+    label: str
+    kind: PanelColumnKind
+
+
+class OptPanelRowOut(ApiModel):
+    id: str
+    cells: dict[str, Any]
+    actions: list[str]
+    detail: list[OptKeyValueOut]
+
+
+class OptPanelTableOut(ApiModel):
+    key: str
+    title: str
+    columns: list[OptPanelColumnOut]
+    rows: list[OptPanelRowOut]
+    empty_text: str
+
+
+class OptPanelActionOut(ApiModel):
+    key: str
+    label: str
+    kind: PanelActionKind
+    confirm: bool
+    choices: list[str]
+
+
+class OptPanelOut(ApiModel):
+    strategy_key: str
+    summary: list[OptKeyValueOut]
+    tables: list[OptPanelTableOut]
+    actions: list[OptPanelActionOut]
+
+
+class OptPanelActionIn(ApiModel):
+    action: Annotated[str, StringConstraints(min_length=1, max_length=40)]
+    row_id: Annotated[str, StringConstraints(max_length=100)] | None = None
+    value: StrictBool | Annotated[str, StringConstraints(max_length=2000)] | None = None
+
+
+class OptPanelActionResultOut(ApiModel):
+    ok: bool
+    message: str

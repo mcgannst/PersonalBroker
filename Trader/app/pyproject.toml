@@ -33,6 +33,9 @@ trader = "trader.cli:app"
 orb_sip = "trader.strategies.orb_sip:OrbSip"
 spy_overlay = "trader.strategies.spy_overlay:SpyOverlay"
 
+[project.entry-points."trader.option_strategies"]
+wheel = "trader.option_strategies.wheel.strategy:WheelStrategy"
+
 [dependency-groups]
 deploy = [
     "supervisor>=4.2",

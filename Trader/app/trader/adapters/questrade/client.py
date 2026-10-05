@@ -12,7 +12,7 @@ import math
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Self
 
@@ -21,9 +21,17 @@ import structlog
 
 from trader.adapters.questrade.auth import AccessToken, TokenSource
 from trader.adapters.questrade.models import CandleRequest, QtQuote, QtSymbol
+from trader.adapters.questrade.option_types import (
+    QtChainExpiry,
+    QtChainRoot,
+    QtChainStrike,
+    QtOptionQuote,
+    QtSymbolDetails,
+)
 from trader.logging_setup import redact_text
-from trader.market.clock import Clock
+from trader.market.clock import ET, Clock
 from trader.market.types import Candle, Interval
+from trader.options.types import Right
 
 INTRADAY_HISTORY = timedelta(days=88)
 NAMES_PER_CALL = 100
@@ -352,6 +360,18 @@ class QuestradeClient:
     async def _get_sent(self, path: str, params: dict[str, str], category: Category) -> tuple[Any, datetime]:
         """`_get`, with when the answering attempt was sent (FIX-DAY1b: after the bucket's pacing and any
         429 pause, by the injected clock)."""
+        return await self._request_sent(path, params, category, None)
+
+    async def _post_sent(self, path: str, body: dict[str, Any], category: Category) -> tuple[Any, datetime]:
+        """A JSON POST under exactly the GET rules (pacing, one forced refresh on 401, the package-401 rule,
+        429 pause, 5xx and transport back-off). Only for POSTs that read (OPTSIM: option quotes), since a
+        failed attempt is sent again."""
+        return await self._request_sent(path, {}, category, json.dumps(body))
+
+    async def _request_sent(
+        self, path: str, params: dict[str, str], category: Category, body: str | None
+    ) -> tuple[Any, datetime]:
+        """One call with retries: a GET with `params`, or a POST of the JSON text `body` when given."""
         refreshed = False
         last_status: int = 0
         last_text: str = ""
@@ -364,11 +384,22 @@ class QuestradeClient:
             stats.requests += 1
             sent_at: datetime = self._clock.now()
             try:
-                resp: httpx.Response = await self._http.get(
-                    token.api_base + path,
-                    params=params,
-                    headers={"Authorization": f"Bearer {token.token}"},
-                )
+                resp: httpx.Response
+                if body is None:
+                    resp = await self._http.get(
+                        token.api_base + path,
+                        params=params,
+                        headers={"Authorization": f"Bearer {token.token}"},
+                    )
+                else:
+                    resp = await self._http.post(
+                        token.api_base + path,
+                        content=body,
+                        headers={
+                            "Authorization": f"Bearer {token.token}",
+                            "Content-Type": "application/json",
+                        },
+                    )
             except httpx.TransportError as exc:
                 stats.transport_errors += 1
                 last_status, last_text, last_resp = 0, self._transport_message(exc, token), None
@@ -614,3 +645,145 @@ class QuestradeClient:
             if completed >= fail_fast_401:
                 return first_401, completed
         return None, completed
+
+    # --- OPTSIM: option chain, option quotes, symbol details (all on the "market" bucket) ---
+
+    async def option_chain(self, symbol_id: int) -> list[QtChainExpiry]:
+        """The underlying's chain, expiries ascending. An expiry is the ET date of the `expiryDate` sent."""
+        data = await self._get(f"symbols/{symbol_id}/options", {}, "market")
+        out: list[QtChainExpiry] = []
+        for e in data.get("optionChain", []):
+            expiry = _et_date(e.get("expiryDate"))
+            if expiry is None:
+                raise ValueError("option chain expiry without expiryDate")
+            roots = tuple(
+                QtChainRoot(
+                    root=r.get("optionRoot", ""),
+                    multiplier=int(r.get("multiplier") or 100),
+                    strikes=tuple(
+                        QtChainStrike(
+                            strike=Decimal(str(s["strikePrice"])),
+                            call_id=int(s["callSymbolId"]),
+                            put_id=int(s["putSymbolId"]),
+                        )
+                        for s in r.get("chainPerStrikePrice", [])
+                    ),
+                )
+                for r in e.get("chainPerRoot", [])
+            )
+            out.append(QtChainExpiry(expiry=expiry, roots=roots))
+        return sorted(out, key=lambda x: x.expiry)
+
+    async def _option_quotes_call(self, body: dict[str, Any]) -> list[QtOptionQuote]:
+        data, requested_at = await self._post_sent("markets/quotes/options", body, "market")
+        fetched_at = self._clock.now()
+        return [
+            QtOptionQuote(
+                symbol_id=int(q["symbolId"]),
+                symbol=q.get("symbol", ""),
+                underlying=q.get("underlying", ""),
+                underlying_id=int(q.get("underlyingId") or 0),
+                bid=_dec(q.get("bidPrice")),
+                ask=_dec(q.get("askPrice")),
+                last=_dec(q.get("lastTradePrice")),
+                bid_size=_opt_int(q.get("bidSize")),
+                ask_size=_opt_int(q.get("askSize")),
+                volume=_opt_int(q.get("volume")),
+                open_interest=_opt_int(q.get("openInterest")),
+                iv_pct=_dec(q.get("volatility")),
+                delta=_dec(q.get("delta")),
+                gamma=_dec(q.get("gamma")),
+                theta=_dec(q.get("theta")),
+                vega=_dec(q.get("vega")),
+                rho=_dec(q.get("rho")),
+                last_trade_time=_dt(q.get("lastTradeTime")),
+                delay=_opt_int(q.get("delay")),
+                is_halted=bool(q.get("isHalted")),
+                vwap=_dec(q.get("VWAP")),
+                fetched_at=fetched_at,
+                requested_at=requested_at,
+            )
+            for q in data.get("optionQuotes", [])
+        ]
+
+    async def option_quotes(self, ids: Sequence[int]) -> list[QtOptionQuote]:
+        """Quotes for option symbol ids, OPTION_IDS_PER_CALL per request. Numbers are passed on as sent: a
+        null is None, a 0 bid stays 0, `iv_pct` is Questrade's percentage; `delay` None when omitted."""
+        out: list[QtOptionQuote] = []
+        for i in range(0, len(ids), OPTION_IDS_PER_CALL):
+            chunk = [int(x) for x in ids[i : i + OPTION_IDS_PER_CALL]]
+            out.extend(await self._option_quotes_call({"optionIds": chunk}))
+        return out
+
+    async def option_quotes_filter(
+        self,
+        underlying_id: int,
+        expiry: date,
+        right: Right,
+        min_strike: Decimal | None = None,
+        max_strike: Decimal | None = None,
+    ) -> list[QtOptionQuote]:
+        """Every quote of one expiry and right in one request, optionally within strike bounds (inclusive).
+        `expiry` is sent the way the chain returns it: midnight ET with its UTC offset."""
+        flt: dict[str, Any] = {
+            "optionType": "Call" if right == "call" else "Put",
+            "underlyingId": int(underlying_id),
+            "expiryDate": _expiry_text(expiry),
+        }
+        if min_strike is not None:
+            flt["minstrikePrice"] = _json_number(min_strike)
+        if max_strike is not None:
+            flt["maxstrikePrice"] = _json_number(max_strike)
+        return await self._option_quotes_call({"filters": [flt]})
+
+    async def symbol_details(self, ids: Sequence[int]) -> dict[int, QtSymbolDetails]:
+        """Fundamentals per symbol id (`GET symbols?ids=`, NAMES_PER_CALL per request). Unknown ids are left
+        out; `ex_date` is the ET date of `exDate`."""
+        out: dict[int, QtSymbolDetails] = {}
+        for i in range(0, len(ids), NAMES_PER_CALL):
+            chunk = ids[i : i + NAMES_PER_CALL]
+            data = await self._get("symbols", {"ids": ",".join(str(x) for x in chunk)}, "market")
+            for s in data.get("symbols", []):
+                symbol_id = int(s["symbolId"])
+                out[symbol_id] = QtSymbolDetails(
+                    symbol_id=symbol_id,
+                    symbol=s.get("symbol", ""),
+                    description=s.get("description") or "",
+                    security_type=s.get("securityType") or "",
+                    listing_exchange=s.get("listingExchange") or "",
+                    currency=s.get("currency") or "",
+                    has_options=bool(s.get("hasOptions")),
+                    eps=_dec(s.get("eps")),
+                    pe=_dec(s.get("pe")),
+                    market_cap=_dec(s.get("marketCap")),
+                    dividend=_dec(s.get("dividend")),
+                    ex_date=_et_date(s.get("exDate")),
+                    yield_pct=_dec(s.get("yield")),
+                    industry_sector=s.get("industrySector") or None,
+                    industry_group=s.get("industryGroup") or None,
+                )
+        return out
+
+
+# ASSUMPTION (risk R11): option quotes accept 100 ids per request, like share quotes; checked live at T17.
+OPTION_IDS_PER_CALL = 100
+
+
+def _opt_int(value: Any) -> int | None:
+    return None if value is None else int(value)
+
+
+def _et_date(value: str | None) -> date | None:
+    """The ET calendar date of a Questrade timestamp ("2026-10-30T00:00:00.000000-04:00"), or None."""
+    parsed = _dt(value)
+    return None if parsed is None else parsed.astimezone(ET).date()
+
+
+def _expiry_text(expiry: date) -> str:
+    """An expiry as the chain returns it: "2026-10-30T00:00:00.000000-04:00" (midnight ET)."""
+    return datetime(expiry.year, expiry.month, expiry.day, tzinfo=ET).isoformat(timespec="microseconds")
+
+
+def _json_number(value: Decimal) -> int | float:
+    """A strike for a JSON request body (the only place a Decimal leaves as a float: the wire format)."""
+    return int(value) if value == value.to_integral_value() else float(value)

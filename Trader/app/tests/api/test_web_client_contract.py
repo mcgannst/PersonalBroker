@@ -30,6 +30,8 @@ from trader.api.main import create_app
 WEB_API = Path(__file__).resolve().parents[3] / "web" / "src" / "api"
 HTTP_TS = WEB_API / "http.ts"
 CLIENT_TS = WEB_API / "client.ts"
+OPTIONS_HTTP_TS = WEB_API / "optionsHttp.ts"
+OPTIONS_CLIENT_TS = WEB_API / "optionsClient.ts"
 NOT_ROUTES = {"csrfToken", "setCsrfToken"}  # accessors of the client itself
 # Client methods declared by the P5-T1 contracts whose routes a later Phase 5 task registers: skipped until
 # the route exists, checked like every other method from then on. Remove a name once its route is wired.
@@ -50,41 +52,70 @@ class ClientCall(typing.NamedTuple):
     inline_body: frozenset[str] | None  # the keys of an inline object body, else None
 
 
+class ClientSource(typing.NamedTuple):
+    http: Path  # the file with the HTTP client
+    factory: str  # the function whose returned object holds the methods
+    client: Path  # the file with the client interface and the query interfaces
+    interface: str
+
+
+# OPTSIM-T16: the Options page has its own client (`optionsHttp.ts` / `optionsClient.ts`), read the same way.
+SOURCES = (
+    ClientSource(HTTP_TS, "createHttpClient", CLIENT_TS, "ApiClient"),
+    ClientSource(OPTIONS_HTTP_TS, "createOptionsHttpClient", OPTIONS_CLIENT_TS, "OptionsApiClient"),
+)
+
+
 def _client_methods_block() -> dict[str, str]:
-    """`name -> source` for every property of the object `createHttpClient` returns."""
-    text = HTTP_TS.read_text(encoding="utf-8")
-    start = text.index("  return {\n", text.index("export function createHttpClient"))
-    body = text[start:]
-    chunks = re.split(r"^ {4}(\w+):", body, flags=re.MULTILINE)
-    return {chunks[i]: chunks[i + 1] for i in range(1, len(chunks) - 1, 2)}
-
-
-def _interfaces() -> dict[str, set[str]]:
-    """Field names of every `export interface X [extends Y] {...}` and `export type X = Y;` in client.ts."""
-    text = CLIENT_TS.read_text(encoding="utf-8")
-    out: dict[str, set[str]] = {}
-    for name, parent, body in re.findall(
-        r"^export interface (\w+)(?: extends (\w+))? \{\n(.*?)^\}", text, re.MULTILINE | re.DOTALL
-    ):
-        fields = set(re.findall(r"^\s+(\w+)\??:", body, re.MULTILINE))
-        out[name] = fields | out.get(parent, set())
-    for name, alias in re.findall(r"^export type (\w+) = (\w+);", text, re.MULTILINE):
-        out[name] = set(out[alias])
+    """`name -> source` for every property of the object each client factory returns."""
+    out: dict[str, str] = {}
+    for source in SOURCES:
+        text = source.http.read_text(encoding="utf-8")
+        start = text.index("  return {\n", text.index(f"export function {source.factory}"))
+        body = text[start:]
+        chunks = re.split(r"^ {4}(\w+):", body, flags=re.MULTILINE)
+        found = {chunks[i]: chunks[i + 1] for i in range(1, len(chunks) - 1, 2)}
+        assert found and not found.keys() & out.keys(), source.http.name
+        out.update(found)
     return out
 
 
+def _interfaces() -> dict[str, set[str]]:
+    """Field names of every `export interface X [extends Y] {...}` and `export type X = Y;` in the client
+    interface files."""
+    out: dict[str, set[str]] = {}
+    for source in SOURCES:
+        text = source.client.read_text(encoding="utf-8")
+        for name, parent, body in re.findall(
+            r"^export interface (\w+)(?: extends (\w+))? \{\n(.*?)^\}", text, re.MULTILINE | re.DOTALL
+        ):
+            fields = set(re.findall(r"^\s+(\w+)\??:", body, re.MULTILINE))
+            out[name] = fields | out.get(parent, set())
+        for name, alias in re.findall(r"^export type (\w+) = (\w+);", text, re.MULTILINE):
+            if alias in out:
+                out[name] = set(out[alias])
+    return out
+
+
+def _interface_text(source: ClientSource) -> str:
+    text = source.client.read_text(encoding="utf-8")
+    return text[text.index(f"export interface {source.interface}") :]
+
+
 def _query_types() -> dict[str, str]:
-    """`method -> query interface` from the `ApiClient` signatures (`proposals(q: ProposalsQuery)`)."""
-    text = CLIENT_TS.read_text(encoding="utf-8")
-    iface = text[text.index("export interface ApiClient") :]
-    return dict(re.findall(r"^\s+(\w+)\(q: (\w+)\)", iface, re.MULTILINE))
+    """`method -> query interface` from the client signatures (`proposals(q: ProposalsQuery)`)."""
+    out: dict[str, str] = {}
+    for source in SOURCES:
+        out.update(re.findall(r"^\s+(\w+)\(q: (\w+)\)", _interface_text(source), re.MULTILINE))
+    return out
 
 
 def _body_types() -> dict[str, str]:
     """`method -> TS body type` for methods taking a `body: X` parameter."""
-    text = CLIENT_TS.read_text(encoding="utf-8")
-    iface = text[text.index("export interface ApiClient") :]
-    return {name: ty for name, ty in re.findall(r"^\s+(\w+)\([^)]*\bbody: (\w+)\)", iface, re.MULTILINE)}
+    out: dict[str, str] = {}
+    for source in SOURCES:
+        out.update(re.findall(r"^\s+(\w+)\([^)]*\bbody: (\w+)\)", _interface_text(source), re.MULTILINE))
+    return out
 
 
 def _normalise(path: str) -> str:
@@ -165,9 +196,21 @@ def api_routes() -> dict[tuple[str, str], APIRoute]:
 
 
 def test_the_client_parser_sees_every_api_method() -> None:
-    methods = set(re.findall(r'^\s+"(\w+)",$', CLIENT_TS.read_text(encoding="utf-8"), re.MULTILINE))
+    methods: set[str] = set()
+    for source in SOURCES:  # the `API_METHODS` and `OPTIONS_API_METHODS` lists
+        methods |= set(re.findall(r'^\s+"(\w+)",$', source.client.read_text(encoding="utf-8"), re.MULTILINE))
     assert "approve" in methods and "streamUrl" in methods
+    assert "optSubmit" in methods and "optPutSetting" in methods  # OPTSIM-T16
     assert set(client_calls()) == methods
+
+
+def test_the_options_client_covers_exactly_the_options_routes() -> None:
+    """OPTSIM-T16: every `/api/options` route is requested by the options client and by nothing else."""
+    calls = client_calls()
+    routes = {key for key in api_routes() if key[1].startswith("/api/options")}
+    by_options = {(c.method, c.path) for name, c in calls.items() if name.startswith("opt")}
+    assert len(routes) == 18 and by_options == routes
+    assert not any(c.path.startswith("/api/options") for n, c in calls.items() if not n.startswith("opt"))
 
 
 def _route_of(name: str) -> tuple[ClientCall, APIRoute]:

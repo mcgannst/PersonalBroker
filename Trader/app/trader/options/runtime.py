@@ -484,7 +484,6 @@ async def _postclose(rt: OptionsRuntime, day: date, force: bool, kwargs: dict[st
 
 
 async def _event(rt: OptionsRuntime, day: date, force: bool, kwargs: dict[str, Any]) -> int:
-    await rt.host.ensure_defaults()  # a plug-in's first settings row, should the worker never have run
     return await run_event_cli(
         rt.host,
         strategy=kwargs.get("strategy"),
@@ -503,14 +502,31 @@ _JOBS: dict[str, Callable[[OptionsRuntime, date, bool, dict[str, Any]], Awaitabl
 }
 
 
+def default_session_date(core: Core, name: str, kwargs: dict[str, Any]) -> date:
+    """The session a command runs for when no `--date` is given: today's ET date. A NAMED strategy event
+    (`options-event <strategy> <key>`, e.g. the Saturday market screen) fired on a day that is not a
+    session runs for the latest session on or before today, the date the deploy catch-up tool also pins
+    it to. Every other command keeps today and skips by itself on a day that is not a session."""
+    today = et_date(core.clock.now())
+    if name != "event" or kwargs.get("due") or kwargs.get("strategy") is None:
+        return today
+    try:
+        return today if core.calendar.is_session(today) else core.calendar.previous_session(today)
+    except ValueError:  # outside the calendar's range
+        return today
+
+
 async def _command(
     core: Core, name: str, session_date: date | None, force: bool, kwargs: dict[str, Any]
 ) -> int:
     if name == "check":
         return await _check(core, str(kwargs.get("symbol") or "F").strip().upper())
-    day = session_date if session_date is not None else et_date(core.clock.now())
+    day = session_date if session_date is not None else default_session_date(core, name, kwargs)
     async with AsyncExitStack() as stack:
         rt = await build_options(core, stack)
+        # A plug-in's first settings row, should neither the worker nor the API have started yet: the jobs
+        # read the enabled plug-ins, and one without a row would be skipped with an error event.
+        await rt.host.ensure_defaults()
         return await _JOBS[name](rt, day, force, kwargs)
 
 
@@ -519,7 +535,7 @@ def run_cli_command(
 ) -> int:
     """The target of `trader options-check | options-refresh | options-postclose | options-event` (the
     declarations are in `trader.options.cli`). `kwargs`: `symbol` for `check`; `strategy`, `key`, `due`
-    for `event`. `session_date` None means today's ET date. Returns the exit code: 0 done or skipped, 1
+    for `event`. `session_date` None means `default_session_date`. Returns the exit code: 0 done or skipped, 1
     failed, 2 a bad command or event name. A failure is one masked line on stderr, never a traceback."""
     label = f"options-{name}"
     if name not in COMMANDS:

@@ -264,7 +264,9 @@ def test_the_checks_catch_what_they_should() -> None:
     assert not field('-        "replays",\n+        "options",')
 
     routers = only_these(removed=("len(ROUTERS) == 20",), added=('"options",', '"options",', "x == 21"))
-    assert routers("") and routers('+    "options",  # T1\n+    "options",  # T16\n-        len(ROUTERS) == 20')
+    assert routers("") and routers(
+        '+    "options",  # T1\n+    "options",  # T16\n-        len(ROUTERS) == 20'
+    )
     assert routers("-        len(ROUTERS) == 20\n+        x == 21")
     assert not routers('+    "options",\n+    "options",\n+    "options",')  # one more than listed
     assert not routers("-        len(ROUTERS) == 20\n-        len(ROUTERS) == 20")

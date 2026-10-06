@@ -50,7 +50,7 @@ SATURDAY = datetime(2026, 10, 10, 15, 0, tzinfo=UTC)
 CLOSE = datetime(2026, 10, 6, 20, 0, tzinfo=UTC)  # 16:00 ET
 EARLY_CLOSE = datetime(2026, 11, 27, 18, 0, tzinfo=UTC)  # the day after Thanksgiving closes at 13:00 ET
 TOY = ("toy", OptionEvent("toy_buy", SESSION))
-IDLE_PARTS = ("deliver_answers", "sync_prompts", "send_prompts")
+IDLE_PARTS = ("pending_fills", "deliver_answers", "sync_prompts", "send_prompts")
 
 
 class StickyHost(RecordingHost):
@@ -277,6 +277,8 @@ async def test_session_step_order(db_factory: sessionmaker[Session]) -> None:
         "due_events",
         "fire",
         "poll",
+        "pending_fills",
+        "fill_job",
         "fill_message",
         "deliver_fill",
         "walk",
@@ -285,7 +287,7 @@ async def test_session_step_order(db_factory: sessionmaker[Session]) -> None:
         "take_profits",
         "strike_touch",
         "snapshot",
-        *IDLE_PARTS,
+        *IDLE_PARTS[1:],
     )
     assert report.events == (("toy", "toy_buy", "succeeded"),) and report.fills == 1
     assert h.host_calls() == [
@@ -399,7 +401,7 @@ async def test_a_failing_part_does_not_stop_the_others(
     report = await w.step()
     assert "walk" in h.broker.calls and "take_profits" in h.broker.calls
     assert h.host.fired and h.sender.calls == [T0] and "sync_prompts" in h.host_calls()
-    assert report.parts[-4:] == ("snapshot", *IDLE_PARTS) and len(h.snapshots()) == 1
+    assert report.parts[-4:] == ("snapshot", *IDLE_PARTS[1:]) and len(h.snapshots()) == 1
     errors = h.events("error")
     assert sorted(e.data["part"] for e in errors) == ["deliver_answers", "poll", "record_marks"]
     assert all("RuntimeError: boom" in e.message for e in errors)

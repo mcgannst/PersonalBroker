@@ -14,7 +14,16 @@ It holds no strategy logic and names no plug-in: everything a strategy does goes
 Nothing needed after a restart is kept in memory. Timers restart from "due now"; a fill is one database
 transaction in the broker; messages are deduplicated by their key; a strategy event runs once per session
 through its job row; the snapshot spacing is read from the last stored row. What IS in memory only saves
-repeats: the failure streaks, the back-off of a failing strategy event and the strike alerts already sent.
+repeats: the failure streaks, the back-off of a failing strategy event or fill delivery, and the strike
+alerts already sent.
+
+A fill is delivered (its message, then the strategy's `on_fill`) inside job `opt_fill:<order id>`, and every
+step, in and out of the session, reads back the filled orders of the last 72 hours that have no succeeded
+job: a worker that died between the fill and its delivery, or a delivery that failed, is made good by a
+later step or the next process. A failed delivery is retried after 60 s, doubling to 15 minutes. So a
+strategy can be told of one fill twice (a restart after its `on_fill` ran and before the job was recorded):
+`on_fill` must be safe to repeat for the same order. Fills from before the first step of a worker that
+records deliveries (job `opt_fill:baseline`) are never looked for.
 
 Every part of a step is guarded: a failure is one `error` event when its streak starts, one `critical`
 event at ten failures in a row and one `info` event when it recovers, and the other parts still run.
@@ -49,12 +58,14 @@ from trader import logging_setup
 from trader.db import models as m
 from trader.db.session import session_scope
 from trader.events import log_event
-from trader.jobs.runner import JobOutcome
+from trader.jobs.runner import JobFailure, JobOutcome, run_job_async
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import Clock, et_date
 from trader.notify.types import Notifier
 from trader.option_strategies.base import OptionEvent
+from trader.option_strategies.host import SOURCE_PREFIX as STRATEGY_SOURCE_PREFIX
 from trader.options.account import active_options_run_id
+from trader.options.broker import undelivered_fills
 from trader.options.protocols import OptionBroker, OptionRenderer, StrategyHost
 from trader.options.settings import OptionSettings
 from trader.options.types import OptionFillEvent, StructureView
@@ -74,6 +85,9 @@ IDLE_STEP_SECONDS = 30.0
 FAILED_STEPS_CRITICAL = 10  # consecutive failures of one part that raise one critical event
 EVENT_RETRY_SECONDS = 60.0  # a failed strategy event is offered again after this long, doubling each time
 EVENT_RETRY_MAX_SECONDS = 900.0
+FILL_JOB_PREFIX = "opt_fill:"  # + the order id: the job_runs row that says a fill was delivered
+FILL_BASELINE_JOB = FILL_JOB_PREFIX + "baseline"  # one row: when fills began to be delivered through jobs
+FILL_LOOKBACK = timedelta(hours=72)  # an undelivered fill older than this is no longer looked for
 STRIKE_TOUCHED = "STRIKE_TOUCHED"
 MAX_ERROR_CHARS = 500
 Q4 = Decimal("0.0001")
@@ -164,6 +178,11 @@ def still_holds_lock(conn: Connection) -> bool:
     return granted
 
 
+def fill_job_name(order_id: int) -> str:
+    """The job_runs name of one fill's delivery (its message and the strategy's `on_fill`)."""
+    return f"{FILL_JOB_PREFIX}{order_id}"
+
+
 def _describe(exc: BaseException) -> str:
     """An exception as one masked, capped text (it goes into event_log, which the web app shows)."""
     return logging_setup.redact_text(f"{type(exc).__name__}: {exc}")[:MAX_ERROR_CHARS]
@@ -205,6 +224,9 @@ class OptionsWorker:
         self._expired_for: date | None = None
         self._streaks: dict[str, int] = {}  # consecutive failures per part
         self._event_retry: dict[tuple[str, str, date], tuple[int, datetime]] = {}  # failures, not before
+        self._fill_retry: dict[int, tuple[int, datetime]] = {}  # by order id: failures, not before
+        self._fills_heard: set[int] = set()  # orders whose on_fill ran while their job has yet to succeed
+        self._fills_from: datetime | None = None  # the baseline job's time, read once
         self._touched: set[tuple[int, date]] = set()  # strike alerts raised (structure, session)
         self._good_settings: OptionSettings | None = None
         self._settings_failing = False
@@ -240,15 +262,19 @@ class OptionsWorker:
         if hours is not None and hours[0] <= now < hours[1]:
             self._phase = "session"
             events = await self._fire_due(day, now)
-            fills = await self._poll(day, now)
+            polled = await self._poll(day, now)
+            fills = len(polled)
+            await self._deliver_fills(now, polled)
             if self._due("walk", now, settings.reprice_seconds):
                 await self._part("walk", lambda: d.broker.walk(now), 0)
             if self._due("marks", now, settings.mark_seconds):
                 await self._mark_pass(day, now, settings)
-        elif hours is not None and now >= hours[1] and self._expired_for != day:
-            # Kept in memory only: after a restart it runs once more, and expiring twice changes nothing.
-            if await self._part("expire_day_orders", lambda: self._expire(day, now), False):
-                self._expired_for = day
+        else:
+            if hours is not None and now >= hours[1] and self._expired_for != day:
+                # Kept in memory only: after a restart it runs once more, and expiring twice changes nothing.
+                if await self._part("expire_day_orders", lambda: self._expire(day, now), False):
+                    self._expired_for = day
+            await self._deliver_fills(now, ())  # a fill left untold when the session ended
         await self._part("deliver_answers", d.host.deliver_answers, 0)
         await self._part("sync_prompts", d.host.sync_prompts, 0)
         await self._part("send_prompts", lambda: d.prompt_sender.send_due(now), 0)
@@ -344,19 +370,109 @@ class OptionsWorker:
 
     # --- orders ---------------------------------------------------------------------------------------------
 
-    async def _poll(self, day: date, now: datetime) -> int:
-        d = self.deps
+    async def _poll(self, day: date, now: datetime) -> list[OptionFillEvent]:
         none: list[OptionFillEvent] = []
-        fills = await self._part("poll", lambda: d.broker.poll(now), none)
+        fills = await self._part("poll", lambda: self.deps.broker.poll(now), none)
         if self._fills_day != day:
             self._fills_day, self._fills_today = day, 0
         self._fills_today += len(fills)
-        for fill in fills:
-            await self._part("fill_message", functools.partial(self._fill_message, fill), None)
-            await self._part("deliver_fill", functools.partial(d.host.deliver_fill, fill), None)
-        return len(fills)
+        return fills
 
-    async def _fill_message(self, fill: OptionFillEvent) -> None:
+    # --- fills: told once, whatever happens to the process --------------------------------------------------
+
+    async def _deliver_fills(self, now: datetime, fresh: Sequence[OptionFillEvent]) -> None:
+        """Tell the owner and the strategy about every fill not yet told: the ones this step's poll made,
+        and the ones read back from the database (a worker that died after the fill was committed, or a
+        delivery that failed). A fill is told once: its job row is what says so."""
+        none: list[OptionFillEvent] = []
+        stored = await self._part("pending_fills", functools.partial(self._pending_fills, now), none)
+        polled = {fill.order_id for fill in fresh}
+        for fill in [*fresh, *(f for f in stored if f.order_id not in polled)]:
+            await self._deliver_fill(fill, now)
+
+    async def _pending_fills(self, now: datetime) -> list[OptionFillEvent]:
+        """The stored fills with no succeeded delivery job, no older than FILL_LOOKBACK and never older
+        than the first step of a worker that records deliveries (so fills made before that are left alone:
+        they were delivered the old way, with no job row)."""
+        d = self.deps
+        run_id = d.run_id
+        assert run_id is not None  # the step returned earlier without a run
+        if self._fills_from is None:
+            with session_scope(d.factory) as s:
+                first = s.execute(
+                    select(func.min(m.JobRun.started_at)).where(m.JobRun.job == FILL_BASELINE_JOB)
+                ).scalar_one()
+                if first is None:
+                    first = now
+                    s.add(
+                        m.JobRun(
+                            job=FILL_BASELINE_JOB,
+                            session_date=et_date(now),
+                            started_at=now,
+                            finished_at=now,
+                            status="succeeded",
+                            detail={"note": "option fills from here on are delivered through job_runs"},
+                        )
+                    )
+            self._fills_from = first
+        since = max(self._fills_from, now - FILL_LOOKBACK)
+        return undelivered_fills(d.factory, run_id, since, FILL_JOB_PREFIX)
+
+    async def _deliver_fill(self, fill: OptionFillEvent, now: datetime) -> None:
+        """One fill, as job `opt_fill:<order id>`. A delivery that failed is tried again after a back-off
+        (as a failing strategy event is), not on every poll."""
+        order_id = fill.order_id
+        failures, not_before = self._fill_retry.get(order_id, (0, now))
+        if now < not_before:
+            return
+        d = self.deps
+        run: Callable[[], Awaitable[JobOutcome | None]] = functools.partial(
+            run_job_async,
+            d.factory,
+            d.clock,
+            fill_job_name(order_id),
+            et_date(fill.ts),
+            functools.partial(self._tell, fill),
+            failure_level="warning",  # what failed has its own error event (the host's, or this worker's)
+        )
+        outcome = await self._part("fill_job", run, None, streak=f"fill_job:{order_id}", order_id=order_id)
+        if outcome is not None and (
+            outcome.status == "succeeded" or outcome.detail.get("reason") == "already succeeded"
+        ):
+            self._fill_retry.pop(order_id, None)
+            self._fills_heard.discard(order_id)
+            return
+        wait = min(EVENT_RETRY_SECONDS * 2**failures, EVENT_RETRY_MAX_SECONDS)
+        self._fill_retry[order_id] = (failures + 1, now + timedelta(seconds=wait))
+
+    async def _tell(self, fill: OptionFillEvent) -> dict[str, Any]:
+        """The body of a fill's job: its message, then the strategy's `on_fill`. Neither waits for the
+        other, and the job fails unless both are done. A repeat costs nothing: the message is deduplicated
+        by its key, and a strategy that already heard of the fill in this process is not told again."""
+        order_id = fill.order_id
+        sent = await self._part(
+            "fill_message",
+            functools.partial(self._fill_message, fill),
+            False,
+            streak=f"fill_message:{order_id}",
+            order_id=order_id,
+        )
+        if order_id not in self._fills_heard and await self._part(
+            "deliver_fill",
+            functools.partial(self._on_fill, fill),
+            False,
+            streak=f"deliver_fill:{order_id}",
+            order_id=order_id,
+        ):
+            self._fills_heard.add(order_id)
+        missing = [
+            what for what, done in (("message", sent), ("on_fill", order_id in self._fills_heard)) if not done
+        ]
+        if missing:
+            raise JobFailure(f"fill of order {order_id} not delivered: {' and '.join(missing)}")
+        return {"order_id": order_id, "structure_id": fill.structure_id, "source": fill.source}
+
+    async def _fill_message(self, fill: OptionFillEvent) -> bool:
         """The fill's message (dedupe key `opt:fill:<order id>`), with the structure as it is now."""
         d = self.deps
         structures = await d.broker.structures(source=fill.source, open_only=False)
@@ -364,6 +480,28 @@ class OptionsWorker:
         if structure is None:
             raise LookupError(f"structure {fill.structure_id} of filled order {fill.order_id} was not found")
         await d.notifier.send(d.renderer.fill(fill, structure))
+        return True
+
+    async def _on_fill(self, fill: OptionFillEvent) -> bool:
+        """Hand the fill to the host. False when the strategy's `on_fill` raised: the host does not say so
+        (it records one error event, `<key>: on_fill (order N) failed`), so that event is looked for."""
+        d = self.deps
+        log_row = m.EventLog
+        with d.factory() as s:
+            before = s.execute(select(func.max(log_row.id))).scalar_one() or 0
+        await d.host.deliver_fill(fill)
+        with d.factory() as s:
+            failed = s.execute(
+                select(log_row.id)
+                .where(
+                    log_row.id > before,
+                    log_row.source == STRATEGY_SOURCE_PREFIX + fill.source,
+                    log_row.level == "error",
+                    log_row.data["hook"].as_string().like("on_fill%"),
+                )
+                .limit(1)
+            ).first()
+        return failed is None
 
     async def _expire(self, day: date, now: datetime) -> bool:
         expired = await self.deps.broker.expire_day_orders(day, now)

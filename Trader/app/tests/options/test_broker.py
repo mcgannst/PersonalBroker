@@ -20,7 +20,7 @@ from trader.db import models as m
 from trader.market.calendar import SessionCalendar
 from trader.market.clock import FixedClock
 from trader.options.book import DbBook
-from trader.options.broker import SimOptionBroker
+from trader.options.broker import SimOptionBroker, undelivered_fills
 from trader.options.fill_model import QuoteFillModel
 from trader.options.protocols import UnknownUnderlying
 from trader.options.settings import OptionSettings
@@ -276,6 +276,42 @@ async def test_close_and_roll_update_the_structure(w: World) -> None:
     assert (done.state, done.close_reason, done.reserved_cash) == ("closed", "closed", 0)
     assert (done.realized_pnl, done.fees_total, done.closed_at) == (D("-10"), 4 * FEE, f.T0)
     assert (await w.broker.account()).reserved == 0
+
+
+async def test_undelivered_fills_rebuilds_the_events_poll_returned(w: World) -> None:
+    """What the worker reads back after a restart is, field for field, what `poll` handed the dead one."""
+    polled = []
+    await w.broker.submit(w.sell_put(take_profit_pct=D("0.50")))
+    polled += await w.broker.poll(f.T0)
+    sid = polled[0].structure_id
+    w.collateral.decision = accept(kind="csp", reserve_cash="1400")
+    legs = [
+        f.make_leg(1, side="buy", effect="close", contract_id=w.put),
+        f.make_leg(2, side="sell", effect="open", contract_id=w.low_put),
+    ]
+    await w.broker.submit(f.make_request(legs, intent="roll", structure_id=sid, order_type="market"))
+    w.clock.advance(MINUTE)
+    polled += await w.broker.poll(w.clock.now())
+    w.collateral.decision = accept(kind="csp", reserve_cash="0")
+    close = [f.make_leg(1, side="buy", effect="close", contract_id=w.low_put)]
+    await w.broker.submit(f.make_request(close, intent="close", structure_id=sid, order_type="market"))
+    w.clock.advance(MINUTE)
+    polled += await w.broker.poll(w.clock.now())
+    assert [(e.intent, e.realized_pnl) for e in polled] == [
+        ("open", None),
+        ("roll", D("-5")),
+        ("close", D("-5")),
+    ]
+
+    assert undelivered_fills(w.factory, w.run_id, f.T0, "opt_fill:") == polled
+    assert undelivered_fills(w.factory, w.run_id, f.T0 + MINUTE, "opt_fill:") == polled[1:]  # the look-back
+    assert undelivered_fills(w.factory, w.run_id + 1, f.T0, "opt_fill:") == []  # another run's are not ours
+    with w.factory() as s:  # a failed delivery leaves the fill undelivered; a succeeded one settles it
+        for order_id, status in ((polled[0].order_id, "failed"), (polled[1].order_id, "succeeded")):
+            job = f"opt_fill:{order_id}"
+            s.add(m.JobRun(job=job, session_date=f.SESSION, started_at=f.T0, status=status))
+        s.commit()
+    assert undelivered_fills(w.factory, w.run_id, f.T0, "opt_fill:") == [polled[0], polled[2]]
 
 
 async def test_a_close_or_roll_stores_the_cover_link_of_its_decision(w: World) -> None:

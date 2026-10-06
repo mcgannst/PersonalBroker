@@ -3,11 +3,14 @@ loses no order, fill or prompt, and repeats none (see `options_world`). Each "re
 every service it built away and builds new ones with `runtime.build_worker_deps`, as a new process does.
 
 Also here: an owner prompt answered by a tap on its Telegram button, through the stock worker's real bot,
-and the one known gap (a fill committed whose worker died before telling anyone), pinned as a strict xfail.
+and a fill committed whose worker died before telling anyone: the next worker tells the owner and the
+strategy.
 """
 
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from sqlalchemy import select
@@ -15,7 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import trader.runtime as stock_runtime
 from tests.e2e import options_world as w
-from tests.e2e.options_world import OptionsWorld
+from tests.e2e.options_world import OptionsWorld, et
 from tests.fakes_telegram import FakeRenderer
 from trader.adapters.telegram.bot import TelegramBot
 from trader.adapters.telegram.callbacks import DbCallbackIssuer
@@ -24,7 +27,9 @@ from trader.engine.proposals import Decision, DecisionResult, Via
 from trader.engine.runs import get_live_run
 from trader.notify.types import OutboundMessage
 from trader.option_strategies.host import job_name
-from trader.options.worker import HEARTBEAT_PROCESS
+from trader.option_strategies.wheel.store import WheelStore
+from trader.options.broker import undelivered_fills
+from trader.options.worker import FILL_LOOKBACK, HEARTBEAT_PROCESS, fill_job_name
 from trader.settings_store import RuntimeSettings
 
 pytestmark = pytest.mark.db
@@ -166,13 +171,6 @@ async def test_restart_mid_session_loses_nothing(world: OptionsWorld) -> None:
     assert account["worker_beat_at"] is not None  # the Account tab reads the same heartbeat row
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN GAP (T12 and T7 hand-off notes): a fill is committed by broker.poll, then the worker sends "
-    "its message and calls the plug-in's on_fill. There is no delivered marker for a fill, so a worker that "
-    "dies in between leaves the fill in the books but nobody told: no message, and the wheel never opens "
-    "its position for a put it has sold. Fix: a delivered marker for fills, re-read at every step.",
-)
 async def test_a_fill_whose_worker_died_before_delivery_still_reaches_the_strategy(
     world: OptionsWorld,
 ) -> None:
@@ -188,3 +186,72 @@ async def test_a_fill_whose_worker_died_before_delivery_still_reaches_the_strate
     await world.run_until(w.DAY0, 10, 40)
     assert notifications(world, "opt:fill:") == ["opt:fill:1"]
     assert world.count(m.WheelPosition) == 1
+    assert fill_jobs(world) == ["succeeded"]
+
+
+def fill_jobs(world: OptionsWorld, order_id: int = 1) -> list[str]:
+    with world.factory() as s:
+        rows = s.execute(select(m.JobRun.status).where(m.JobRun.job == fill_job_name(order_id)))
+        return list(rows.scalars())
+
+
+async def test_a_fill_older_than_the_look_back_is_left_alone(world: OptionsWorld) -> None:
+    await submit_and_stop(world)
+    world.quote("F", w.PUT_EXPIRY, "50", "put", "1.55")
+    world.go(w.DAY0, 10, 31)
+    await (await world.worker()).deps.broker.poll(world.clock.now())
+    await world.stop_worker()
+    assert world.count(m.OptFill) == 1
+
+    world.go(w.DAY0 + timedelta(days=4), 12, 0)  # Saturday: more than FILL_LOOKBACK after the fill
+    assert world.clock.now() - et(w.DAY0, 10, 31) > FILL_LOOKBACK
+    await world.step()
+    await world.step()
+    assert notifications(world, "opt:fill:") == [] and world.count(m.WheelPosition) == 0
+    assert fill_jobs(world) == []
+
+
+async def test_a_failed_on_fill_is_retried_and_a_repeat_changes_nothing(
+    db_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The wheel's `on_fill` raises after it opened the position (its journal row can't be written). The
+    job fails, the fill is offered again after the back-off, and neither that repeat nor a third delivery
+    opens a second position or counts the premium twice."""
+    add_event = WheelStore.add_event
+    failing = [True]
+
+    def flaky(self: WheelStore, kind: str, *args: Any, **kwargs: Any) -> bool:
+        if kind == "lifecycle" and failing[0]:
+            raise RuntimeError("journal unavailable")
+        return add_event(self, kind, *args, **kwargs)
+
+    async with w.open_world(db_factory, monkeypatch, tmp_path) as world:
+        await submit_and_stop(world)
+        world.quote("F", w.PUT_EXPIRY, "50", "put", "1.55")
+        monkeypatch.setattr(WheelStore, "add_event", flaky)
+        world.go(w.DAY0, 10, 31)
+        assert (await world.step()).fills == 1
+        (error,) = world.errors()  # the host's own; the job's failure is a warning
+        assert "on_fill (order 1) failed" in error
+        assert fill_jobs(world) == ["failed"] and notifications(world, "opt:fill:") == ["opt:fill:1"]
+        opened = world.wheel_position()
+
+        world.clock.advance(timedelta(seconds=30))
+        await world.step()  # inside the back-off: not offered
+        assert fill_jobs(world) == ["failed"] and len(world.errors()) == 1
+        failing[0] = False
+        world.clock.advance(timedelta(seconds=30))
+        await world.step()
+        assert fill_jobs(world) == ["failed", "succeeded"]
+        assert world.wheel_position() == opened and world.count(m.WheelPosition) == 1
+
+        rt = await world.inspect()  # a third delivery, as after a restart before the job row was written
+        (fill,) = undelivered_fills(world.factory, world.run_id, et(w.DAY0, 10, 31), "never:")
+        await rt.host.deliver_fill(fill)
+        await world.run_until(w.DAY0, 10, 36)
+        assert world.wheel_position() == opened and world.count(m.WheelPosition) == 1
+        assert [e.data for e in world.wheel().events(kind="lifecycle")] == [
+            {"event": "put_sold", "order_id": 1}
+        ]
+        assert notifications(world, "opt:fill:") == ["opt:fill:1"] and len(world.errors()) == 1
+        await world.assert_reconciled()

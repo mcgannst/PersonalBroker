@@ -118,6 +118,9 @@ async def test_stock_run_is_untouched(world: OptionsWorld) -> None:
             "options_postclose",
             "opt_event:wheel:opt_daily",
             "opt_event:wheel:postclose",
+            "opt_fill:baseline",  # the worker's marker: fills from here on are delivered through a job
+            "opt_fill:1",  # one per filled order: the put sold ...
+            "opt_fill:2",  # ... and its take-profit
         }
         # ... under names the soak never judges: not one of its fixed jobs, not a stock `event:<key>` row
         assert not jobs & set(soak.DEADLINES) and soak.WEEKLY_JOB not in jobs

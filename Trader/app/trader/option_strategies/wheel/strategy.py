@@ -982,7 +982,11 @@ class WheelStrategy:
     # --- fills ----------------------------------------------------------------------------------------------
 
     async def on_fill(self, ctx: OptionStrategyContext, fill: OptionFillEvent) -> list[OptionIntent]:
+        """Safe to repeat for the same order (the worker can deliver a fill twice): every branch ends with
+        a journal row naming the order, and a fill that has one is not applied again."""
         store = _store(ctx)
+        if store.fill_recorded(fill.order_id):
+            return []
         if fill.intent == "open":
             leg = next((x for x in fill.legs if x.instrument == "option" and x.contract_id is not None), None)
             if leg is None or leg.contract_id is None:
@@ -1011,7 +1015,9 @@ class WheelStrategy:
                 fees=fees,
                 entry=entry,
             )
-            self._journal(ctx, store, pos, "rolled", f"put rolled for a net credit of {fill.net_price}")
+            self._journal(
+                ctx, store, pos, "rolled", f"put rolled for a net credit of {fill.net_price}", fill.order_id
+            )
             return []
         if fill.structure_id == pos.put_structure_id:
             premium = pos.total_put_premium + fill.net_price  # the buy-back is a debit: a negative net
@@ -1019,7 +1025,12 @@ class WheelStrategy:
             store.close_position(pos.id, "put_closed", result, total_put_premium=premium, fees=fees)
             ctx.state.delete(pos_scope(pos.id))
             self._journal(
-                ctx, store, pos, "put_closed", f"put bought back at {-fill.net_price}: result {result}"
+                ctx,
+                store,
+                pos,
+                "put_closed",
+                f"put bought back at {-fill.net_price}: result {result}",
+                fill.order_id,
             )
             return []
         if fill.structure_id == pos.call_structure_id:
@@ -1032,11 +1043,13 @@ class WheelStrategy:
                 fees=fees,
                 fresh_cash_answer=None,
             )
-            self._journal(ctx, store, pos, "call_closed", f"call bought back at {-fill.net_price}")
+            self._journal(
+                ctx, store, pos, "call_closed", f"call bought back at {-fill.net_price}", fill.order_id
+            )
             return await self._evaluate(ctx, store, pos, daily=False)
         if fill.structure_id == pos.shares_structure_id:
             sale = next((x.price for x in fill.legs if x.instrument == "shares"), fill.net_price)
-            self._cycle_over(ctx, store, pos, "shares_sold", sale, fees)
+            self._cycle_over(ctx, store, pos, "shares_sold", sale, fees, fill.order_id)
         return []
 
     async def _put_sold(
@@ -1071,7 +1084,8 @@ class WheelStrategy:
             "ownership_reason": "" if t is None else t.ownership_reason,
             "usd_cad_rate": ctx.usd_cad_rate,
         }
-        pos = store.open_put(
+        # One position per put sold: a repeat that got this far before (no journal row yet) opens no second.
+        pos = store.by_put(fill.structure_id) or store.open_put(
             symbol_id=contract.underlying_symbol_id,
             ticker=contract.underlying,
             structure_id=fill.structure_id,
@@ -1082,7 +1096,9 @@ class WheelStrategy:
         )
         if t is not None and t.acknowledged:  # an acknowledgement covers one entry
             store.update_ticker(t.ticker, SYSTEM_ACTOR, acknowledged=frozenset())
-        self._journal(ctx, store, pos, "put_sold", f"sold the {contract.strike} put for {premium}")
+        self._journal(
+            ctx, store, pos, "put_sold", f"sold the {contract.strike} put for {premium}", fill.order_id
+        )
 
     def _call_sold(
         self,
@@ -1103,16 +1119,23 @@ class WheelStrategy:
             total_call_premium=pos.total_call_premium + premium,
             fees=pos.fees + fill.fees,
         )
-        self._journal(ctx, store, pos, "call_sold", f"sold the {contract.strike} call for {premium}")
+        self._journal(
+            ctx, store, pos, "call_sold", f"sold the {contract.strike} call for {premium}", fill.order_id
+        )
 
     def _journal(
-        self, ctx: OptionStrategyContext, store: WheelStore, pos: PositionRow, what: str, reason: str
+        self,
+        ctx: OptionStrategyContext,
+        store: WheelStore,
+        pos: PositionRow,
+        what: str,
+        reason: str,
+        order_id: int | None = None,
     ) -> None:
         """A fill or lifecycle event in the journal. No `action`: the panel's next action stays the last
-        evaluation's."""
-        store.add_event(
-            "lifecycle", pos.symbol_id, ctx.session_date, reason, position_id=pos.id, data={"event": what}
-        )
+        evaluation's. A fill's row names its order (`order_id`): that is what makes `on_fill` repeatable."""
+        data: dict[str, Any] = {"event": what} if order_id is None else {"event": what, "order_id": order_id}
+        store.add_event("lifecycle", pos.symbol_id, ctx.session_date, reason, position_id=pos.id, data=data)
         ctx.note(f"{pos.ticker}: {reason}", underlying=pos.ticker, position_id=pos.id)
 
     def _cycle_over(
@@ -1123,6 +1146,7 @@ class WheelStrategy:
         why: str,
         sale_price: Decimal,
         fees: Decimal,
+        order_id: int | None = None,
     ) -> None:
         """The shares are gone (sold, or called away): state NONE with the full-cycle result (WS §11). The
         ticker goes back to `candidate`: the wheel never re-enters it without a new approval (WS §9.6)."""
@@ -1140,7 +1164,7 @@ class WheelStrategy:
         store.update_ticker(pos.ticker, SYSTEM_ACTOR, status=CANDIDATE, acknowledged=frozenset())
         store.save_screen(pos.ticker, None, None)
         what = "shares sold" if why == "shares_sold" else "shares called away"
-        self._journal(ctx, store, pos, why, f"{what} at {sale_price}: full-cycle result {result}")
+        self._journal(ctx, store, pos, why, f"{what} at {sale_price}: full-cycle result {result}", order_id)
 
     # --- lifecycle ------------------------------------------------------------------------------------------
 

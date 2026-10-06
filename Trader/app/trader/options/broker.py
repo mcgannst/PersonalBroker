@@ -21,7 +21,8 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import String, func, select
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.orm import Session, sessionmaker
 
 from trader.adapters.questrade.models import QtQuote
@@ -188,6 +189,96 @@ def _closing_legs(structure: StructureView) -> tuple[OrderLeg, ...]:
 
 def _refuse(decision: CollateralDecision, reason: RejectReason, detail: str) -> CollateralDecision:
     return dataclasses.replace(decision, accepted=False, reject_reason=reason, detail=detail)
+
+
+def undelivered_fills(
+    factory: sessionmaker[Session], run_id: int, since: datetime, job_prefix: str
+) -> list[OptionFillEvent]:
+    """The run's orders filled at or after `since` that have no succeeded `job_runs` row named
+    `<job_prefix><order id>`, oldest first, each as the event `poll` returned for it. The options worker
+    records that job once the fill's message is sent and the strategy is told, so these are the fills a
+    worker that died (or a failing `on_fill`) left untold.
+
+    The event is rebuilt from the stored rows. Its `realized_pnl` is worked out from each closed position's
+    stored average price, which is the price the fill realized against unless that position was added to or
+    reopened since."""
+    order = m.OptOrder
+    told = (
+        select(m.JobRun.id)
+        .where(
+            m.JobRun.job == func.concat(job_prefix, sql_cast(order.id, String)),
+            m.JobRun.status == "succeeded",
+        )
+        .exists()
+    )
+    with factory() as s:
+        rows = s.execute(
+            select(order)
+            .where(order.run_id == run_id, order.status == "filled", order.closed_at >= since, ~told)
+            .order_by(order.id)
+        ).scalars()
+        events = [_stored_fill(s, row) for row in list(rows)]
+    return [event for event in events if event is not None]
+
+
+def _stored_fill(s: Session, row: m.OptOrder) -> OptionFillEvent | None:
+    """The fill event of a filled order, from its rows (None when it has no fill rows)."""
+    if row.structure_id is None or row.closed_at is None or row.fill_net is None:
+        return None
+    stored = s.execute(
+        select(m.OptFill, m.OptOrderLeg)
+        .join(m.OptOrderLeg, m.OptOrderLeg.id == m.OptFill.leg_id)
+        .where(m.OptFill.order_id == row.id)
+        .order_by(m.OptOrderLeg.leg_no)
+    ).all()
+    if not stored:
+        return None
+    contracts = load_contracts(s, [leg.contract_id for _, leg in stored if leg.contract_id is not None])
+    avg_prices = {
+        contract_id: avg
+        for contract_id, avg in s.execute(
+            select(m.OptPosition.contract_id, m.OptPosition.avg_price).where(
+                m.OptPosition.structure_id == row.structure_id
+            )
+        )
+    }
+    realized: Decimal | None = None
+    for fill, leg in stored:
+        if leg.effect != "close":
+            continue
+        realized = ZERO if realized is None else realized
+        avg = avg_prices.get(leg.contract_id)
+        if avg is None:
+            continue
+        multiplier = 1 if leg.contract_id is None else contracts[leg.contract_id].multiplier
+        per_unit = avg - fill.price if leg.side == "buy" else fill.price - avg  # a buy closes a short
+        realized += q4(per_unit * fill.qty * multiplier)
+    return OptionFillEvent(
+        order_id=row.id,
+        structure_id=row.structure_id,
+        source=row.source,
+        strategy_config_id=row.strategy_config_id,
+        intent=cast(Any, row.intent),
+        ts=row.closed_at,
+        qty=row.qty,
+        net_price=row.fill_net,
+        fees=row.fees if row.fees is not None else ZERO,
+        legs=tuple(
+            LegFill(
+                leg_no=leg.leg_no,
+                instrument=cast(Any, leg.instrument),
+                contract_id=leg.contract_id,
+                side=cast(Any, leg.side),
+                effect=cast(Any, leg.effect),
+                qty=fill.qty,
+                price=fill.price,
+                fee=fill.fee,
+                quote=dict(fill.quote),
+            )
+            for fill, leg in stored
+        ),
+        realized_pnl=realized,
+    )
 
 
 class SimOptionBroker:

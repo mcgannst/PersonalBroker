@@ -249,6 +249,33 @@ class WheelStore:
             ).scalar_one_or_none()
             return None if row is None else _position(row)
 
+    def by_put(self, structure_id: int) -> PositionRow | None:
+        """The wheel position, open or closed, that was opened for the put sold as `structure_id`."""
+        p = m.WheelPosition
+        with self._factory() as s:
+            row = s.execute(
+                select(p)
+                .where(p.run_id == self._run_id, p.put_structure_id == structure_id)
+                .order_by(p.id)
+                .limit(1)
+            ).scalar_one_or_none()
+            return None if row is None else _position(row)
+
+    def fill_recorded(self, order_id: int) -> bool:
+        """Whether the journal has the row `on_fill` writes last for the fill of that order."""
+        e = m.WheelEvent
+        with self._factory() as s:
+            found = s.execute(
+                select(e.id)
+                .where(
+                    e.run_id == self._run_id,
+                    e.kind == "lifecycle",
+                    e.data["order_id"].as_integer() == order_id,
+                )
+                .limit(1)
+            ).first()
+            return found is not None
+
     def cycles(self, symbol_id: int) -> int:
         """How many wheel cycles on this ticker have ended, in any run (prompt keys count on it)."""
         with self._factory() as s:

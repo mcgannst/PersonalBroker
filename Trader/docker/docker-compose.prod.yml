@@ -19,8 +19,8 @@ services:
       - trader_internal
       - proxy
     init: true
-    # At least the sum of supervisord's stopwaitsecs (api 15 + worker 60 + cron 30).
-    stop_grace_period: 120s
+    # At least the sum of supervisord's stopwaitsecs (api 15 + worker 60 + options-worker 30 + cron 30).
+    stop_grace_period: 150s
     restart: unless-stopped
     # Resource limits (P5-T16), the same as docker-compose.dev.yml, so the container cannot exhaust the
     # shared Docker host. They cover every process in the container: the API, the worker, cron jobs and a

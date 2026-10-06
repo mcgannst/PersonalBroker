@@ -520,6 +520,8 @@ def test_the_weekly_crontab_line_is_supercronic_shaped_and_a_replay_quiet_time()
         minute, hour, dom, month, dow, *cmd = fields
         assert minute.isdigit() and hour.isdigit() and dom == "*" and month == "*", line
         assert cmd[0] == "trader" and cmd[1] in commands, line
+        if cmd[1].startswith("options-"):  # OPTSIM-T16: own client at 2 requests/s (risk R9)
+            continue
         if "-" in dow:
             lo, hi = (int(x) for x in dow.split("-"))
             cron_days = set(range(lo, hi + 1))

@@ -14,6 +14,12 @@
 # Saturday 10:30 after the weekly report, settling the week's last session (`--final`). QUOTEBAR: the 09:47
 # `openbar-check` compares the 9:35 opening bars built from live quotes with the official 09:30-09:35 candles,
 # which Stephen's market-data package publishes ~10 minutes late; it retries in-process until 10:30.
+# OPTSIM (options simulation, T16): the four `options-*` lines at the end. 08:15 `options-refresh` (facts,
+# chains and daily bars of the watched underlyings); 10:35 `options-event --due` backs up the strategies'
+# daily event (10:30, fired by the options worker) and fires only what is due and has not run; 16:20
+# `options-postclose` (day-order expiry, option expiry and assignment, marks, snapshot, summary), after the
+# stock post-close; Saturday 08:00 `options-event wheel screen`, the wheel's weekly market screen. Each does
+# nothing without an options run or on a day that is not a session, and paces Questrade at 2 requests a second.
 CRON_TZ=America/New_York
 0 2 * * *      trader token-refresh
 0 20 * * 0-4   trader nightly
@@ -33,3 +39,7 @@ CRON_TZ=America/New_York
 0 9 * * 6      trader weekly
 5 18 * * 1-5   trader soak-report --notify
 30 10 * * 6    trader soak-report --notify --final
+15 8 * * 1-5   trader options-refresh
+35 10 * * 1-5  trader options-event --due
+20 16 * * 1-5  trader options-postclose
+0 8 * * 6      trader options-event wheel screen

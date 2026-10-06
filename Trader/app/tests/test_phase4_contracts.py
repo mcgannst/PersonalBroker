@@ -147,6 +147,7 @@ ROUTER_ORDER = [
     "decisions",  # P6-T12
     "live",  # DB-T1
     "control",  # DB-T1
+    "options",  # OPTSIM-T16
     "stream",
 ]
 
@@ -227,7 +228,7 @@ def test_every_contract_module_imports_with_its_names(module: str) -> None:
 
 def test_routers_are_the_seventeen_in_order() -> None:
     assert (
-        len(ROUTERS) == 20
+        len(ROUTERS) == 21
     )  # Phase 5 added replays and reports (P5-T1), P6-T12 decisions, DB-T1 live/control
     assert all(isinstance(r, APIRouter) for r in ROUTERS)
     for name, router in zip(ROUTER_ORDER, ROUTERS, strict=True):

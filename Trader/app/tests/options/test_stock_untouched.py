@@ -5,7 +5,8 @@ Compares the OPTSIM base with the working tree (so it also judges changes that a
 - nothing changed, appeared or disappeared under the stock engine's paths (`PROTECTED`);
 - no test file that existed at the base changed, except the three files task T16 may edit (`ALLOWED_TESTS`)
   and the contract pins (`PINNED_TESTS`): existing tests that pin a list OPTSIM is specified to extend
-  (the migration head, the `ApiServices` field list). Each has a rule saying exactly which lines may change;
+  (the migration head, the `ApiServices` field list, the router count and order, the crontab lines a
+  replay waits out). Each has a rule saying exactly which lines may change;
 - the golden replay files are unchanged;
 - every job line of `docker/crontab` at the base is still there, unaltered (new lines are allowed).
 
@@ -88,16 +89,55 @@ def only_added(*allowed: str) -> Callable[[str], bool]:
     return rule
 
 
+def only_these(*, removed: tuple[str, ...] = (), added: tuple[str, ...]) -> Callable[[str], bool]:
+    """A rule: the diff removes and adds nothing but the given lines, each at most as often as it is
+    listed (a line listed twice may be added twice)."""
+    may_remove, may_add = Counter(removed), Counter(added)
+
+    def rule(diff: str) -> bool:
+        gone, new = _changes(diff)
+        return all(n <= may_remove[line] for line, n in gone.items()) and all(
+            n <= may_add[line] for line, n in new.items()
+        )
+
+    return rule
+
+
 # Existing tests that pin a list OPTSIM is specified to extend, and what may change in each.
 # - Migration 0011 moves the head (as every earlier migration did): only the revision number may change.
 # - `ApiServices.options` is a new last field (task plan §1 rule 2): only that name may be added to the list.
+# - T16 registers the options router before `stream` (task plan §3.11): the router count goes from 20 to 21
+#   and "options" joins the pinned order (phase 4: one more `"options",` line; phase 5: the tail of tags).
 PINNED_TESTS: dict[str, Callable[[str], bool]] = {
     f"{TESTS}db/test_migration_0007.py": only_revision_numbers_changed,
     f"{TESTS}db/test_migration_0008.py": only_revision_numbers_changed,
     f"{TESTS}db/test_migration_0009.py": only_revision_numbers_changed,
     f"{TESTS}db/test_migration_0010.py": only_revision_numbers_changed,
     f"{TESTS}api/test_system.py": only_revision_numbers_changed,
-    f"{TESTS}test_phase4_contracts.py": only_added('"options",'),
+    f"{TESTS}test_phase4_contracts.py": only_these(
+        removed=("len(ROUTERS) == 20",),
+        added=('"options",', '"options",', "len(ROUTERS) == 21"),
+    ),
+    # `QUIET_TIMES` (trader/replay/data.py, a protected path) lists the stock cron lines a full-mode replay
+    # waits out, and this test asserts it covers EVERY crontab line. The four `options-*` lines can't be
+    # added to that table, so the test skips them: the options commands use their own Questrade client at
+    # 2 requests per second (risk R9) and never push the limit a replay shares with the stock jobs.
+    f"{TESTS}replay/test_data.py": only_these(
+        added=('if line.split()[6].startswith("options-"):', "continue"),
+    ),
+    f"{TESTS}gauntlet/test_p5_t17_breaker.py": only_these(
+        added=('if cmd[1].startswith("options-"):', "continue"),
+    ),
+    f"{TESTS}test_phase5_contracts.py": only_these(
+        removed=(
+            "assert len(ROUTERS) == 20",
+            'assert tags[-6:] == ["replays", "reports", "decisions", "live", "control", "stream"]',
+        ),
+        added=(
+            "assert len(ROUTERS) == 21",
+            'assert tags[-7:] == ["replays", "reports", "decisions", "live", "control", "options", "stream"]',
+        ),
+    ),
 }
 
 
@@ -222,6 +262,13 @@ def test_the_checks_catch_what_they_should() -> None:
     assert not field('+        "options",\n+        "options",')
     assert not field('+        "options",\n+        "extra",')
     assert not field('-        "replays",\n+        "options",')
+
+    routers = only_these(removed=("len(ROUTERS) == 20",), added=('"options",', '"options",', "x == 21"))
+    assert routers("") and routers('+    "options",  # T1\n+    "options",  # T16\n-        len(ROUTERS) == 20')
+    assert routers("-        len(ROUTERS) == 20\n+        x == 21")
+    assert not routers('+    "options",\n+    "options",\n+    "options",')  # one more than listed
+    assert not routers("-        len(ROUTERS) == 20\n-        len(ROUTERS) == 20")
+    assert not routers('-    "stream",') and not routers('+    "extra",')
 
     assert _job_lines("# comment\n\n15 8 * * 1-5 trader x\n  0 9 * * 6 trader y  \n") == [
         "15 8 * * 1-5 trader x",

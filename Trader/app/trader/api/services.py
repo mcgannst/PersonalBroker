@@ -48,6 +48,7 @@ from trader.engine.killswitch import KillSwitches
 from trader.engine.proposals import Decision, DecisionResult, Via
 from trader.market.data_service import MarketDataService
 from trader.market.types import Candle, Interval
+from trader.options import runtime as options_runtime
 from trader.settings_store import RuntimeSettings
 from trader.strategies.registry import StrategyRegistry
 
@@ -188,13 +189,14 @@ async def build_services(core: Core, stack: AsyncExitStack) -> ApiServices:
         return await data.candles(symbol_id, start, end, CANDLE_INTERVAL)
 
     api = await runtime.open_telegram(core, stack)
+    notifier = runtime.build_notifier(core, api)
     return ApiServices(
         core=core,
         registry=registry,
         killswitches=KillSwitches(factory, clock),
         credentials=runtime.questrade_auth(core),
         decider_for=guarded_decider(core, settings),
-        notifier=runtime.build_notifier(core, api),
+        notifier=notifier,
         telegram_configured=runtime.telegram_configured(core.env),
         quotes=CachedQuotes(data.quotes, clock, lambda: float(settings().web_quote_cache_seconds)),
         candles=candles,
@@ -203,4 +205,7 @@ async def build_services(core: Core, stack: AsyncExitStack) -> ApiServices:
         plan=runtime.plan_builder(core),
         fired=runtime.fired_for(core),
         replays=SubprocessReplayLauncher(factory, clock),
+        # OPTSIM-T16: the Options page's services, on their own Questrade client (2 requests per second).
+        # None when they can't be built (logged there): the option routes answer 503, the rest is unaffected.
+        options=await options_runtime.build_api_services(core, stack, notifier=notifier),
     )

@@ -18,6 +18,7 @@ from trader.api.routers import (
     killswitch,
     live,
     meta,
+    options,
     performance,
     proposals,
     replays,
@@ -50,5 +51,6 @@ ROUTERS: tuple[APIRouter, ...] = (
     decisions.router,  # P6-T12
     live.router,  # DB-T1 (live dashboard)
     control.router,  # DB-T1 (Control page)
+    options.router,  # OPTSIM-T16 (Options page)
     stream.router,
 )

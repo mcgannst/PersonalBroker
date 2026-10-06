@@ -685,6 +685,8 @@ def test_quiet_times_cover_every_crontab_line() -> None:
         line = raw.strip()
         if not line or line.startswith("#") or "=" in line.split()[0]:
             continue
+        if line.split()[6].startswith("options-"):  # OPTSIM-T16: own client at 2 requests/s (risk R9)
+            continue
         minute, hour, _dom, _mon, dow = line.split()[:5]
         cron_days: set[int] = set()
         for part in dow.split(","):

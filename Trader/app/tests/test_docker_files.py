@@ -26,7 +26,7 @@ SUPERVISORD = DOCKER / "supervisord.conf"
 ENTRYPOINT = DOCKER / "entrypoint.sh"
 DEPLOY = DOCKER / "deploy.sh"
 SMOKE = DOCKER / "smoke.sh"
-PROGRAMS = ("api", "worker", "cron")
+PROGRAMS = ("api", "worker", "options-worker", "cron")  # OPTSIM-T16 added the options worker
 
 # Throwaway values the stubbed runs see. Each must never appear in a script's output.
 OWNER_URL = "postgresql+psycopg://owner:Owner-Pw-7f3a@db:5432/x"
@@ -248,10 +248,30 @@ def test_supervisord_logs_to_stdout_and_keeps_its_files_under_tmp() -> None:
 
 def test_supervisord_stops_cron_then_worker_then_api() -> None:
     """supervisord stops the highest priority number first: no new cron job starts while the worker is
-    stopping, and the web stays up until the worker has written its `stopped` heartbeat."""
+    stopping, and the web stays up until the worker has written its `stopped` heartbeat. The options worker
+    (OPTSIM-T16) stops after cron and before the stock worker."""
     conf = _supervisord()
     priority = {name: int(conf[f"program:{name}"]["priority"]) for name in PROGRAMS}
-    assert priority["cron"] > priority["worker"] > priority["api"]
+    assert priority["cron"] > priority["options-worker"] > priority["worker"] > priority["api"]
+
+
+def test_supervisord_runs_the_options_worker_directly_and_restarts_it() -> None:
+    """OPTSIM-T16: `python -m trader.options.worker` with no wrapper script (a second copy sleeps 30 s
+    itself before exit 2, so supervisord never spins), restarted on every exit (2 lock held, 3 lock lost,
+    4 the options run changed), with at least the worker's own 30 s to finish its step and stop."""
+    from trader.options.worker import LOCK_HELD_SLEEP_SECONDS
+
+    program = _supervisord()["program:options-worker"]
+    assert program["command"] == "/app/.venv/bin/python -m trader.options.worker"
+    assert program["priority"] == "250"
+    assert program["autostart"] == "true" and program["autorestart"] == "true"
+    assert program["stopsignal"] == "TERM"
+    assert int(program["stopwaitsecs"]) >= 30
+    assert int(program["startretries"]) >= 100  # a failing start never exhausts supervisord's retries
+    assert LOCK_HELD_SLEEP_SECONDS > int(program["startsecs"])  # exit 2 comes after a real wait
+    # the module supervisord names exists and is runnable as a module
+    assert (TRADER / "app" / "trader" / "options" / "worker.py").exists()
+    assert (TRADER / "app" / "trader" / "options" / "__main__.py").exists()
 
 
 # --- 4. compose files ---------------------------------------------------------------------------------------

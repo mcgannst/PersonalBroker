@@ -36,6 +36,11 @@ EXPECTED = {
     ("0 9 * * 6", "trader weekly"),  # P5-T17: Saturday 09:00 ET, the week just ended (SPEC §9)
     ("5 18 * * 1-5", "trader soak-report --notify"),  # P6-T2: 18:05 ET = 16:05 MT, after the post-close
     ("30 10 * * 6", "trader soak-report --notify --final"),  # P6-T2: Sat 10:30 ET, after the weekly report
+    # OPTSIM-T16: the options simulation (task plan T16)
+    ("15 8 * * 1-5", "trader options-refresh"),
+    ("35 10 * * 1-5", "trader options-event --due"),
+    ("20 16 * * 1-5", "trader options-postclose"),
+    ("0 8 * * 6", "trader options-event wheel screen"),
 }
 # SPEC §9 times (ET) of the weekday jobs, plus the documented 12:55 flatten and 12:32 / 15:32 overlay backups.
 WEEKDAY_ET = {
@@ -49,6 +54,9 @@ WEEKDAY_ET = {
     "trader checkin --at 13:30": [time(13, 30)],
     "trader postclose": [time(16, 15)],
     "trader soak-report --notify": [time(18, 5)],
+    "trader options-refresh": [time(8, 15)],
+    "trader options-event --due": [time(10, 35)],
+    "trader options-postclose": [time(16, 20)],
 }
 RANGES = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 7)]
 
@@ -161,3 +169,56 @@ def test_an_event_due_line_backs_up_the_overlay_decision_before_the_close(day: d
     close = cal.session_close(day)
     backups = _et_times("trader event --due", day)
     assert any(overlay <= t < close for t in backups), (day, overlay, close, backups)
+
+
+# --- OPTSIM-T16: the options lines --------------------------------------------------------------------------
+
+
+def _option_plugins() -> dict[str, type]:
+    from trader.option_strategies.registry import load_all
+
+    return load_all()
+
+
+def test_an_options_event_line_names_an_installed_plug_in_and_one_of_its_events() -> None:
+    """`trader options-event <strategy> <key>`: the strategy is an installed plug-in (by entry point) and
+    the key is one of its manual or scheduled events, so the line can never name nothing."""
+    plugins = _option_plugins()
+    cal = SessionCalendar()
+    named = 0
+    for _, command in _jobs():
+        words = command.split()
+        if words[1] != "options-event" or words[2].startswith("--"):
+            continue
+        strategy, key = words[2], words[3]
+        assert strategy in plugins, command
+        cls = plugins[strategy]
+        scheduled = {e.key for e in cls(cls.params_model()).schedule(cal)}
+        assert key in set(cls.manual_events) | scheduled, command
+        named += 1
+    assert named == 1  # the Saturday screen
+
+
+@pytest.mark.parametrize(
+    "day",
+    [date(2026, 10, 6), date(2026, 11, 27), date(2026, 12, 24), date(2026, 12, 1)],  # normal, early x2, EST
+)
+def test_the_options_lines_sit_around_the_session_as_the_jobs_need(day: date) -> None:
+    """The refresh runs before the open; `options-event --due` runs after every plug-in's scheduled events
+    (at their default settings) and before the close, early closes included; the post-close runs after the
+    close and after the stock post-close line."""
+    cal = SessionCalendar()
+    opens, close = cal.session_open(day), cal.session_close(day)
+    [refresh] = _et_times("trader options-refresh", day)
+    [due] = _et_times("trader options-event --due", day)
+    [postclose] = _et_times("trader options-postclose", day)
+    [stock_postclose] = _et_times("trader postclose", day)
+    assert refresh < opens
+    assert postclose >= close and postclose > stock_postclose
+    scheduled = [
+        event.at.resolve(cal, day)
+        for cls in _option_plugins().values()
+        for event in cls(cls.params_model()).schedule(cal)
+    ]
+    assert scheduled, "no option plug-in schedules an event: wrong entry points"
+    assert all(at <= due < close for at in scheduled), (day, scheduled, due, close)

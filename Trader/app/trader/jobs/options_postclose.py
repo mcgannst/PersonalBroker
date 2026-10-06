@@ -19,6 +19,9 @@ so the runner's in-process retry and a later manual run pick it up. Nothing is d
 are already expired, lifecycle events are unique per position, kind and day, delivery is marked on the
 event, the snapshot is one row per (run, close time), and the notifier drops a repeated dedupe key.
 
+While an official close is missing, steps 6 and 8 wait: both go out once per session, so they are left to
+the attempt that settles everything and then tell the whole day.
+
 The official close (risk R8): for today, once the session has closed, the share quote's regular-hours last
 trade; otherwise, and for any earlier day, that day's daily candle. None means "not known yet".
 """
@@ -445,10 +448,16 @@ async def run_postclose(deps: PostcloseDeps, run_id: int, session_date: date) ->
         detail["equity"] = str(account.equity)
         detail["marks_complete"] = account.marks_complete
 
-    # 6: the plug-ins' post-close event
-    fired = await steps.run("post-close events", _fire_postclose(deps, session_date), {})
-    detail["events"] = fired
-    steps.problems += [f"{key}: the post-close event failed" for key, st in fired.items() if st == "failed"]
+    # 6: the plug-ins' post-close event. Both it and the summary (8) go out once per session, so while an
+    # official close is missing they wait: the attempt that settles everything sends them.
+    if missing:
+        detail["events"] = {}
+    else:
+        fired = await steps.run("post-close events", _fire_postclose(deps, session_date), {})
+        detail["events"] = fired
+        steps.problems += [
+            f"{key}: the post-close event failed" for key, st in fired.items() if st == "failed"
+        ]
 
     # 7: prompts
     detail["prompts_synced"] = await steps.run("sync prompts", deps.host.sync_prompts(), 0)
@@ -457,6 +466,8 @@ async def run_postclose(deps: PostcloseDeps, run_id: int, session_date: date) ->
     # 8: the summary
     if account is None:
         detail["summary"] = "no account"
+    elif missing:
+        detail["summary"] = "waiting for the official close"
     else:
         today = merged(
             stored_events(deps.factory, run_id, session_date=session_date),

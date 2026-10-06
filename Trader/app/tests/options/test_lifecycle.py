@@ -334,6 +334,15 @@ async def test_assignment_fee_charged_once() -> None:
     assert env.book.cash() == D(5000) - D(2905)
 
 
+async def test_assignment_fee_does_not_turn_a_reserved_put_into_a_cash_settlement() -> None:
+    env = Env("1450", assignment_fee=D(5))  # the reserve is the strike: the fee is not part of it
+    csp(env)
+    env.set_close("14")
+    events = await env.engine.run_expiry(EXPIRY)
+    assert summary(events) == [("assigned", 100, D(-1455))] and env.settled() == ["shares"]
+    assert [m.amount for m in env.book.ledger if m.kind == "fee"] == [D(-5)]
+
+
 async def test_missing_close_changes_nothing_and_is_retried() -> None:
     env = Env()
     sid = csp(env)

@@ -1,6 +1,6 @@
 """OPTSIM wave 2b breaker (T4 collateral, T6 lifecycle, T7 host, T9 wheel rules): cases the builders' tests do
-not already prove. A test marked `xfail(strict=True)` pins a real defect: it turns red when the defect is
-fixed, and the mark is then removed.
+not already prove. The four defects it first pinned as `xfail(strict=True)` are fixed (round OPTSIM-fix-B)
+and their tests now run as plain tests.
 
 The builders' own helpers are reused: the collateral book builders, the lifecycle `Env`, the host `Env` and
 `Probe`, and the wheel rule builders."""
@@ -69,11 +69,6 @@ D = Decimal
 # --- T4: no naked short, ever (decision D5) -----------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="T4: an order whose two short calls are covered by two share lots records one cover link, so "
-    "the second lot can be sold from under its call",
-)
 def test_two_calls_on_two_share_lots_keep_both_lots_committed() -> None:
     lots = [structure(1, "shares", [(None, 100, "15")]), structure(9, "shares", [(None, 100, "15")])]
     opened = ENGINE.evaluate(order([sell(C15, 1), sell(C16, 2)], "0.80"), book(structures=lots))
@@ -91,11 +86,6 @@ def test_two_calls_on_two_share_lots_keep_both_lots_committed() -> None:
     assert (sold.accepted, sold.reject_reason) == (False, "shares_committed")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="T4/T5: closing the long leg moves the short call onto another structure's shares, but that "
-    "link is stored nowhere (the broker only sets the reserve on a close), so the shares stay free",
-)
 def test_a_call_left_on_another_structures_shares_keeps_them_committed() -> None:
     spread = structure(4, "debit_spread", [(C15, 1, "0.60"), (C16, -1, "0.20")])
     left = ENGINE.evaluate(
@@ -115,11 +105,6 @@ def test_a_call_left_on_another_structures_shares_keeps_them_committed() -> None
     assert (second_call.accepted, second_call.reject_reason) == (False, "naked_short")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="T4: a 'close' of a put spread's long leg turns it into a cash-secured put and is never "
-    "checked against the per-underlying cap (D9): the cap is bypassed in two orders",
-)
 def test_closing_a_spreads_long_put_cannot_lift_the_underlying_over_the_cap() -> None:
     held = [PUT_CREDIT_SPREAD, structure(8, "csp", [(P13, -1, "0.30")], reserved="1300")]
 
@@ -360,11 +345,6 @@ async def test_rubbish_from_one_plugin_does_not_reach_the_others(env: HostEnv) -
 # --- T9: the wheel rules against the owner's spec -----------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="T9: debt over the limit plus a MISSING eps growth figure makes test 3 FAIL, so one blank field "
-    "from the data feed fails the business check and forces CLOSE_PUT_NOW / SELL_SHARES (WS §3.5, §7)",
-)
 def test_a_missing_growth_figure_alone_does_not_force_an_exit() -> None:
     gap = facts(eps_growth_yoy=None, debt_to_equity="1.5")
 

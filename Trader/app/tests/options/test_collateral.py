@@ -299,6 +299,24 @@ def test_naked_rejections(
     assert decision.detail
 
 
+def test_one_order_takes_its_share_cover_from_one_structure_and_no_need_is_dropped() -> None:
+    two_calls = order([sell(C15, 1), sell(C16, 2)], "0.80")
+    one_lot = ENGINE.evaluate(two_calls, book(structures=[structure(1, "shares", [(None, 200, "15")])]))
+
+    assert one_lot.accepted, one_lot.detail
+    assert (covers(one_lot), one_lot.cover_structure_id) == ([(1, "shares", 1), (2, "shares", 1)], 1)
+
+    # calls that need more than their linked lot holds: the rest is counted against the source's other lot
+    lots = [SHARES_100, structure(9, "shares", [(None, 100, "15")])]
+    calls = structure(2, "custom", [(C15, -1, "0.45"), (C16, -1, "0.40")], cover=1)
+    sold = ENGINE.evaluate(
+        close([shares("sell", effect="close")], 9, "14.90"), book(structures=[*lots, calls])
+    )
+    again = ENGINE.evaluate(order([sell(C15_DEC)]), book(structures=[*lots, calls]))
+
+    assert (sold.reject_reason, again.reject_reason) == ("shares_committed", "naked_short")
+
+
 # --- cash and the cap ---------------------------------------------------------------------------------------
 
 OTHER_SOURCE_PUT = structure(

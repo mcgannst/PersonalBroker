@@ -855,6 +855,12 @@ class SimOptionBroker:
             book.close_structure(target, "sold" if view.kind == "shares" else "closed", now)
         elif order.intent != "open":
             book.set_reserved(target, decision.reserve_cash)
+            # a close or a roll can move a short call onto another structure's shares (or off them): the
+            # link is what keeps those shares committed. `OptionBook` has no setter for it.
+            structure_row = s.get(m.OptStructure, target)
+            if structure_row is not None and structure_row.cover_structure_id != decision.cover_structure_id:
+                structure_row.cover_structure_id = decision.cover_structure_id
+                s.flush()
             if order.intent == "roll" and opening:
                 entry = net_price(opening, prices, multipliers)
                 book.set_entry(target, entry, take_profit_net(entry, order.take_profit_pct))

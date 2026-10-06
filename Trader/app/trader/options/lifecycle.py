@@ -119,16 +119,18 @@ def _shares_held(structure: StructureView | None) -> int:
     return sum(p.qty for p in structure.positions if p.instrument == "shares")
 
 
-def _choose_settlement(legs: Sequence[_Leg], held: int, free_cash: Decimal, fee: Decimal) -> None:
+def _choose_settlement(legs: Sequence[_Leg], held: int, free_cash: Decimal) -> None:
     """Turn share settlement into cash settlement, one leg at a time, until no shares go short and free
-    cash covers the night's net cash (risk R7). Shares bought the same night count as deliverable."""
+    cash covers the night's net cash (risk R7). Shares bought the same night count as deliverable. The
+    assignment fee is left out of that test (it is still charged): a put's reserve is its strike, so the
+    fee alone must not turn a fully reserved assignment into a cash settlement."""
     while True:
         live = [leg for leg in legs if leg.settled == "shares"]
         buys = [leg for leg in live if leg.buys]
         sells = [leg for leg in live if not leg.buys]
         if held + sum(leg.shares for leg in buys) - sum(leg.shares for leg in sells) < 0:
             sells[-1].settled = "intrinsic"
-        elif buys and free_cash + sum((leg.cash(fee) for leg in legs), ZERO) < 0:
+        elif buys and free_cash + sum((leg.cash(ZERO) for leg in legs), ZERO) < 0:
             buys[-1].settled = "intrinsic"
         else:
             return
@@ -384,7 +386,7 @@ class LifecycleEngine:
         going = {leg.pos.id for leg in legs}
         shorts_stay = any(p.instrument == "option" and p.qty < 0 and p.id not in going for p in st.positions)
         free_cash = book.cash() - book.reserved() + (ZERO if shorts_stay else st.reserved_cash)
-        _choose_settlement(legs, held_before, free_cash, fee)
+        _choose_settlement(legs, held_before, free_cash)
         selling = any(leg.settled == "shares" and not leg.buys for leg in legs)
 
         def rank(leg: _Leg) -> int:  # expiries, then shares in, then shares out, then cash settlements

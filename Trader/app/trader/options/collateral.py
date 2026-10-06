@@ -23,6 +23,8 @@ What the numbers of a `CollateralDecision` mean:
 Cover: a short leg is covered by a long leg of the same right and multiplier that expires on or after it
 (used once), else a short call by 100 free shares per contract of the same source, else a short put by
 cash. Shares are free when no other open structure's call and no working order's call relies on them.
+The short calls of one order that its own structure's shares do not cover are all covered by ONE other
+shares structure (`cover_structure_id`, the single link a structure carries), or the order is refused.
 """
 
 from collections.abc import Mapping, Sequence
@@ -225,18 +227,23 @@ class DefaultCollateralEngine:
         )
         others_rely_on_these = free_shares[own_key] < 0
         covers, open_shorts = _pair_longs(lines)
-        uncovered: list[_Opt] = []
+        outside: list[tuple[_Opt, int]] = []  # short calls the structure's own shares do not cover
         for short, n in open_shorts:
             if short.contract.right == "put":
                 covers.append(_Cover(short, n, "cash"))
                 continue
             need = n * short.contract.multiplier
-            holder = next((sid for sid in candidates if free_shares.get(sid, 0) >= need), None)
-            if holder is None:
-                uncovered.append(short)
-                continue
-            free_shares[holder] -= need
-            covers.append(_Cover(short, n, "shares", ref=None if holder == own_key else holder))
+            if free_shares[own_key] >= need:
+                free_shares[own_key] -= need
+                covers.append(_Cover(short, n, "shares"))
+            else:
+                outside.append((short, n))
+        # the structure row carries one cover link, so one other structure covers all of them together
+        outside_need = sum(n * short.contract.multiplier for short, n in outside)
+        holder = next((sid for sid in candidates[1:] if free_shares.get(sid, 0) >= outside_need), None)
+        if holder is not None:
+            covers += [_Cover(short, n, "shares", ref=holder) for short, n in outside]
+        uncovered = [] if holder is not None else [short for short, _ in outside]
         held_uncovered = [u for u in uncovered if u.leg_no is None]
         if sells_shares and (others_rely_on_these or held_uncovered):
             return no("shares_committed", "the shares being sold cover an open or working short call")
@@ -251,11 +258,10 @@ class DefaultCollateralEngine:
             return no(
                 "naked_short",
                 f"leg {uncovered[0].leg_no}: short {contract_label(uncovered[0].contract)} has no cover "
-                f"(needs a long call expiring on or after it, or {uncovered[0].contract.multiplier} free "
-                f"shares per contract held by {req.source} in one structure)",
+                f"(needs a long call expiring on or after it, or {outside_need} free shares held by "
+                f"{req.source} in one structure for all the short calls of the order together)",
             )
         reserve = _reserve(covers)
-        external = [c.ref for c in covers if c.kind == "shares" and c.ref is not None]
         base = replace(
             base,
             reserve_cash=reserve,
@@ -264,7 +270,7 @@ class DefaultCollateralEngine:
                 for c in covers
                 if c.short.leg_no is not None
             ),
-            cover_structure_id=external[0] if external else None,
+            cover_structure_id=holder if outside else None,
         )
 
         # 9. prices
@@ -281,6 +287,7 @@ class DefaultCollateralEngine:
         reserve_change = reserve - reserve_now
         free_after = free_now + cash_flow - base.fees - reserve_change
         debit = max(-cash_flow, ZERO)
+        # what a close pays buys nothing new; the reserve it adds (a spread left as a bare put) does count
         exposure_change = reserve_change if req.intent == "close" else reserve_change + debit
         base = replace(
             base,
@@ -299,8 +306,9 @@ class DefaultCollateralEngine:
                 f"{base.fees:.2f} fees, {reserve_change:.2f} more reserved",
             )
 
-        # 11. the cap per underlying (a closing order never fails it)
-        if req.intent != "close" and exposure_change > 0 and base.exposure_after > base.cap_limit:
+        # 11. the cap per underlying: any order that raises the exposure, whatever its intent (an order that
+        # does not raise it never fails the cap)
+        if exposure_change > 0 and base.exposure_after > base.cap_limit:
             return no(
                 "position_cap",
                 f"{req.underlying} exposure would be {base.exposure_after:.2f}, over the cap of "
@@ -404,24 +412,49 @@ def _free_shares(
     """Shares of each open structure on the underlying that no call relies on: what is held, less what
     working orders already sell, less what the short calls of every OTHER structure and of every working
     order need. The calls of the structure the order acts on are left out (the caller works out what that
-    structure needs after the order); a negative number means more is relied on than is there."""
+    structure needs after the order); a negative number means more is relied on than is there.
+
+    A call's need is never dropped: it is charged to the structure's own shares, then to the shares
+    structure it is linked to, and what is left (no link, or a linked lot that is too small) to the other
+    lots of the same source, so those shares can be neither sold nor used again."""
     structures = [s for s in book.structures if s.underlying == underlying and s.state == "open"]
+    by_id = {s.id: s for s in structures}
     free: dict[int, int] = {}
+    lots: list[int] = []  # the structures that hold shares
     for s in structures:
         held = sum(p.qty for p in s.positions if p.contract is None and p.qty > 0)
         free[s.id] = held - pending.get((s.id, "shares", None), 0)
+        if held > 0:
+            lots.append(s.id)
+    spill: list[tuple[StructureView, int]] = []  # needs their own shares and their linked lot did not meet
     for s in structures:
         if acted is not None and s.id == acted.id:
             continue
         need = _share_need(
             [_Opt(p.contract, p.qty) for p in s.positions if p.contract is not None and p.qty != 0]
         )
-        own = min(need, max(free[s.id], 0))
-        free[s.id] -= own
-        cover_id = s.cover_structure_id
-        if need > own and cover_id is not None and cover_id in free:
-            free[cover_id] -= need - own
-    by_id = {s.id: s for s in structures}
+        for sid in (s.id, s.cover_structure_id):
+            if sid is not None and sid in free:
+                take = min(need, max(free[sid], 0))
+                free[sid] -= take
+                need -= take
+        if need > 0:
+            spill.append((s, need))
+    for s, need in spill:
+        # the acted structure's lot last: its own calls have the first claim on it
+        mine = sorted(
+            (sid for sid in lots if by_id[sid].source == s.source and sid != s.id),
+            key=lambda sid: (acted is not None and sid == acted.id, sid),
+        )
+        for sid in mine:
+            take = min(need, max(free[sid], 0))
+            free[sid] -= take
+            need -= take
+        if need > 0:  # more is relied on than the source holds: the linked lot (else the first) shows it
+            linked = s.cover_structure_id
+            over = linked if linked is not None and linked in free else (mine[0] if mine else None)
+            if over is not None:
+                free[over] -= need
     for o in book.working_orders:
         if o.status != "working" or o.underlying != underlying or o.intent == "close":
             continue

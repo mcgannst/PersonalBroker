@@ -468,7 +468,9 @@ async def test_missing_close_fails_the_job_after_other_steps(db_factory: session
 
     ((waited, state, first_attempt, snapshots),) = seen
     assert (waited, state, snapshots) == (30, "open", 1)  # nothing changed for the structure
-    assert first_attempt[-5:] == ["account", "fire:alpha", "sync_prompts", "send_due", "send:opt:summary"]
+    # the plug-ins' event and the summary wait for the attempt that settles everything
+    assert first_attempt[-3:] == ["account", "sync_prompts", "send_due"]
+    assert "fire:alpha" not in first_attempt and "send:opt:summary" not in first_attempt
     assert outcome.status == "succeeded"
     assert outcome.detail["attempts"] == 2
     assert w.job_rows() == [
@@ -477,7 +479,24 @@ async def test_missing_close_fails_the_job_after_other_steps(db_factory: session
     ]
     assert w.book.structure(put).close_reason == "expired"
     assert len(w.host.lifecycle) == 1
-    assert len(w.sent("opt:summary:")) == 1  # the retry does not send a second summary
+    (summary,) = w.sent("opt:summary:")  # one summary, sent after the settlement, so it tells it
+    assert "EXPIRED" in summary.text
+    assert w.steps.count("fire:alpha") == 1
+
+
+@db
+async def test_nothing_is_summarised_while_an_official_close_is_missing(
+    db_factory: sessionmaker[Session],
+) -> None:
+    w = World(db_factory)
+    w.positions()
+    w.market.no_quote = True
+
+    outcome = await postclose_job(w.deps, SESSION, force=False)
+
+    assert outcome.status == "failed"
+    assert "fire:alpha" not in w.steps and w.sent("opt:summary:") == []
+    assert len(w.snapshots()) == 1  # the other steps still ran
 
 
 @db

@@ -278,6 +278,28 @@ async def test_close_and_roll_update_the_structure(w: World) -> None:
     assert (await w.broker.account()).reserved == 0
 
 
+async def test_a_close_or_roll_stores_the_cover_link_of_its_decision(w: World) -> None:
+    """A close can leave a short call relying on another structure's shares: the link the collateral
+    decision names is written to the structure, as it is when a structure is opened."""
+    other = await w.open_put()
+    sid = await w.open_put()
+    w.collateral.decision = accept(kind="csp", reserve_cash="1400", cover_structure_id=other)
+    roll = f.make_request(
+        [
+            f.make_leg(1, side="buy", effect="close", contract_id=w.put),
+            f.make_leg(2, side="sell", effect="open", contract_id=w.low_put),
+        ],
+        intent="roll",
+        structure_id=sid,
+        order_type="market",
+    )
+    await w.broker.submit(roll)
+    await w.broker.poll(f.T0)
+
+    links = {s.id: s.cover_structure_id for s in await w.broker.structures()}
+    assert links == {other: None, sid: other}
+
+
 async def test_walk_steps_one_tick_and_stops_at_the_market(w: World) -> None:
     result = await w.broker.submit(w.sell_put(limit=None, walk=True))
     oid = result.order.id

@@ -142,6 +142,9 @@ def balance_sheet(facts: UnderlyingFacts, profitability_status: TestStatus, cfg:
     relaxed = any(word in sector for word in cfg.screen_relaxed_sectors)
     limit = cfg.screen_debt_to_equity_limit_relaxed if relaxed else cfg.screen_debt_to_equity_limit
     if facts.debt_to_equity is not None and facts.debt_to_equity >= limit:
+        if profitability_status == "CAUTION" and profitability(facts).reason == MISSING_DATA:
+            # WS §3.5: test 2 is only unknown, so this is a gap in the data, not a failed balance sheet
+            return _result(3, "CAUTION", MISSING_DATA)
         reason = f"debt to equity {facts.debt_to_equity} is at or over {limit}"
         return _result(3, "CAUTION" if profitability_status == "PASS" else "FAIL", reason)
     if facts.book_value_per_share is None or facts.debt_to_equity is None:

@@ -687,3 +687,24 @@ Settled from the FinanceTracker repo: Docker host `192.168.68.73` (context `shar
 4. ~~The Claude daily budget cap~~: US$1/day for dev ✅ (estimated normal use US$0.20–0.60 per trading day on Sonnet 5). Trader gets **its own Anthropic key**, separate from FinanceTracker's, so costs are tracked separately ✅.
 5. You'll need to register a **second Questrade API personal app** for Trader (see §4.1). One login can have several apps, each with its own consumer key ✅. S1 still verifies that their token chains are independent.
 6. ~~Pre-market candidate cap~~: classify only the top 50 by gap %, adjustable in Settings (§4.3) ✅. Check the default against real candidate counts during Phase 0.
+
+## 19. Options simulation (OPTSIM, 2026-10-05)
+
+A separate options book runs beside the stock simulation: its own run (mode `options`), its own 5,000 USD account, its own worker process, its own tables (migration 0011) and its own settings (`options.*`). The stock engine, its tables, its settings and its replay are not changed by it.
+
+| Document | What it holds |
+|---|---|
+| [`plans/2026-10-05-options-simulation.md`](plans/2026-10-05-options-simulation.md) | the feature plan: the owner's decisions, architecture, limits of the simulation |
+| [`specs/wheel-rules-spec.md`](specs/wheel-rules-spec.md) | the owner's wheel rules (the source of truth for the wheel plug-in) |
+| [`plans/2026-10-05-optsim-tasks.md`](plans/2026-10-05-optsim-tasks.md) | the task plan: contracts, tables, settings, API, per-task behaviour and tests |
+| [`plans/2026-10-05-optsim-t1-notes.md`](plans/2026-10-05-optsim-t1-notes.md) and [`plans/optsim-handoff/`](plans/optsim-handoff/) | where the delivered code differs from the task plan, module by module (the code wins) |
+
+In short:
+
+- **Code:** `trader/options/` (generic core: market data, collateral engine, fill model, book, broker, lifecycle, facts, prompts, worker, runtime), `trader/option_strategies/` (registry, state, host, and plug-ins: `wheel/`), `trader/jobs/options_refresh.py` and `options_postclose.py`, `trader/api/routers/options.py`, `web/src/pages/options/`.
+- **Rules of the book:** covered and defined-risk positions only (no naked short, no margin); buys fill at the ask and sells at the bid, limits only when the market reaches them; every order is checked by the collateral engine at submit and again at fill; at most `options.max_position_pct` of the account per underlying; one cash pool shared by manual and strategy orders.
+- **Strategies are plug-ins** (entry-point group `trader.option_strategies`). A plug-in sees a read-only context and returns intents and owner prompts; it never sizes, checks cover or fills. The web's Strategies tab renders each plug-in's panel generically.
+- **Processes and schedule (ET):** supervisord program `options-worker` (`python -m trader.options.worker`); cron `15 8 * * 1-5 trader options-refresh`, `35 10 * * 1-5 trader options-event --due`, `20 16 * * 1-5 trader options-postclose`, `0 8 * * 6 trader options-event wheel screen`. The wheel's daily event fires from the worker at open + 60 minutes.
+- **CLI:** `trader options-run new --cash 5000 --confirm` (refused 09:15 to 16:30 ET on a session day), `trader options-check --symbol F` (live Questrade check), `trader options-refresh`, `trader options-postclose`, `trader options-event <strategy> <key>` / `--due`.
+- **Owner prompts** (approve a candidate, fresh-cash test, earnings review, pin risk, drawdown review) arrive as Telegram buttons handled by the stock worker's bot, and on the Options page.
+- **Known limits:** early assignment is simulated only before an ex-dividend date; contract adjustments freeze the position; option cash is usable the same day; no replay mode for options; a full-mode stock replay does not wait out the four options cron lines.

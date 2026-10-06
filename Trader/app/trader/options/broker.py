@@ -14,6 +14,7 @@ so the worker and the API process can each hold one.
 """
 
 import dataclasses
+import logging
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -32,7 +33,14 @@ from trader.market.clock import Clock, et_date
 from trader.options import valuation
 from trader.options.account import lock_book
 from trader.options.book import DbBook, load_contracts, q4, symbol_id_of
-from trader.options.fill_model import MULTIPLIER_KEY, leg_fee, market_net, mid_net, order_fees
+from trader.options.fill_model import (
+    MULTIPLIER_KEY,
+    leg_fee,
+    market_net,
+    mid_net,
+    order_fees,
+    quote_problem,
+)
 from trader.options.protocols import (
     CollateralBook,
     CollateralEngine,
@@ -64,6 +72,7 @@ from trader.options.types import (
     round_tick,
 )
 
+log = logging.getLogger(__name__)
 EVENT_SOURCE = "options.broker"
 TAKE_PROFIT_REASON = "take_profit"
 SettingsSource = OptionSettings | OptionSettingsStore | Callable[[], OptionSettings]
@@ -159,6 +168,24 @@ def _request(order: OptOrderView) -> OrderRequest:
     )
 
 
+def _closing_legs(structure: StructureView) -> tuple[OrderLeg, ...]:
+    """The legs that close one unit of the structure's open option positions (empty when nothing is open)."""
+    units = valuation.structure_units(structure)
+    held = [p for p in structure.positions if p.qty != 0 and p.contract is not None]
+    return tuple(
+        OrderLeg(
+            leg_no=n,
+            instrument="option",
+            side="buy" if p.qty < 0 else "sell",
+            effect="close",
+            ratio=abs(p.qty) // units,
+            underlying=structure.underlying,
+            contract_id=p.contract.id if p.contract is not None else None,
+        )
+        for n, p in enumerate(held, start=1)
+    )
+
+
 def _refuse(decision: CollateralDecision, reason: RejectReason, detail: str) -> CollateralDecision:
     return dataclasses.replace(decision, accepted=False, reject_reason=reason, detail=detail)
 
@@ -211,6 +238,10 @@ class SimOptionBroker:
         except ValueError:  # outside the calendar's range
             return None
         return self._cal.session_open(day), self._cal.session_close(day)
+
+    def _in_session(self, now: datetime) -> bool:
+        hours = self._hours(now)
+        return hours is not None and hours[0] <= now < hours[1]
 
     def _order_session(self, now: datetime) -> date:
         """The session an order submitted at `now` belongs to: today's until the close, else the next."""
@@ -623,10 +654,71 @@ class SimOptionBroker:
         quotes = await self._fetch_for(orders)
         events: list[OptionFillEvent] = []
         for order in orders:
-            event = self._fill(order.id, quotes, settings, now, hours)
+            # Each fill is its own committed transaction, so one order's failure must not lose the events
+            # of the orders that filled before it, nor stop the ones after it.
+            try:
+                event = self._fill(order.id, quotes, settings, now, hours)
+            except Exception as exc:
+                self._fill_failed(order.id, exc, now)
+                continue
             if event is not None:
                 events.append(event)
         return events
+
+    def _fill_failed(self, order_id: int, exc: Exception, now: datetime) -> None:
+        """One `event_log` error row for a fill that raised (its own transaction is already rolled back; the
+        order stays working). Only the exception's type is stored: its text could carry anything."""
+        error = type(exc).__name__
+        try:
+            with session_scope(self._factory) as s:
+                self._log(s, now, "option order fill failed", level="error", order_id=order_id, error=error)
+        except Exception as log_exc:
+            log.error(
+                "option order %s fill failed (%s); the event_log row failed too (%s)",
+                order_id,
+                error,
+                type(log_exc).__name__,
+            )
+
+    def _cancel_at_fill(
+        self, s: Session, row: m.OptOrder, now: datetime, reason: RejectReason | None, detail: str, why: str
+    ) -> None:
+        row.status, row.closed_at, row.updated_at, row.reserved_cash = "cancelled", now, now, ZERO
+        row.reject_reason, row.reject_detail = reason, detail
+        self._log(
+            s,
+            now,
+            f"option order cancelled at fill: {why}",
+            level="warning",
+            order_id=row.id,
+            reject_reason=reason,
+            detail=detail,
+        )
+
+    def _close_shortfall(self, s: Session, order: OptOrderView) -> str | None:
+        """Why the order's closing legs can't be taken out of its structure as it is now (another close got
+        there first), or None when every closing leg fits."""
+        closing = [leg for leg in order.legs if leg.effect == "close"]
+        if not closing:
+            return None
+        if order.structure_id is None:
+            return f"a {order.intent} order closes a leg and names no structure"
+        try:
+            structure = self._book(s).structure(order.structure_id)
+        except KeyError:
+            return f"no structure {order.structure_id}"
+        held = {(p.contract.id if p.contract is not None else None): p.qty for p in structure.positions}
+        for leg in closing:
+            units = leg.ratio * order.qty
+            have = held.get(leg.contract_id, 0)
+            left = -have if leg.side == "buy" else have  # a buy closes a short, a sell closes a long
+            if units > left:
+                what = "shares" if leg.contract_id is None else f"contract {leg.contract_id}"
+                return (
+                    f"leg {leg.leg_no} closes {units} of {what} and structure {structure.id} has "
+                    f"{max(left, 0)} left"
+                )
+        return None
 
     def _fill(
         self,
@@ -643,6 +735,12 @@ class SimOptionBroker:
             if row is None or row.status != "working":
                 return None  # filled, cancelled or expired since it was read
             order = self._order_views(s, [row])[0]
+            shortfall = self._close_shortfall(s, order)
+            if shortfall is not None:  # it can never fill: left working it would fail on every pass
+                self._cancel_at_fill(
+                    s, row, now, "invalid_order", shortfall, "it closes more than the structure holds"
+                )
+                return None
             contracts = load_contracts(
                 s, [leg.contract_id for leg in order.legs if leg.contract_id is not None]
             )
@@ -652,16 +750,8 @@ class SimOptionBroker:
                 return None
             _, decision = self._evaluate(s, _request(order), quotes, settings, now, exclude=row)
             if not decision.accepted:
-                row.status, row.closed_at, row.updated_at, row.reserved_cash = "cancelled", now, now, ZERO
-                row.reject_reason, row.reject_detail = decision.reject_reason, decision.detail
-                self._log(
-                    s,
-                    now,
-                    "option order cancelled at fill: the collateral check failed",
-                    level="warning",
-                    order_id=order_id,
-                    reject_reason=decision.reject_reason,
-                    detail=decision.detail,
+                self._cancel_at_fill(
+                    s, row, now, decision.reject_reason, decision.detail, "the collateral check failed"
                 )
                 return None
             return self._write_fill(s, row, order, assessed, decision, priced, contracts, settings, now)
@@ -785,7 +875,11 @@ class SimOptionBroker:
         )
 
     async def walk(self, now: datetime) -> int:
-        """Move each due walk order one tick toward the market net, never past it. Returns how many moved."""
+        """Move each due walk order one tick toward the market net, never past it. Returns how many moved.
+        Nothing moves outside session hours, nor on a quote the fill model would not fill on (delayed,
+        halted, stale, one-sided, crossed): that order waits for the next pass."""
+        if not self._in_session(now):
+            return 0
         settings = self._settings()
         with self._factory() as s:
             due = [o for o in self._working(s) if o.walk and o.order_type == "limit"]
@@ -810,8 +904,9 @@ class SimOptionBroker:
                 contracts = load_contracts(
                     s, [leg.contract_id for leg in order.legs if leg.contract_id is not None]
                 )
-                at_market = market_net(order.legs, leg_quotes(order.legs, quotes, contracts))
-                if at_market is None:
+                priced = leg_quotes(order.legs, quotes, contracts)
+                at_market = market_net(order.legs, priced)
+                if at_market is None or quote_problem(order.legs, priced, now, settings) is not None:
                     continue  # no market to walk toward: try again on the next pass
                 row.walk_next_at, row.updated_at = now + timedelta(seconds=settings.reprice_seconds), now
                 if row.net_limit <= at_market:
@@ -829,7 +924,11 @@ class SimOptionBroker:
     async def take_profits(self, now: datetime) -> list[int]:
         """For each open structure with a take-profit whose net to close at the market is at or better than
         it, and with no working order of its own, submit one closing limit order at the take-profit net.
-        Returns the ids of the orders submitted."""
+        Returns the ids of the orders submitted. Nothing is submitted outside session hours, nor for a
+        structure with a leg whose quote the fill model would not fill on (delayed, halted, stale, one-sided,
+        crossed, no positive price on the closing side)."""
+        if not self._in_session(now):
+            return []
         settings = self._settings()
         with self._factory() as s:
             candidates = [
@@ -850,6 +949,10 @@ class SimOptionBroker:
                 or at_market < candidate.take_profit_net
             ):
                 continue
+            legs = _closing_legs(candidate)
+            known = {p.contract.id: p.contract for p in candidate.positions if p.contract is not None}
+            if quote_problem(legs, leg_quotes(legs, quotes, known), now, settings) is not None:
+                continue  # not a quote to act on: look again on the next pass
             with session_scope(self._factory) as s:
                 lock_book(s, self._run_id)
                 st = self._book(s).structure(candidate.id)
@@ -865,25 +968,13 @@ class SimOptionBroker:
                 units = valuation.structure_units(st)
                 if st.state != "open" or st.take_profit_net is None or busy or units == 0:
                     continue
-                held = [p for p in st.positions if p.qty != 0 and p.contract is not None]
                 req = OrderRequest(
                     source=st.source,
                     strategy_config_id=st.strategy_config_id,
                     intent="close",
                     structure_id=st.id,
                     underlying=st.underlying,
-                    legs=tuple(
-                        OrderLeg(
-                            leg_no=n,
-                            instrument="option",
-                            side="buy" if p.qty < 0 else "sell",
-                            effect="close",
-                            ratio=abs(p.qty) // units,
-                            underlying=st.underlying,
-                            contract_id=p.contract.id if p.contract is not None else None,
-                        )
-                        for n, p in enumerate(held, start=1)
-                    ),
+                    legs=_closing_legs(st),
                     qty=units,
                     order_type="limit",
                     net_limit=st.take_profit_net,

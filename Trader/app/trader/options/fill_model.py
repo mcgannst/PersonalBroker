@@ -8,7 +8,8 @@ gave).
 
 No fill, in this order (the first that applies is the reason): `outside_hours`; then, each over every leg,
 `quote_missing`, `quote_delayed` (a `delay` of None counts as delayed), `halted`, `quote_stale`, `one_sided`,
-`crossed`, `zero_bid` (a sell leg's bid is 0); last `limit_not_reached`.
+`crossed`, `zero_bid` (a sell leg's bid is 0 or less), `one_sided` again for a buy leg whose ask is 0 or less
+(a 0 / 0 quote is no market, not a free contract); last `limit_not_reached`.
 
 An option leg's contract multiplier is read from `LegQuote.raw["multiplier"]` (100 when absent): the order
 view carries contract ids only, and the broker that builds the leg quotes knows the contracts.
@@ -88,6 +89,43 @@ def mid_net(legs: Sequence[OrderLeg], quotes: Mapping[int, LegQuote]) -> Decimal
 Check = Callable[[OrderLeg, LegQuote | None], bool]
 
 
+def quote_problem(
+    legs: Sequence[OrderLeg], quotes: Mapping[int, LegQuote], now: datetime, settings: OptionSettings
+) -> NoFill | None:
+    """Why these legs can't trade on these quotes (every reason but `outside_hours` and
+    `limit_not_reached`, in the module's order), or None when every leg has a usable quote. The broker's
+    walk and take-profit ask this too, so they never act on a quote the fill model would refuse."""
+    max_age = timedelta(seconds=settings.stale_quote_seconds)
+    # Each check sees a quote that passed every check before it, so `q` is only None in the first.
+    checks: tuple[tuple[NoFillReason, Check, str], ...] = (
+        ("quote_missing", lambda leg, q: q is None, ""),
+        ("quote_delayed", lambda leg, q: q is not None and q.delay != 0, ""),
+        ("halted", lambda leg, q: q is not None and q.is_halted, ""),
+        ("quote_stale", lambda leg, q: q is not None and now - q.fetched_at > max_age, ""),
+        ("one_sided", lambda leg, q: q is not None and (q.bid is None or q.ask is None), ""),
+        (
+            "crossed",
+            lambda leg, q: q is not None and q.bid is not None and q.ask is not None and q.bid > q.ask,
+            "",
+        ),
+        (
+            "zero_bid",
+            lambda leg, q: q is not None and leg.side == "sell" and q.bid is not None and q.bid <= 0,
+            "",
+        ),
+        (  # an ask of 0 is no offer at all: nobody gives a contract away
+            "one_sided",
+            lambda leg, q: q is not None and leg.side == "buy" and q.ask is not None and q.ask <= 0,
+            ": the ask is 0",
+        ),
+    )
+    for reason, failed, note in checks:
+        for leg in sorted(legs, key=lambda leg: leg.leg_no):
+            if failed(leg, quotes.get(leg.leg_no)):
+                return NoFill(reason, f"leg {leg.leg_no}{note}")
+    return None
+
+
 class QuoteFillModel:
     """The `OptionFillModel` of the simulation."""
 
@@ -102,25 +140,10 @@ class QuoteFillModel:
     ) -> FillDecision | NoFill:
         if not session_open <= now < session_close:
             return NoFill("outside_hours", f"{now.isoformat()} is outside the session")
-        max_age = timedelta(seconds=settings.stale_quote_seconds)
-        # Each check sees a quote that passed every check before it, so `q` is only None in the first.
-        checks: tuple[tuple[NoFillReason, Check], ...] = (
-            ("quote_missing", lambda leg, q: q is None),
-            ("quote_delayed", lambda leg, q: q is not None and q.delay != 0),
-            ("halted", lambda leg, q: q is not None and q.is_halted),
-            ("quote_stale", lambda leg, q: q is not None and now - q.fetched_at > max_age),
-            ("one_sided", lambda leg, q: q is not None and (q.bid is None or q.ask is None)),
-            (
-                "crossed",
-                lambda leg, q: q is not None and q.bid is not None and q.ask is not None and q.bid > q.ask,
-            ),
-            ("zero_bid", lambda leg, q: q is not None and leg.side == "sell" and q.bid == 0),
-        )
         legs = sorted(order.legs, key=lambda leg: leg.leg_no)
-        for reason, failed in checks:
-            for leg in legs:
-                if failed(leg, quotes.get(leg.leg_no)):
-                    return NoFill(reason, f"leg {leg.leg_no}")
+        problem = quote_problem(legs, quotes, now, settings)
+        if problem is not None:
+            return problem
         prices = market_prices(legs, quotes)
         if prices is None:  # unreachable after the checks; kept so a price is never invented
             return NoFill("one_sided", "a leg has no price on its side")

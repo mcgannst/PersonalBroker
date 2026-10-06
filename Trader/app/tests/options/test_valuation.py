@@ -101,3 +101,17 @@ def test_close_net_is_per_share_of_one_unit_and_credit_positive() -> None:
     assert valuation.close_net(spread, {1: quotes[1]}) is None  # a leg without a quote
     assert valuation.close_net(structure(3, "shares", (None, 100, "14.50")), quotes) is None
     assert valuation.close_net(structure(4, "csp", (PUT, 0, "0.45")), quotes) is None
+
+
+def test_a_zero_quote_is_no_mark_for_a_short_and_no_close_net() -> None:
+    dead = {1: f.make_quote(1, "0", "0"), 3: f.make_quote(3, "0", "0.05")}
+    short_put = structure(1, "csp", (PUT, -1, "0.45"))
+    assert valuation.close_net(short_put, dead) is None  # nothing to buy it back from
+    # The short is carried at its last mark (here its cost), never at 0, and the account says so.
+    state = valuation.account_state(D("1000"), D("0"), [short_put], dead, {}, {}, f.T0)
+    assert (state.positions_value, state.marks_complete) == (D("-45"), False)
+    # A long with a bid of 0 is worth nothing (a complete mark), but a close would have nobody to sell to.
+    long_put = structure(2, "long_put", (LOW_PUT, 1, "0.10"))
+    worthless = valuation.account_state(D("1000"), D("0"), [long_put], dead, {}, {}, f.T0)
+    assert (worthless.positions_value, worthless.marks_complete) == (D("0"), True)
+    assert valuation.close_net(long_put, dead) is None

@@ -96,6 +96,15 @@ def test_the_edges_that_still_fill() -> None:
     assert isinstance(assess(order([BUY]), [lq(1, "0", "0.05")]), FillDecision)  # a buy ignores a zero bid
 
 
+def test_a_zero_ask_is_no_offer_for_a_buy() -> None:
+    """A 0 / 0 quote is no market: the buy does not fill for nothing. The reason is `one_sided`."""
+    result = assess(order([BUY]), [lq(1, "0", "0")])
+    assert isinstance(result, NoFill)
+    assert (result.reason, result.detail) == ("one_sided", "leg 1: the ask is 0")
+    spread = assess(order([PUT_SOLD, PUT_BOUGHT]), [lq(1, "0.45", "0.50"), lq(2, "0", "0")])
+    assert isinstance(spread, NoFill) and spread.reason == "one_sided"  # all legs or none
+
+
 PUT_SOLD = f.make_leg(1, side="sell", contract_id=1)
 PUT_BOUGHT = f.make_leg(2, side="buy", contract_id=2)
 CALL_BOUGHT = f.make_leg(1, side="buy", contract_id=3)

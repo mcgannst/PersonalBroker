@@ -1,8 +1,9 @@
 """Account valuation for the options run (OPTSIM task plan T5; wheel rules spec §11 `account_value`). Pure.
 
 Liquidation marks: a long option is worth its bid, a short option costs its ask, shares are worth the last
-trade. A position without a usable live quote falls back to the last recorded mark of its contract (from
-`option_quote_marks`), and without one to its cost; either way `marks_complete` is False.
+trade. A position without a usable live quote (for a short, also an ask of 0 or less) falls back to the last
+recorded mark of its contract (from `option_quote_marks`), and without one to its cost; either way
+`marks_complete` is False.
 """
 
 from collections.abc import Mapping, Sequence
@@ -23,10 +24,13 @@ from trader.options.types import (
 
 def liquidation_price(position: OptPositionView, quote: OptionQuote | None) -> Decimal | None:
     """What one contract of an option position is worth if closed now: the bid for a long, the ask for a
-    short. None without that side of the quote."""
+    short. None without that side of the quote; an ask of 0 or less is no offer, so a short has no mark
+    then (a long at a bid of 0 is simply worth nothing)."""
     if quote is None:
         return None
-    return quote.bid if position.qty > 0 else quote.ask
+    if position.qty > 0:
+        return quote.bid
+    return quote.ask if quote.ask is not None and quote.ask > 0 else None
 
 
 def structure_units(structure: StructureView) -> int:
@@ -41,7 +45,8 @@ def structure_units(structure: StructureView) -> int:
 def close_net(structure: StructureView, quotes: Mapping[int, OptionQuote]) -> Decimal | None:
     """The net per share of closing one unit of the structure at the market, credit positive (so a short put
     quoted 0.20 at the ask gives -0.20). `quotes` is keyed by contract id. None when nothing is open, when
-    the structure holds shares, or when an open position has no quote on the side that closes it."""
+    the structure holds shares, or when an open position has no positive price on the side that closes it
+    (the ask to buy a short back, the bid to sell a long): a close could not fill there."""
     units = structure_units(structure)
     if units == 0:
         return None
@@ -52,7 +57,7 @@ def close_net(structure: StructureView, quotes: Mapping[int, OptionQuote]) -> De
         if p.contract is None:
             return None
         price = liquidation_price(p, quotes.get(p.contract.id))
-        if price is None:
+        if price is None or price <= 0:
             return None
         total += price * p.qty * p.contract.multiplier  # a short's qty is negative: closing it costs
     return total / (HUNDRED * units)

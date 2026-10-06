@@ -203,8 +203,11 @@ async def test_fill_writes_fills_ledger_positions_structure_in_one_transaction(
         real(self, amount, kind, *args, **kwargs)
 
     monkeypatch.setattr(DbBook, "move_cash", fail_on_the_fee)
-    with pytest.raises(RuntimeError, match="forced"):
-        await w.broker.poll(f.T0)
+    assert await w.broker.poll(f.T0) == []  # the failure is logged, not raised: other orders still get a turn
+    with w.factory() as s:
+        error = s.execute(select(m.EventLog).where(m.EventLog.level == "error")).scalar_one()
+    assert (error.source, error.run_id) == ("options.broker", w.run_id)
+    assert error.data == {"order_id": result.order.id, "error": "RuntimeError"}  # the type, not the text
     assert (w.count(m.OptFill), w.count(m.OptPosition), w.count(m.OptStructure)) == (0, 0, 0)
     assert w.ledger() == [("deposit", D("5000"))]
     order = await w.broker.order(result.order.id)
@@ -296,6 +299,44 @@ async def test_walk_steps_one_tick_and_stops_at_the_market(w: World) -> None:
     assert await w.broker.walk(w.clock.now()) == 0 and await limit() == D("0.45")  # never past the bid
     (event,) = await w.broker.poll(w.clock.now())
     assert event.net_price == D("0.45")
+
+
+async def test_walk_waits_outside_the_session_and_on_an_unusable_quote(w: World) -> None:
+    oid = (await w.broker.submit(w.sell_put(limit=None, walk=True, tif="gtc"))).order.id
+
+    async def walked(now: Any) -> tuple[int, Decimal | None]:
+        w.clock.set(now)
+        moved = await w.broker.walk(now)
+        order = await w.broker.order(oid)
+        assert order is not None
+        return moved, order.net_limit
+
+    assert await walked(f.T0 + timedelta(hours=6)) == (0, D("0.48"))  # due, but the session has closed
+    due = f.T0 + MINUTE
+    for bad in ({"delay": 15}, {"is_halted": True}, {"fetched_at": due - MINUTE}):
+        w.market.set_quote(w.put, "0.45", "0.50", **bad)
+        assert await walked(due) == (0, D("0.48"))
+    w.market.set_quote(w.put, "0.50", "0.45")  # crossed
+    assert await walked(due) == (0, D("0.48"))
+    w.market.set_quote(w.put, "0.45", "0.50")
+    assert await walked(due) == (1, D("0.47"))  # the skipped passes did not use the step up
+
+
+async def test_take_profit_waits_outside_the_session_and_on_an_unusable_quote(w: World) -> None:
+    await w.open_put(take_profit_pct=D("0.50"))
+    w.collateral.decision = accept(kind="csp", reserve_cash="0")
+    w.market.set_quote(w.put, "0.15", "0.20")  # at the take-profit
+    closed = f.T0 + timedelta(hours=6)
+    w.clock.set(closed)
+    assert await w.broker.take_profits(closed) == []
+    w.clock.set(f.T0)
+    for bad in ({"delay": None}, {"is_halted": True}, {"fetched_at": f.T0 - MINUTE}):
+        w.market.set_quote(w.put, "0.15", "0.20", **bad)
+        assert await w.broker.take_profits(f.T0) == []
+    w.market.set_quote(w.put, "0.25", "0.20")  # crossed
+    assert await w.broker.take_profits(f.T0) == [] and w.count(m.OptOrder) == 1
+    w.market.set_quote(w.put, "0.15", "0.20")
+    assert len(await w.broker.take_profits(f.T0)) == 1
 
 
 async def test_manual_reprice_stops_the_walk(w: World) -> None:

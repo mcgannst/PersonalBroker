@@ -121,18 +121,11 @@ def close_put(w: World, sid: int, qty: int = 1) -> Any:
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="T5: a buy leg fills at an ask of 0 (a 0 / 0 quote is no market, not a free contract)"
-)
 def test_a_buy_never_fills_at_a_zero_ask() -> None:
     assert isinstance(assess(order([BUY]), [lq(1, "0", "0")]), NoFill)
 
 
 @pytest.mark.db
-@pytest.mark.xfail(
-    strict=True,
-    reason="T5: a 0 / 0 quote triggers the take-profit and buys the short put back for nothing",
-)
 async def test_take_profit_does_not_buy_back_for_free_on_a_zero_quote(w: World) -> None:
     await w.open_put(take_profit_pct=D("0.50"))
     w.collateral.decision = accept(kind="csp", reserve_cash="0")
@@ -218,11 +211,6 @@ async def test_a_three_lot_spread_charges_fees_once_and_keeps_free_cash_level(w:
 
 
 @pytest.mark.db
-@pytest.mark.xfail(
-    strict=True,
-    raises=RuntimeError,
-    reason="T5: an error in one order's fill makes poll raise and drop the fill events already committed",
-)
 async def test_poll_returns_the_fills_it_committed_when_a_later_order_fails(w: World) -> None:
     calls = 0
 
@@ -238,22 +226,17 @@ async def test_poll_returns_the_fills_it_committed_when_a_later_order_fails(w: W
     )
     first = (await broker.submit(w.sell_put())).order.id
     await broker.submit(w.sell_put())
-    events = await broker.poll(f.T0)  # today: raises, though the first order's fill is committed
+    events = await broker.poll(f.T0)  # the second order's fill raises; the first one's is committed
     assert [e.order_id for e in events] == [first]
 
 
 @pytest.mark.db
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason="T5: a close for more than is left raises out of poll on every pass and starves later orders",
-)
 async def test_a_close_for_more_than_is_left_is_cancelled_not_raised(w: World) -> None:
     sid = await w.open_put(qty=3)
     first = (await w.broker.submit(close_put(w, sid, 2))).order.id
     second = (await w.broker.submit(close_put(w, sid, 2))).order.id  # both accepted while 3 are short
     last = (await w.broker.submit(w.sell_put())).order.id
-    events = await w.broker.poll(f.T0)  # today: the second close raises ValueError from DbBook.apply
+    events = await w.broker.poll(f.T0)  # the second close can't fit: cancelled, not raised
     assert [e.order_id for e in events] == [first, last]
     stuck = await w.broker.order(second)
     assert stuck is not None and stuck.status == "cancelled"

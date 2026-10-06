@@ -10,8 +10,11 @@ as the exact command to run by hand from the Mac, with the session it was for pi
     <ET time>  <MT time>  docker --context shared-docker-server exec <container> trader <args> <date args>
 
 - nightly: --date <the next session after the fire's ET date> (the session it prepares)
-- premarket, preopen, checkin, event, postclose: --date <the fire's ET date>; when that date is not a
-  session the line reads "not a session (<date>): nothing to run"
+- premarket, preopen, checkin, event, postclose, options-refresh, options-postclose and
+  `options-event --due`: --date <the fire's ET date>; when that date is not a session the line reads
+  "not a session (<date>): nothing to run"
+- options-event <strategy> <key> (e.g. the Saturday `options-event wheel screen`): --date <the latest
+  session on or before the fire's ET date>
 - weekly: --date <the latest session on or before the fire's ET date> (the week just ended)
 - soak-report: --through <the latest session on or before the fire's ET date> (its flags kept)
 - token-refresh: no date; any other command is printed unchanged with "(no date pinned)"
@@ -52,7 +55,13 @@ MARGIN = timedelta(seconds=60)
 DEFAULT_LOOKBACK_MINUTES = 120
 MARKET_WINDOW = (time(9, 15), time(16, 30))
 
-SESSION_DAY_COMMANDS = frozenset({"premarket", "preopen", "checkin", "event", "postclose"})
+SESSION_DAY_COMMANDS = frozenset(
+    {"premarket", "preopen", "checkin", "event", "postclose", "options-refresh", "options-postclose"}
+)
+# OPTSIM: `options-event --due` is a session-day command (nothing to run on a holiday). A named strategy
+# event (the Saturday `options-event wheel screen`) can fire on a non-session day and is pinned to the
+# latest session on or before the fire's ET date, like `weekly`.
+OPTIONS_EVENT = "options-event"
 _FIELD = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")
 # (name, lowest, highest) of the five fields; day of week 7 is Sunday like 0.
 _FIELDS = (
@@ -188,7 +197,9 @@ def pinned_command(calendar: SessionCalendar, command: str, fire_day: date) -> t
         return command, ""
     if name == "nightly":
         return f"{command} --date {calendar.next_session(fire_day).isoformat()}", ""
-    if name in SESSION_DAY_COMMANDS:
+    if name == OPTIONS_EVENT and "--due" not in words:
+        return f"{command} --date {_latest_session(calendar, fire_day).isoformat()}", ""
+    if name in SESSION_DAY_COMMANDS or name == OPTIONS_EVENT:
         if not calendar.is_session(fire_day):
             return None, f"not a session ({fire_day.isoformat()}): nothing to run"
         return f"{command} --date {fire_day.isoformat()}", ""

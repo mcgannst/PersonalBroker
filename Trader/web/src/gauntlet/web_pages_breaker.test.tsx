@@ -1359,6 +1359,7 @@ describe("phone tab bar (T12)", () => {
     fireEvent.click(more);
     expect(more).toHaveAttribute("aria-expanded", "true");
     expect(within(screen.getByRole("menu")).getAllByRole("menuitem").map((a) => a.textContent)).toEqual([
+      "Options",
       "Replay",
       "Settings",
       "Trades",

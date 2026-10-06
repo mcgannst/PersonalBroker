@@ -301,6 +301,7 @@ describe("layout (tests 7 and 9)", () => {
     await user.click(within(tabs).getByRole("button", { name: /more/i }));
     const more = screen.getByRole("menu");
     expect(within(more).getAllByRole("menuitem").map((a) => a.textContent)).toEqual([
+      "Options",
       "Replay",
       "Settings",
       "Trades",
@@ -317,6 +318,7 @@ describe("layout (tests 7 and 9)", () => {
     const side = screen.getByRole("navigation", { name: /main/i });
     expect(within(side).getAllByRole("link").map((a) => a.textContent)).toEqual([
       "Dashboard",
+      "Options",
       "Control",
       "Reports",
       "Replay",

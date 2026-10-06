@@ -1,7 +1,8 @@
 // The app (P4-T12; live dashboard plan S12, DB-T11): providers, routes and deep links.
 //   /                      -> /dashboard
-//   /dashboard, /control, /candidates, /trades, /performance, /journal, /reports, /replay, /settings
+//   /dashboard, /options, /control, /candidates, /trades, /performance, /journal, /reports, /replay, /settings
 //                          -> behind RequireAuth, inside the Layout
+//   /options               -> the options simulation (OPTSIM-T15); it has its own API client and provider
 //   /system                -> /control, keeping the query string (the System page merged into Control)
 //   /login                 -> the login page
 //   anything else          -> Not found
@@ -13,6 +14,8 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-route
 
 import { ApiProvider, isApiError, type ApiClient } from "./api/client";
 import { createHttpClient } from "./api/http";
+import { OptionsApiProvider, type OptionsApiClient } from "./api/optionsClient";
+import { createOptionsHttpClient } from "./api/optionsHttp";
 import { AuthProvider, notifyUnauthorized } from "./layout/AuthContext";
 import { Layout } from "./layout/Layout";
 import { NotFound } from "./layout/NotFound";
@@ -23,6 +26,7 @@ import ControlPage from "./pages/Control";
 import DashboardPage from "./pages/Dashboard";
 import JournalPage from "./pages/Journal";
 import LoginPage from "./pages/Login";
+import OptionsPage from "./pages/Options";
 import PerformancePage from "./pages/Performance";
 import ReplayPage from "./pages/Replay";
 import ReportsPage from "./pages/Reports";
@@ -45,6 +49,7 @@ export function AppRoutes() {
           <Route element={<Layout />}>
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/options" element={<OptionsPage />} />
             <Route path="/control" element={<ControlPage />} />
             <Route path="/candidates" element={<CandidatesPage />} />
             <Route path="/trades" element={<TradesPage />} />
@@ -75,15 +80,31 @@ export function createAppQueryClient(): QueryClient {
   });
 }
 
-export function App({ api }: { api?: ApiClient } = {}) {
+/** The two API clients. The options client reads the session's CSRF token from the main HTTP client. */
+function createClients(api?: ApiClient, optionsApi?: OptionsApiClient): { client: ApiClient; options: OptionsApiClient } {
+  const http = api ? null : createHttpClient({ onUnauthorized: notifyUnauthorized });
+  const client: ApiClient = api ?? http!;
+  const options =
+    optionsApi ??
+    createOptionsHttpClient({
+      onUnauthorized: notifyUnauthorized,
+      csrfToken: () => http?.csrfToken() ?? null,
+      refreshCsrf: () => client.me(),
+    });
+  return { client, options };
+}
+
+export function App({ api, optionsApi }: { api?: ApiClient; optionsApi?: OptionsApiClient } = {}) {
   const [queryClient] = useState(createAppQueryClient);
-  const [client] = useState<ApiClient>(() => api ?? createHttpClient({ onUnauthorized: notifyUnauthorized }));
+  const [clients] = useState(() => createClients(api, optionsApi));
   return (
     <QueryClientProvider client={queryClient}>
-      <ApiProvider client={client}>
-        <BrowserRouter future={ROUTER_FUTURE}>
-          <AppRoutes />
-        </BrowserRouter>
+      <ApiProvider client={clients.client}>
+        <OptionsApiProvider client={clients.options}>
+          <BrowserRouter future={ROUTER_FUTURE}>
+            <AppRoutes />
+          </BrowserRouter>
+        </OptionsApiProvider>
       </ApiProvider>
     </QueryClientProvider>
   );

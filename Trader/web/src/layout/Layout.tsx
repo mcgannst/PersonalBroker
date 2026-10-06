@@ -1,9 +1,9 @@
 // The app frame for logged-in pages (P4-T12; live dashboard plan S12, DB-T11): a header ("Trader", a DEV badge
 // on dev, the live dot, the theme control and Logout), a side list of pages on wide screens (Dashboard,
-// Control, Reports, Replay, Settings, then a "More" group: Trades, Candidates, Performance, Journal) and a
-// bottom tab bar on phones (Dashboard, Control, Reports, More -> Replay, Settings, Trades, Candidates,
-// Performance, Journal), so every page is at most two taps away. It also opens the live-update stream and
-// applies the server's time-zone check.
+// Options, Control, Reports, Replay, Settings, then a "More" group: Trades, Candidates, Performance, Journal)
+// and a bottom tab bar on phones (Dashboard, Control, Reports, More -> Options, Replay, Settings, Trades,
+// Candidates, Performance, Journal), so every page is at most two taps away. It also opens the live-update
+// stream and applies the server's time-zone check.
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -25,6 +25,7 @@ interface NavItem {
 /** The primary pages (design D6), in order. */
 export const NAV_ITEMS: readonly NavItem[] = [
   { to: "/dashboard", label: "Dashboard" },
+  { to: "/options", label: "Options" },
   { to: "/control", label: "Control" },
   { to: "/reports", label: "Reports" },
   { to: "/replay", label: "Replay" },

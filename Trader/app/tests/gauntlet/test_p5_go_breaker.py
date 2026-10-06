@@ -623,7 +623,7 @@ def test_16_compose_has_every_limit_and_every_earlier_setting(name: str) -> None
     # no competing limit block that Compose would merge or prefer
     assert "deploy" not in svc and "mem_reservation" not in svc and "oom_kill_disable" not in svc
     # every earlier (P4) setting
-    assert svc["stop_grace_period"] == "120s"
+    assert svc["stop_grace_period"] == "150s"  # OPTSIM-T16: the options worker's 30 s added
     assert svc["init"] is True
     assert svc["read_only"] is True
     assert svc["restart"] == "unless-stopped"

@@ -128,6 +128,20 @@ PINNED_TESTS: dict[str, Callable[[str], bool]] = {
     f"{TESTS}gauntlet/test_p5_t17_breaker.py": only_these(
         added=('if cmd[1].startswith("options-"):', "continue"),
     ),
+    # Two breaker tests pin what T16 is specified to change (task plan §1 rule 2, the T16 rows): the compose
+    # files' stop grace (120 s -> 150 s for the options worker's 30 s) and, through the deploy catch-up
+    # tool, the exact crontab fires of two windows (one more Saturday line; three more lines on a holiday).
+    f"{TESTS}gauntlet/test_p5_go_breaker.py": only_these(
+        removed=('assert svc["stop_grace_period"] == "120s"',),
+        added=('assert svc["stop_grace_period"] == "150s"',),
+    ),
+    f"{TESTS}gauntlet/test_p6_t6_breaker.py": only_these(
+        removed=("assert len(holiday) == 12, got",),
+        added=(
+            '("2026-10-10 08:00", "options-event wheel screen --date 2026-10-09"),',
+            "assert len(holiday) == 15, got",
+        ),
+    ),
     f"{TESTS}test_phase5_contracts.py": only_these(
         removed=(
             "assert len(ROUTERS) == 20",

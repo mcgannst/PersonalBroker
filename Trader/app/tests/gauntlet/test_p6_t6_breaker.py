@@ -366,6 +366,7 @@ def test_a_weekend_window_before_columbus_day(
     got = _entries(lines)
     assert got == [
         ("2026-10-10 02:00", "token-refresh"),
+        ("2026-10-10 08:00", "options-event wheel screen --date 2026-10-09"),  # OPTSIM-T16
         ("2026-10-10 09:00", "weekly --date 2026-10-09"),
         ("2026-10-10 10:30", "soak-report --notify --final --through 2026-10-09"),
         ("2026-10-11 02:00", "token-refresh"),
@@ -384,7 +385,7 @@ def test_holidays_and_early_closes_are_marked_and_pinned(
     lines = _gap(cron_gap, capsys, "2026-11-25T19:00:00-05:00", "2026-11-27T13:05:00-05:00")
     got = _entries(lines)
     holiday = [c for t, c in got if t.startswith("2026-11-26") and "not a session" in c]
-    assert len(holiday) == 12, got  # premarket, preopen, orb_open, 2 checkins, 2 --due, 4 flattens, postclose
+    assert len(holiday) == 15, got  # the 12 stock lines and 3 options lines (OPTSIM-T16), none to run
     assert all(c.startswith("not a session (2026-11-26): nothing to run [trader ") for c in holiday)
     assert any("[trader postclose]" in c for c in holiday)
     assert not any("--date 2026-11-26" in c for _, c in got)

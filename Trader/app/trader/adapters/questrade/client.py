@@ -418,6 +418,16 @@ class QuestradeClient:
                 raise QuestradeApiError.from_response(resp)
             if resp.status_code == 401 and not refreshed:
                 refreshed = True
+                # TOKEN-401: why Questrade refused a token (its code and message, never the token), so a
+                # token another program invalidated can be told from one Questrade dropped by itself.
+                code, message = _questrade_error(resp)
+                log.warning(
+                    "questrade.token_rejected",
+                    path=path,
+                    code=code,
+                    message=(message or "")[:80],
+                    seconds_to_expiry=int((token.expires_at - self._clock.now()).total_seconds()),
+                )
                 await self._refresh_after_401(token)
                 continue
             if resp.status_code == 429:
